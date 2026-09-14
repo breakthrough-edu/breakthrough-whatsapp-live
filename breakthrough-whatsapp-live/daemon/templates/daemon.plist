@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  WhatsApp Live daemon, a per user LaunchAgent. Template: never install this file as it is.
+  wa_setup.py render-launchd fills every placeholder from live/config.json and writes
+  <home>/launchd/<label>.plist; wa_setup.py install-launchd copies that file into
+  ~/Library/LaunchAgents and bootstraps it.
+  Program: node (holding Full Disk Access) runs run.mjs, which runs python with wa_live.py.
+  KeepAlive restarts it whatever the exit code, at most once every 10 seconds.
+  ExitTimeOut gives running jobs 90 seconds to finish after SIGTERM.
+  stdout goes nowhere (wa_live.log is the log); stderr keeps import failures and run.mjs lines.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>{LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{NODE}</string>
+    <string>{RUN_MJS}</string>
+    <string>{PYTHON}</string>
+    <string>{WA_LIVE}</string>
+    <string>--config</string>
+    <string>{CONFIG}</string>
+  </array>
+  <key>WorkingDirectory</key><string>{WORKDIR}</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>ExitTimeOut</key><integer>90</integer>
+  <key>StandardOutPath</key><string>/dev/null</string>
+  <key>StandardErrorPath</key><string>{STDERR_LOG}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>{PATH_ENV}</string>
+    <key>LANG</key><string>en_US.UTF-8</string>
+    <key>PYTHONUNBUFFERED</key><string>1</string>
+    <key>WA_LIVE_CONFIG</key><string>{CONFIG}</string>
+  </dict>
+</dict>
+</plist>

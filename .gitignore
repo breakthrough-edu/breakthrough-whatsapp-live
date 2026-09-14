@@ -1,0 +1,6 @@
+.DS_Store
+__pycache__/
+*.pyc
+
+# dev/ holds the inventory (real-name scan lists are loaded at runtime) and scratch builds; never published
+dev/

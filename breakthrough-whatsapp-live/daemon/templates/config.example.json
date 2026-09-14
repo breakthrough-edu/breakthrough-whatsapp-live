@@ -1,0 +1,470 @@
+{
+  "version": 1,
+  "my_phone": "",
+  "my_names": [],
+  "owner_label": "",
+  "owner_marker": "",
+  "direct_policy": "all",
+  "group_policies": {},
+  "unlisted_group_policy": "skip",
+  "ignored_jids": [],
+  "debounce": {
+    "quiet_seconds": 45,
+    "max_wait_seconds": 180,
+    "global_concurrency": 2
+  },
+  "doorbell": {
+    "enabled": true,
+    "wal_path": "<auto>",
+    "poll_seconds": 2,
+    "stale_alert_hours": 6,
+    "full_rescan_seconds": 60,
+    "lookback": 300,
+    "max_message_age_hours": 48
+  },
+  "brain": {
+    "model": "claude-sonnet-5",
+    "cwd": "<home>/brain-cwd",
+    "context_days": 7,
+    "group_context_days": 3,
+    "run_timeout_seconds": 600,
+    "retries": 1,
+    "sweep_timeout_seconds": 1500,
+    "max_turns": 12,
+    "warm_days": 2,
+    "ground_every_days": 7,
+    "whisper_model": "~/.cache/whisper-models/openai_whisper-large-v3-v20240930",
+    "whisper_language": "",
+    "transcribe": true
+  },
+  "bin": {
+    "claude": "<auto>",
+    "python": "/usr/bin/python3",
+    "node": "<auto>",
+    "ffmpeg": "<auto>",
+    "whisperkit": "<auto>",
+    "lark_cli": "<auto>",
+    "path_env": "<auto>"
+  },
+  "paths": {
+    "home": "~/WhatsApp-Live",
+    "live_dir": "<home>/live",
+    "vault": "",
+    "people_dir": "",
+    "doctrine": "",
+    "person_playbook": "",
+    "intake_buffer": "",
+    "filing_log": "",
+    "decisions_dir": "",
+    "reader_dir": "<payload>",
+    "dossier_dir": "<payload>"
+  },
+  "vocab": {
+    "worlds": [
+      {
+        "key": "personal",
+        "label": "私人",
+        "label_en": "Personal",
+        "business": false
+      },
+      {
+        "key": "work",
+        "label": "工作",
+        "label_en": "Work",
+        "business": true
+      },
+      {
+        "key": "other",
+        "label": "其他",
+        "label_en": "Other",
+        "business": false
+      }
+    ],
+    "stages": [
+      {
+        "key": "new",
+        "label": "新",
+        "label_en": "New"
+      },
+      {
+        "key": "talking",
+        "label": "在谈",
+        "label_en": "Talking"
+      },
+      {
+        "key": "offered",
+        "label": "已报价",
+        "label_en": "Offered"
+      },
+      {
+        "key": "won",
+        "label": "已成交",
+        "label_en": "Won"
+      },
+      {
+        "key": "active",
+        "label": "服务中",
+        "label_en": "Active"
+      },
+      {
+        "key": "done",
+        "label": "结束",
+        "label_en": "Done"
+      },
+      {
+        "key": "parked",
+        "label": "搁置",
+        "label_en": "Parked"
+      }
+    ],
+    "park_from": [
+      "new",
+      "talking",
+      "offered"
+    ],
+    "priorities": [
+      {
+        "key": "now",
+        "label": "现在",
+        "label_en": "Now"
+      },
+      {
+        "key": "soon",
+        "label": "这几天",
+        "label_en": "Soon"
+      },
+      {
+        "key": "low",
+        "label": "不急",
+        "label_en": "Low"
+      }
+    ],
+    "business_context": ""
+  },
+  "stage_rules": {
+    "parked_after_days": 21,
+    "group_date_done": false
+  },
+  "board": {
+    "enabled": true,
+    "bind": "127.0.0.1",
+    "port": 8787,
+    "others_days": 3,
+    "others_limit": 120,
+    "lang": "zh",
+    "show_usd": false
+  },
+  "notify": {
+    "outlet": "none",
+    "mode": "errors",
+    "telegram_file": "<live>/telegram.json",
+    "command": ""
+  },
+  "dossier": {
+    "enabled": false,
+    "model": "claude-opus-5",
+    "auto_open_worlds": [],
+    "auto_open_min_stage": "talking",
+    "pack_days": 30,
+    "nightly_at": "02:30",
+    "nightly_min_msgs": 5,
+    "nightly_cap": 8,
+    "stale_days": 14,
+    "min_gap_hours": 6,
+    "recent_lines": 12,
+    "max_turns": 24,
+    "run_timeout_seconds": 1200,
+    "backups_keep": 3
+  },
+  "facts": {
+    "enabled": false,
+    "source": "none",
+    "at": "03:00",
+    "phone_default_cc": "",
+    "phone_valid": [],
+    "label": "",
+    "currency": "",
+    "recent_days": 30,
+    "floor": {
+      "paid": "won",
+      "paid_attended": "active",
+      "via_attended": "active"
+    },
+    "csv": {
+      "path": "",
+      "columns": {},
+      "day_first": true
+    },
+    "lark": {
+      "people_tables": [],
+      "payment_tables": []
+    }
+  },
+  "second_source": {
+    "enabled": false,
+    "source": "none",
+    "at": "03:10",
+    "lark": {
+      "whitelist": "<live>/second-source-whitelist.json",
+      "owner_ids": [],
+      "page_limit": 50,
+      "timeout_seconds": 120,
+      "skip_chat_ids": [],
+      "system_name_patterns": [
+        "customer support",
+        "lark assistant",
+        "飞书助手",
+        "飞书小助手",
+        "小助手",
+        "服务台",
+        "helpdesk"
+      ]
+    },
+    "label": "",
+    "id_key": "",
+    "world_by_chat": {},
+    "world_keywords": {},
+    "prompt_max_chars": 60000,
+    "map_roles": [],
+    "name_stopwords": []
+  },
+  "calendar": {
+    "destination": "none",
+    "lark": {
+      "calendar_id": ""
+    },
+    "timezone": ""
+  },
+  "backup": {
+    "enabled": false,
+    "dest": "",
+    "require_process": "",
+    "at": "03:30",
+    "keep": 7
+  },
+  "digest": {
+    "enabled": true,
+    "at": "08:00",
+    "push": true
+  },
+  "intake": {
+    "enabled": false,
+    "buffer": "",
+    "evening_push": false,
+    "evening_at": "20:00",
+    "rules_file": ""
+  },
+  "voice": {
+    "enabled": true,
+    "examples": 12,
+    "pairs": "<live>/voice-pairs.jsonl"
+  },
+  "backfill": {
+    "days": 30,
+    "min_msgs": 10,
+    "batch_size": 10,
+    "respect_gate": true,
+    "max_turns": 20,
+    "max_images": 4
+  },
+  "launchd": {
+    "label": "local.whatsapp-live",
+    "intake_label": "local.whatsapp-live.intake"
+  },
+  "person": {
+    "section_roles": {
+      "gaps": "## ⬜ 下次见面要问的",
+      "notes": "## 这份档的备注",
+      "owner_notes": "## <marker> 手记",
+      "recent": "## WhatsApp 近况",
+      "facts": "## 系统记录",
+      "next_message": "下一封怎么开口",
+      "privacy_hint": "私事"
+    },
+    "roles_with_stage": [
+      "lead",
+      "member",
+      "client"
+    ],
+    "paid_stages": [
+      "won",
+      "active",
+      "done"
+    ],
+    "house_punctuation": false
+  },
+  "reader": {
+    "index_dirs": [],
+    "person_dirs": [],
+    "exclude_dirs": [
+      "98_Archive",
+      "99_Meta",
+      ".obsidian",
+      ".trash"
+    ],
+    "low_priority_dirs": [
+      "00_Inbox",
+      "01_Daily"
+    ],
+    "stop_words": [],
+    "keep_snapshot": false
+  },
+  "_help": {
+    "_about": "Explanations for every key above, keyed by dotted path. Code never reads this object. wa_setup.py init writes live/config.json from this file without it. Placeholders: <home> is paths.home, <live> is paths.live_dir, <payload> is the installed skill folder, <auto> is detected at load time. The full reference with the station that sets each key is references/config-reference.md.",
+    "version": "Config format version. Leave at 1.",
+    "my_phone": "Your own WhatsApp number, digits only with country code, no plus sign. Asked in station C1 because auto detection is unreliable. Used for mention detection.",
+    "my_names": "How people address you, for mention detection and prompts. Latin names match whole words only.",
+    "owner_label": "How prompts and person notes refer to you, for example your first name.",
+    "owner_marker": "Two to six ASCII letters, usually your initials. Used in voice tags and in the comment markers that lock your own lines in person notes.",
+    "direct_policy": "all: every one to one message can wake the brain. skip: one to one chats never do (only test runs and board buttons).",
+    "group_policies": "Group whitelist keyed by group jid: {\"policy\": \"all|mention|skip\", \"name\": group name, \"in30\": 30 day message count, \"defaulted\": true when you never chose it yourself}. Build it from wa_setup.py measure. Changes need a daemon restart.",
+    "unlisted_group_policy": "Policy for groups not in group_policies (new groups, quiet groups): all, mention or skip.",
+    "ignored_jids": "Chats that are never considered, never read into runs, never backfilled.",
+    "debounce.quiet_seconds": "A burst starts after this many seconds without a new message in that chat.",
+    "debounce.max_wait_seconds": "A burst starts at the latest this many seconds after its first message, even if messages keep coming.",
+    "debounce.global_concurrency": "How many brain runs may run at the same time.",
+    "doorbell.enabled": "false: the daemon keeps scanning and logging (skip:doorbell_off) and marking your replies, but starts no automatic runs; commands and the board still work.",
+    "doorbell.wal_path": "WhatsApp Desktop write ahead log that the doorbell watches. <auto> is ChatStorage.sqlite-wal in the WhatsApp group container.",
+    "doorbell.poll_seconds": "How often the doorbell checks whether the database file changed.",
+    "doorbell.stale_alert_hours": "Push an error when the WhatsApp database has not changed for this long (WhatsApp Desktop probably logged out or quit).",
+    "doorbell.full_rescan_seconds": "Query the database at least this often even when the file looks unchanged.",
+    "doorbell.lookback": "How many message ids behind the watermark each scan looks for messages written late. At first start these are recorded as skip:before_install, never judged.",
+    "doorbell.max_message_age_hours": "Inbound older than this is logged skip:too_old instead of judged (guards against a flood after WhatsApp Desktop is linked again). 0 turns the gate off.",
+    "brain.model": "Model for the per burst judgment run.",
+    "brain.cwd": "Empty working folder for headless claude. Must stay outside Documents, Desktop and Downloads.",
+    "brain.context_days": "Days of one to one history read for a full (grounding) run.",
+    "brain.group_context_days": "Days of group history read for a run.",
+    "brain.run_timeout_seconds": "A claude run slower than this is killed and counted as failed.",
+    "brain.retries": "Extra attempts after a failed run.",
+    "brain.sweep_timeout_seconds": "Time limit for the reader that builds a run's conversation pack (voice transcription included).",
+    "brain.max_turns": "Turn limit for a judgment run.",
+    "brain.warm_days": "When a chat already has a summary, only this many days of raw messages are read.",
+    "brain.ground_every_days": "Force a full read of context_days at least this often per chat.",
+    "brain.whisper_model": "Whisper model folder used for voice notes. Keep the copy under ~/.cache (a model under Documents stalls under launchd). wa_setup.py init fills it when it finds one model folder.",
+    "brain.whisper_language": "Language hint for transcription, for example zh or en. Empty lets whisper detect.",
+    "brain.transcribe": "false turns voice transcription off everywhere (runs, board, reader).",
+    "bin.claude": "Absolute path of the claude CLI. <auto> searches PATH plus the usual install folders.",
+    "bin.python": "Python that runs every module. macOS system python 3.9 is the tested one.",
+    "bin.node": "Absolute path of the node binary that launchd starts. This exact binary needs Full Disk Access.",
+    "bin.ffmpeg": "ffmpeg, used to convert voice notes before transcription.",
+    "bin.whisperkit": "whisperkit-cli, the local transcription engine.",
+    "bin.lark_cli": "lark-cli, only needed when a Lark adapter is chosen.",
+    "bin.path_env": "PATH given to the daemon under launchd. <auto> is built from the folders of the binaries above plus the system folders.",
+    "paths.home": "The kit's working folder on this Mac (reader snapshots, transcript cache, launchd copies, live/). Keep it outside Documents, Desktop and Downloads.",
+    "paths.live_dir": "Daemon folder: config, state database, logs, runs, commands, prompts.",
+    "paths.vault": "Root of your second brain vault. Empty means no vault features.",
+    "paths.people_dir": "Folder of person notes inside the vault (station C4).",
+    "paths.doctrine": "Your vault's structure law, read for the person family roles and required keys.",
+    "paths.person_playbook": "Your vault copy of the person dossier playbook. Person notes need it.",
+    "paths.intake_buffer": "Append only intake buffer note in the vault (station O7). Same file as intake.buffer; set one of them.",
+    "paths.filing_log": "Vault filing log that gets one line per person note rewrite. Empty skips the line.",
+    "paths.decisions_dir": "Vault Decisions folder, where each default you change is logged as a decision.",
+    "paths.reader_dir": "Where the reader skill scripts are found. <payload> uses the copy inside this kit.",
+    "paths.dossier_dir": "Where the person dossier skill scripts are found. <payload> uses the copy inside this kit.",
+    "vocab.worlds": "Which world a conversation belongs to. key is stored, label and label_en show on the board, business marks worlds that have stages.",
+    "vocab.stages": "Stages of a business conversation, in forward order. The brain only moves a stage forward; moving back is done on the board.",
+    "vocab.park_from": "Stages from which a quiet conversation may move to parked.",
+    "vocab.priorities": "How urgent the next move is. Re judged every run.",
+    "vocab.business_context": "One paragraph written with you in station C2: what each business world sells, price points, how people pay.",
+    "stage_rules.parked_after_days": "A business conversation in a park_from stage with no messages for this many days moves to parked. 0 turns it off. Needs a stage with key parked.",
+    "stage_rules.group_date_done": "true marks a group done when a date in its name has passed. Needs a stage with key done.",
+    "board.enabled": "Serve the board.",
+    "board.bind": "Address the board listens on. Keep 127.0.0.1 and reach it through tailscale serve; never 0.0.0.0, the board has no login.",
+    "board.port": "Board port on this Mac.",
+    "board.others_days": "The Others list shows chats active in the last this many days.",
+    "board.others_limit": "Maximum rows in the Others list.",
+    "board.lang": "Board labels: zh or en.",
+    "board.show_usd": "Show run cost in USD on the board.",
+    "notify.outlet": "Where alerts go: none (log only), telegram (telegram_file) or command (a shell command reading the text on stdin).",
+    "notify.mode": "off, errors, needs_me or all. Start with errors.",
+    "notify.telegram_file": "JSON file with bot_token and chat_id. Keep it 0600.",
+    "notify.command": "Shell command for outlet command, for example an osascript notification or an ntfy call.",
+    "dossier.enabled": "Write and refresh person notes in the vault (station C4).",
+    "dossier.model": "Model for person note runs. Heavier than the brain; pick a lighter one if your plan cannot carry it.",
+    "dossier.auto_open_worlds": "World keys whose people get a new person note automatically once they reach auto_open_min_stage.",
+    "dossier.auto_open_min_stage": "Stage key from which a new person note is opened automatically.",
+    "dossier.pack_days": "Days of history read for a person note run.",
+    "dossier.nightly_at": "Local time of the nightly person note refresh.",
+    "dossier.nightly_min_msgs": "A person with at least this many messages that day (or a stage change) is refreshed that night.",
+    "dossier.nightly_cap": "At most this many person notes are rewritten per night.",
+    "dossier.stale_days": "Also refresh a note not rewritten for this many days when the person was active in that window.",
+    "dossier.min_gap_hours": "Minimum hours between two rewrites of the same person note.",
+    "dossier.recent_lines": "How many machine recent lines a person note keeps.",
+    "dossier.max_turns": "Turn limit for a person note run.",
+    "dossier.run_timeout_seconds": "Time limit for a person note run.",
+    "facts.enabled": "Run the nightly facts job (station O1).",
+    "facts.source": "none, csv (a local CSV or a published CSV link) or lark.",
+    "facts.at": "Local time of the nightly facts job.",
+    "facts.phone_default_cc": "Country code added to local numbers that start with 0, digits only.",
+    "facts.phone_valid": "Optional list of accepted number shapes, for example \"60:11-12\" (country code and lengths); numbers outside it are listed as mismatches, matching still works.",
+    "facts.label": "Name of your facts source in the brain's lines and person notes, for example Sales sheet. Empty shows CSV or Lark.",
+    "facts.currency": "Currency of amounts that carry none, for example MYR.",
+    "facts.recent_days": "Days of WhatsApp messages counted per person in facts.json.",
+    "facts.floor": "Lowest stage a paying person is shown at: paid (own payment), paid_attended (paid and attended), via_attended (someone else paid, this person attended). Values are stage keys; an unknown key means no floor for that case.",
+    "facts.csv.path": "CSV file path or published https CSV link (a list of them is also accepted).",
+    "facts.csv.columns": "Maps standard fields to your CSV headers. phone is required; name, paid, amount, currency, method, date, product, attended and record_id when your file has them.",
+    "facts.csv.day_first": "true reads 03/04/2026 as 3 April, false as March 4.",
+    "facts.lark.people_tables": "Lark tables that list people (ids and field names).",
+    "facts.lark.payment_tables": "Lark tables that list payments (ids and field names).",
+    "second_source.enabled": "Run the nightly pull from a second message source (station O2).",
+    "second_source.source": "none or lark.",
+    "second_source.at": "Local time of the nightly pull.",
+    "second_source.lark.whitelist": "JSON file listing which Lark chats are pulled. Missing or unreadable is an error, not zero chats.",
+    "calendar.destination": "none (no button), ics (writes an .ics file the board opens) or lark (station O3).",
+    "calendar.lark.calendar_id": "Target Lark calendar id; the only calendar the kit ever writes to.",
+    "backup.enabled": "Run the nightly backup (station O5).",
+    "backup.dest": "Backup folder: iCloud Drive, a Google Drive folder or an external disk.",
+    "backup.require_process": "Name of the sync client that must be running before a backup, for example a Drive client. Empty skips the check.",
+    "backup.at": "Local time of the nightly backup.",
+    "backup.keep": "How many dated backup folders are kept.",
+    "digest.enabled": "Write the morning digest.",
+    "digest.at": "Local time of the morning digest.",
+    "digest.push": "Also push the digest through notify.outlet.",
+    "intake.enabled": "Append things asked of you to the intake buffer (station O7). false stops every intake writer and the evening push.",
+    "intake.buffer": "Intake buffer note path. Same file as paths.intake_buffer; set one of them.",
+    "intake.evening_push": "Install the evening job that pushes the open intake entries with a suggested place each.",
+    "intake.evening_at": "Local time of the evening intake push.",
+    "intake.rules_file": "Optional note that says where each kind of intake entry usually belongs; the evening push reads it to suggest a place. Empty uses default places.",
+    "voice.enabled": "Learn your voice from drafts you edited before sending.",
+    "voice.examples": "How many draft and sent pairs are shown to the brain as examples.",
+    "voice.pairs": "File that keeps the draft and sent pairs.",
+    "backfill.days": "Days of history read when backfilling summaries (station O9).",
+    "backfill.min_msgs": "Only chats with at least this many content messages in backfill.days are backfilled.",
+    "backfill.batch_size": "Chats per backfill model call.",
+    "backfill.respect_gate": "true backfills only chats the gate lets through (direct_policy, group_policies, unlisted_group_policy).",
+    "backfill.max_turns": "Turn limit for one backfill batch (every image the model opens costs a turn; the brain's 12 is too few for a batch).",
+    "backfill.max_images": "How many image or file paths one backfill batch keeps (each chat's newest first); the other media lines lose their path, so the model cannot open more.",
+    "launchd.label": "LaunchAgent label of the daemon. Change it only to run a second, separate install.",
+    "launchd.intake_label": "LaunchAgent label of the evening intake job.",
+    "calendar.timezone": "IANA zone for timed events (for example Asia/Kuala_Lumpur). Empty: the zone macOS uses.",
+    "dossier.backups_keep": "Copies per person note kept in live/dossier-backups; what is on disk is backed up before every placement.",
+    "person.roles_with_stage": "People holding one of these roles carry a stage; must share values with the roles in your doctrine's person family.",
+    "person.paid_stages": "Stages a person note may hold only with a payment record from the facts source.",
+    "person.house_punctuation": "true: long dashes and spaced hyphens in a new note become commas before it is placed.",
+    "second_source.label": "Name of the source in prompts and the digest. Empty: the implementation's own name.",
+    "second_source.id_key": "Person note frontmatter key holding this source's sender ids. Empty: the implementation's own (lark_id for Lark).",
+    "second_source.world_by_chat": "Chat id to world key: a fixed world guess for that chat.",
+    "second_source.world_keywords": "Word to world key: world guess when a chat title holds the word.",
+    "second_source.prompt_max_chars": "Size limit of the nightly prompt's message area.",
+    "second_source.map_roles": "--probe-members lists person notes with these roles for id mapping. Empty: notes without the id key.",
+    "second_source.name_stopwords": "--probe-members ignores these words when matching names.",
+    "second_source.lark.owner_ids": "Your own Lark ids. Empty: read from lark-cli auth status.",
+    "second_source.lark.page_limit": "Page size of each Lark message list call.",
+    "second_source.lark.timeout_seconds": "Time limit of one lark-cli call.",
+    "second_source.lark.skip_chat_ids": "Chats never pulled, whatever the whitelist says.",
+    "second_source.lark.system_name_patterns": "Chats whose names hold one of these words are never pulled.",
+    "reader.index_dirs": "Vault folders the second brain lookup indexes (relative to paths.vault). Empty: the whole vault.",
+    "reader.exclude_dirs": "Vault folders never indexed (relative to paths.vault). An empty list means the reader's defaults, which are the values shown.",
+    "reader.low_priority_dirs": "Vault folders whose weak name hits are ignored. An empty list means the reader's defaults, which are the values shown.",
+    "reader.stop_words": "Extra words never used as name keys (your company and brand names).",
+    "reader.keep_snapshot": "true keeps the reader's database snapshot after each read (debugging only; it is a full copy of your chats).",
+    "person.section_roles.gaps": "Heading whose numbered questions count as open gaps (the board shows the count).",
+    "person.section_roles.notes": "Heading whose items may never be lost when a note is rewritten.",
+    "person.section_roles.owner_notes": "Heading of the owner's own words: every line stays word for word (<marker> is owner_marker).",
+    "person.section_roles.recent": "Heading of the machine recent block the daemon appends to.",
+    "person.section_roles.facts": "Heading of the machine system records section written from the facts source.",
+    "person.section_roles.next_message": "Label of the line the board shows as how to open the next message.",
+    "person.section_roles.privacy_hint": "A word of the fixed privacy line at the end of a note; a note without it gets a warning.",
+    "reader.person_dirs": "Extra vault folders whose notes count as people for the second brain lookup (the People room and Decisions are always included)."
+  }
+}

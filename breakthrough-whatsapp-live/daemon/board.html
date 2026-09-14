@@ -1,0 +1,1256 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="color-scheme" content="light">
+<title>WhatsApp Live</title>
+<style>
+  /* The look: a glass shell on three panes (list, work surface, chat), a typographic middle pane with zero cards,
+     and signal chips for the three tags (world, stage, priority).
+     Blur lives only on the three panes; no row inside them blurs again. The draft box is the one solid box on the page.
+     Middle pane order is fixed: signal row (three chips, confidence, timestamps), lede (verdict word plus the first
+     sentence of the situation), body, stake card, timeline (left rail), memory, draft box, refs. On a phone the draft box goes first.
+     The scale (the whole file uses only these values; change the look here first):
+       spacing  6 / 10 / 16 / 24 / 40
+       radius   8 / 14 / 22 / 999
+       type     11 / 13 / 15 / 17 / 24
+     Visible strings do not live in this CSS: pseudo element text reads the --t-* variables the script sets from its language tables. */
+  :root{
+    --s1:6px; --s2:10px; --s3:16px; --s4:24px; --s5:40px;
+    --r1:8px; --r2:14px; --r3:22px; --pill:999px;
+    --f1:11px; --f2:13px; --f3:15px; --f4:17px; --f5:24px;
+    --ink:#1d1d1f; --ink2:#3a3a3f; --muted:#6e6e73; --faint:#98989d;
+    --line:rgba(0,0,0,.08); --hair:rgba(0,0,0,.06);
+    --accent:#e06a12; --accent-ink:#a8460a; --accent-soft:rgba(224,106,18,.12);
+    --glass:rgba(255,255,255,.6); --glass-hi:rgba(255,255,255,.88); --glass-lo:rgba(255,255,255,.36);
+    --ring:inset 0 1px 0 rgba(255,255,255,.85), 0 0 0 1px rgba(0,0,0,.06);
+    --shadow:0 8px 24px -16px rgba(20,20,40,.25);
+    --blur:blur(20px) saturate(1.4);
+    --wa:#25d366; --wa-dark:#1fbf5a; --wa-ink:#08351a;
+    --red:#b3271e; --red-bg:rgba(255,59,48,.12);
+    --amber:#9a5b00; --amber-dot:#e0932a; --amber-bg:rgba(255,149,0,.16);
+    --green:#10794c; --green-dot:#2fb46b; --green-bg:rgba(52,199,89,.16);
+    --blue-dot:#4f7bd6; --rose-dot:#c9749a; --violet-dot:#7c6bd6; --teal-dot:#2f9e9a; --gray-dot:#9a9ea6;
+    --bubble-in:rgba(255,255,255,.9); --bubble-out:#dcf5c8;
+    --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Hiragino Sans GB","Helvetica Neue",sans-serif;
+    --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+    --ease:cubic-bezier(.32,.72,0,1);
+    --hdr:56px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:#eef0f4;color:var(--ink);font-family:var(--font);font-size:var(--f3);line-height:1.5;-webkit-text-size-adjust:100%;-webkit-font-smoothing:antialiased;overflow:hidden}
+  /* What the blur blurs: three faint washes (warm orange, cool gray blue), fixed in place */
+  body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
+    background:
+      radial-gradient(90% 60% at 8% -6%, rgba(255,150,80,.28), transparent 56%),
+      radial-gradient(70% 70% at 96% 6%, rgba(120,150,210,.24), transparent 56%),
+      radial-gradient(100% 80% at 72% 112%, rgba(255,190,120,.22), transparent 58%),
+      linear-gradient(160deg,#f7f6f3 0%,#eef0f4 55%,#e8ebf1 100%)}
+  /* Glass: only the three panes */
+  .glass{background:var(--glass);backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);box-shadow:var(--ring),var(--shadow);border-radius:var(--r3);min-width:0;min-height:0;height:100%}
+  .app{display:grid;grid-template-columns:300px minmax(520px,1fr) minmax(380px,.8fr);gap:var(--s2);padding:var(--s2);height:100%}
+  /* Pane header shared by all three panes: same height, same hairline */
+  .hdr{min-height:var(--hdr);padding:calc(var(--s2) + env(safe-area-inset-top)) var(--s3) var(--s2);display:flex;align-items:center;gap:var(--s2);border-bottom:1px solid var(--hair)}
+  .hdr .lbl{font-size:var(--f1);font-weight:700;letter-spacing:.12em;color:var(--muted)}
+  /* Kicker: 11px, wide tracking */
+  .kick{display:flex;align-items:baseline;gap:var(--s2);font-size:var(--f1);font-weight:700;letter-spacing:.12em;color:var(--muted)}
+  .kick .r{margin-left:auto;font-weight:500;letter-spacing:.02em;color:var(--faint);white-space:nowrap;font-family:var(--mono)}
+  .kick.acc{color:var(--accent-ink)}
+  .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  /* ===== Left: list ===== */
+  .rail{display:flex;flex-direction:column;overflow:hidden}
+  h1{font-size:var(--f4);margin:0;font-weight:700;letter-spacing:-.01em;flex:1;min-width:0}
+  .meta{font-size:var(--f1);color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:55%;font-family:var(--mono);font-variant-numeric:tabular-nums}
+  .meta.bad{color:var(--red);font-weight:600}
+  .counts{display:flex;gap:var(--s1);padding:var(--s2) var(--s3);border-bottom:1px solid var(--hair);overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+  .counts::-webkit-scrollbar{display:none}
+  .chip{flex:none;display:inline-flex;align-items:center;height:26px;padding:0 var(--s2);border-radius:var(--pill);font-size:var(--f1);font-weight:600;letter-spacing:.04em;color:var(--muted);cursor:pointer;white-space:nowrap;
+    background:rgba(255,255,255,.5);box-shadow:inset 0 1px 0 rgba(255,255,255,.85),inset 0 0 0 1px rgba(0,0,0,.06);transition:background .2s var(--ease)}
+  @media (hover:hover){ .chip:hover{background:rgba(255,255,255,.8)} }
+  .chip b{font-family:var(--mono);font-variant-numeric:tabular-nums;font-weight:600;color:var(--ink2);margin-left:var(--s1)}
+  .chip.on{background:var(--accent-soft);color:var(--accent-ink);box-shadow:inset 0 1px 0 rgba(255,255,255,.5),inset 0 0 0 1px rgba(224,106,18,.4)}
+  .chip.on b{color:var(--accent-ink)}
+  .list{overflow-y:auto;-webkit-overflow-scrolling:touch;flex:1;min-height:0;padding:var(--s1) var(--s1) calc(var(--s3) + env(safe-area-inset-bottom))}
+  .sub{padding:var(--s4) var(--s2) var(--s1);color:var(--faint)}
+  .row{display:grid;grid-template-columns:1fr auto auto;gap:0 var(--s2);padding:var(--s2);border-radius:var(--r2);cursor:pointer;transition:background .2s var(--ease),transform .18s var(--ease);position:relative}
+  /* One tap done, three ways: hover shows the check (desktop), D on the selected row (keyboard), swipe left (phone).
+     The check pins to row 1 column 3: with a row alone, grid placement would put it in column 1 and push the name right */
+  .row .ck{grid-row:1;grid-column:3;align-self:center;width:26px;height:26px;border-radius:999px;border:1px solid var(--hair);background:#fff;color:var(--green,#10794c);font-size:13px;font-weight:700;line-height:24px;text-align:center;padding:0;cursor:pointer;opacity:0;transition:opacity .15s var(--ease)}
+  .row.sel .ck,.row .ck:focus-visible{opacity:1}
+  @media (hover:hover){ .row:hover .ck{opacity:1} }
+  @media (hover:hover){ .row .ck:hover{background:var(--green-bg,rgba(47,180,107,.15))} .row:hover{background:rgba(255,255,255,.45)} }
+  @media (hover:none){.row .ck{opacity:.55}}
+  /* Touch accuracy: hover rules only for mouse devices; a press shows a tint at once and double tap zoom is off */
+  .row,.chip,.row .ck{touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+  .row.press{background:rgba(255,255,255,.7)}
+  .row.swiping{transition:none}
+  .row.gone{transform:translateX(-110%);opacity:0}
+  .row.sel{background:var(--glass-hi);box-shadow:var(--ring),var(--shadow)}
+  .row .name{font-weight:600;font-size:var(--f3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.35}
+  .row.other .name{font-weight:500}
+  /* Rows that need a reply: a dot before the name, colored by priority position (first red, second amber, others accent) */
+  .row.needs .name::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--accent);margin-right:7px;vertical-align:1px;box-shadow:0 0 0 3px var(--accent-soft)}
+  .row.needs.pr-hot .name::before{background:var(--red);box-shadow:0 0 0 3px var(--red-bg)}
+  .row.needs.pr-warm .name::before{background:var(--amber-dot);box-shadow:0 0 0 3px var(--amber-bg)}
+  .row .when{font-size:var(--f1);color:var(--faint);font-family:var(--mono);font-variant-numeric:tabular-nums;align-self:center;white-space:nowrap}
+  .row .snip{grid-column:1/4;font-size:var(--f2);color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.45}
+  .row .snip.me::before{content:var(--t-you,"");color:var(--faint)}
+  .row .pills{grid-column:1/4;display:flex;gap:var(--s2);align-items:center;margin-top:var(--s1);min-height:20px}
+  .row .unread{font-family:var(--mono);font-size:var(--f1);font-weight:700;background:var(--accent);color:#fff;border-radius:var(--pill);padding:0 6px;line-height:18px}
+  .row.dim{opacity:.55}
+  .tagword{font-size:var(--f1);font-weight:600;letter-spacing:.04em;color:var(--faint);white-space:nowrap}
+  .tagword.busy{color:var(--amber)}
+  .empty{color:var(--faint);text-align:center;padding:var(--s5) var(--s3);font-size:var(--f2)}
+  .foot{padding:var(--s2) var(--s3) calc(var(--s2) + env(safe-area-inset-bottom));font-size:var(--f1);color:var(--faint);border-top:1px solid var(--hair);line-height:1.7;font-variant-numeric:tabular-nums}
+  .foot b{font-family:var(--mono);font-weight:600;color:var(--muted)}
+
+  /* ===== Signal chips: data-dim names the dimension (world, stage, priority), a color class names the color; .sm is the list row size ===== */
+  .sig{display:inline-flex;align-items:center;gap:4px;height:28px;padding:0 var(--s2) 0 8px;border-radius:var(--pill);font-size:var(--f2);line-height:1;white-space:nowrap;flex:none;
+    background:rgba(255,255,255,.55);box-shadow:inset 0 0 0 1px var(--line),inset 0 1px 0 rgba(255,255,255,.9);color:var(--ink)}
+  .sig .dot{width:8px;height:8px;border-radius:50%;background:var(--faint);flex:none}
+  .sig small{font-size:var(--f1);color:var(--muted);font-weight:600;letter-spacing:.04em}
+  .sig small::after{content:"·";margin:0 2px;color:var(--faint)}
+  .sig b{font-weight:700}
+  .sig .auto{font-style:normal;font-size:var(--f1);color:var(--faint);margin-left:2px;letter-spacing:.04em}
+  /* Dot colors. Worlds take them by position in ui.vocab.worlds (the reserved noise world "other" is always gray);
+     stages by position along the stage order (early blue, middle amber, late green, the last stage and "parked" gray) */
+  .sig.c-rose .dot{background:var(--rose-dot)}
+  .sig.c-blue .dot{background:var(--blue-dot)}
+  .sig.c-violet .dot{background:var(--violet-dot)}
+  .sig.c-teal .dot{background:var(--teal-dot)}
+  .sig.c-amber .dot{background:var(--amber-dot)}
+  .sig.c-green .dot{background:var(--green-dot)}
+  .sig.c-gray .dot{background:var(--gray-dot)}
+  /* A row without a world: hollow gray dot */
+  .sig.legacy{color:var(--muted);background:rgba(0,0,0,.05);box-shadow:none}
+  .sig.legacy .dot{background:transparent;box-shadow:inset 0 0 0 1.5px var(--faint)}
+  /* Ghost chip: steady state stages show no word (saves the eye), only a faint dot as the handle to change the stage */
+  .sig.ghost{padding:0 8px;background:transparent;box-shadow:inset 0 0 0 1px var(--hair)}
+  .sig.ghost .dot{opacity:.6}
+  /* Priority by position in ui.vocab.priorities: first hot (red), second warm (amber), the rest cool (gray) */
+  .sig[data-dim="priority"].pr-hot{background:var(--red-bg);color:var(--red)} .sig[data-dim="priority"].pr-hot .dot{background:var(--red)}
+  .sig[data-dim="priority"].pr-warm{background:var(--amber-bg);color:var(--amber)} .sig[data-dim="priority"].pr-warm .dot{background:var(--amber-dot)}
+  .sig[data-dim="priority"].pr-cool{color:var(--muted)} .sig[data-dim="priority"].pr-cool .dot{background:var(--gray-dot)}
+  /* Editable chips (world, stage): a transparent native select sits on the chip, a tap opens the system menu */
+  .sig.pick{position:relative;cursor:pointer;transition:background .2s var(--ease)}
+  .sig.pick:hover{background:rgba(255,255,255,.85)}
+  .sig.pick::after{content:"";width:0;height:0;border-left:3px solid transparent;border-right:3px solid transparent;border-top:4px solid currentColor;opacity:.45;margin-left:2px}
+  .sig.pick select{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;font-size:16px;margin:0;padding:0;border:0;appearance:none;-webkit-appearance:none}
+  .sig.sm{height:20px;padding:0 6px 0 4px;font-size:var(--f1);gap:4px;box-shadow:none;background:transparent;color:var(--muted)}
+  .sig.sm .dot{width:6px;height:6px}
+  .sig.sm b{font-weight:600}
+  .sig.sm.legacy{background:transparent}
+
+  /* ===== Middle: the work surface, typographic layers, zero cards ===== */
+  .mid{overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch}
+  .dhead{position:sticky;top:0;z-index:3;background:rgba(255,255,255,.72);border-radius:var(--r3) var(--r3) 0 0}
+  .back{display:none;appearance:none;border:0;background:transparent;color:var(--accent-ink);font:inherit;font-size:var(--f3);font-weight:600;padding:var(--s1) var(--s1) var(--s1) 0;cursor:pointer}
+  .dname{font-size:var(--f4);font-weight:700;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;letter-spacing:-.01em}
+  .kind{font-size:var(--f1);letter-spacing:.08em;color:var(--faint);border-radius:var(--pill);padding:0 var(--s2);line-height:20px;box-shadow:0 0 0 1px var(--hair);white-space:nowrap}
+  .dbody{padding:var(--s4) var(--s4) calc(var(--s5) + env(safe-area-inset-bottom));max-width:680px;display:flex;flex-direction:column;overflow-wrap:anywhere}
+  /* Signal row: line one holds the three chips (no wrap, scrolls sideways when tight), line two confidence and timestamps */
+  .strip{display:flex;flex-direction:column;gap:var(--s1)}
+  .sigs{display:flex;gap:var(--s1);align-items:center;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;padding:2px 0}
+  .sigs::-webkit-scrollbar{display:none}
+  .stamp{display:flex;flex-wrap:wrap;gap:var(--s1) var(--s3);font-family:var(--mono);font-size:var(--f1);color:var(--faint);font-variant-numeric:tabular-nums;line-height:1.6}
+  .stamp .conf{color:var(--muted)}
+  .stamp .conf b{color:var(--ink2);font-weight:600}
+  .btn.run{min-width:0;height:28px;padding:0 var(--s3);font-size:var(--f2);font-weight:600;border-radius:var(--pill);background:var(--accent-soft);color:var(--accent-ink);box-shadow:inset 0 0 0 1px rgba(224,106,18,.35);flex:none}
+  /* Lede: the verdict word in orange, then the first sentence of the situation; a long first sentence drops one size */
+  .head{font-size:var(--f5);line-height:1.35;font-weight:700;letter-spacing:-.01em;margin:var(--s3) 0 0;color:var(--ink)}
+  .head em{font-style:normal;color:var(--accent-ink)}
+  .head em::after{content:var(--t-colon,"");color:var(--faint);font-weight:400}
+  .head.long{font-size:var(--f4);line-height:1.5;font-weight:600}
+  .head .muted-in{color:var(--muted);font-weight:500}
+  .body{font-size:var(--f3);line-height:1.75;color:var(--ink);margin:var(--s2) 0 0}
+  /* Stake card: light orange ground and an orange bar on the left, the draft box grammar one step lighter */
+  .stake{margin:var(--s3) 0 0;padding:var(--s2) var(--s3) var(--s2) calc(var(--s3) - 3px);border-left:3px solid var(--accent);border-radius:0 var(--r2) var(--r2) 0;background:var(--accent-soft);box-shadow:inset 0 1px 0 rgba(255,255,255,.6)}
+  .stake .kick{margin-bottom:4px}
+  .stake p{margin:0;font-size:var(--f3);line-height:1.7;color:var(--ink)}
+  /* How to talk to them: one gray line under the stake card, from the person note (row.dossier.how_to_talk); nothing to show, nothing drawn */
+  .talk{margin:var(--s2) 0 0;padding:var(--s1) var(--s2);border-radius:var(--r1);background:rgba(0,0,0,.035);box-shadow:inset 0 0 0 1px rgba(0,0,0,.05);font-size:var(--f2);line-height:1.6;color:var(--ink2)}
+  .talk b{font-size:var(--f1);font-weight:700;letter-spacing:.04em;color:var(--muted);margin-right:var(--s1)}
+  /* Add to calendar: a secondary button in the draft row opens a small form inside the box (prefilled from calendar_hint),
+     POST /api/calendar, then one line "created · link". While the form is open the 30 second refresh leaves the middle pane alone. */
+  .cal{margin-top:var(--s2);padding-top:var(--s2);border-top:1px solid var(--hair)}
+  .cal .kick{margin-bottom:var(--s1)}
+  .cal .grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:var(--s2)}
+  .cal label{display:flex;flex-direction:column;gap:2px;min-width:0;font-size:var(--f1);font-weight:600;letter-spacing:.04em;color:var(--muted)}
+  .cal label.w2{grid-column:span 2}
+  .cal label.w4{grid-column:1/-1}
+  .cal input,.cal textarea{display:block;width:100%;min-width:0;font:inherit;font-size:var(--f3);color:var(--ink);line-height:1.5;background:#fff;border:0;border-radius:var(--r1);padding:var(--s1) var(--s2);box-shadow:inset 0 0 0 1px var(--line);outline:none;-webkit-appearance:none;appearance:none}
+  .cal textarea{min-height:52px;resize:vertical}
+  .cal input:focus,.cal textarea:focus{box-shadow:inset 0 0 0 1.5px var(--accent),0 0 0 3px var(--accent-soft)}
+  .cal .actions .btn{min-width:0}
+  .cal .err{font-size:var(--f2);color:var(--red);margin-top:var(--s1)}
+  .cal .err:empty{display:none}
+  .caldone{margin-top:var(--s2);font-size:var(--f2);color:var(--muted);overflow-wrap:anywhere}
+  .caldone a{color:var(--accent-ink);text-decoration:none}
+  .caldone a:hover{text-decoration:underline}
+  .ovl{font-size:var(--f1);font-weight:700;letter-spacing:.12em;color:var(--faint);margin:var(--s4) 0 var(--s1)}
+  /* Brain memory: a folded section to check what the brain remembers; wrong memory means press full re-judge */
+  details.memo{margin-top:var(--s3);border-top:1px solid var(--hair)}
+  details.memo summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:var(--s2);padding:var(--s2) 0;font-size:var(--f1);font-weight:700;letter-spacing:.12em;color:var(--faint)}
+  details.memo summary::-webkit-details-marker{display:none}
+  details.memo summary::after{content:var(--t-expand,"");font-weight:500;letter-spacing:.02em;color:var(--accent-ink);margin-left:auto}
+  details.memo[open] summary::after{content:var(--t-collapse,"")}
+  details.memo p{margin:0 0 var(--s2);font-size:var(--f2);line-height:1.7;color:var(--ink2)}
+  details.memo .btn.quiet{margin-left:0;padding:0;height:auto;font-size:var(--f2)}
+  /* Refs: a small gray card right under the draft box, one line per item */
+  .refs{margin-top:var(--s3);padding:var(--s2) var(--s3);border-radius:var(--r2);background:rgba(0,0,0,.035);box-shadow:inset 0 0 0 1px rgba(0,0,0,.05)}
+  .refs .kick{margin-bottom:4px}
+  .refs ul{list-style:none;margin:0;padding:0}
+  .refs li{font-size:var(--f2);line-height:1.6;color:var(--ink2);padding:4px 0;border-top:1px solid var(--hair)}
+  .refs li:first-child{border-top:0;padding-top:0}
+  .refs li .w{color:var(--muted)}
+  .refs li a{color:var(--accent-ink);text-decoration:none}
+  .refs li a:hover{text-decoration:underline}
+  .prose{font-size:var(--f3);line-height:1.7}
+  .prose.muted{color:var(--muted)}
+  /* Timeline: a narrow left rail, monospace times aligned right, small dots on a hairline, the newest dot solid orange */
+  .tl{list-style:none;margin:0;padding:0;position:relative}
+  .tl::before{content:"";position:absolute;left:calc(80px + var(--s2) + 3.5px);top:10px;bottom:10px;width:1px;background:var(--line)}
+  .tl li{display:grid;grid-template-columns:80px 8px 1fr;gap:0 var(--s2);padding:var(--s1) 0;font-size:var(--f3);line-height:1.5;align-items:start}
+  .tl .t{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:var(--f1);color:var(--muted);text-align:right;padding-top:6px;white-space:nowrap}
+  .tl .dot{width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,.9);box-shadow:0 0 0 1.5px var(--faint);margin-top:8px;position:relative;z-index:1}
+  .tl li:last-child .dot{background:var(--accent);box-shadow:0 0 0 1.5px var(--accent),0 0 0 5px var(--accent-soft)}
+  .tl li:last-child .ev{font-weight:600}
+  .tl .ev{color:var(--ink2)}
+  /* Draft box: the one solid box on the page, orange bar on the left; no blur, the pane is right under it */
+  .draftbox{position:relative;margin-top:var(--s5);background:var(--glass-hi);border-radius:var(--r2);padding:var(--s3) var(--s3) var(--s3) calc(var(--s3) + var(--s1));box-shadow:var(--ring),var(--shadow)}
+  .draftbox::before{content:"";position:absolute;left:0;top:var(--s3);bottom:var(--s3);width:3px;border-radius:0 3px 3px 0;background:var(--accent)}
+  .draftbox .kick{margin-bottom:var(--s2)}
+  .draftbox.closed{background:var(--glass-lo);box-shadow:var(--ring)}
+  .draftbox.closed::before{background:rgba(0,0,0,.14)}
+  textarea.draft{display:block;width:100%;min-height:52px;resize:none;font:inherit;font-size:var(--f3);color:var(--ink);line-height:1.5;outline:none;-webkit-appearance:none;background:#fff;border:0;border-radius:var(--r1);padding:var(--s2);box-shadow:inset 0 0 0 1px var(--line);transition:box-shadow .2s var(--ease)}
+  textarea.draft:focus{box-shadow:inset 0 0 0 1.5px var(--accent),0 0 0 3px var(--accent-soft)}
+  textarea.draft::placeholder{color:var(--faint)}
+  /* A newer brain draft kept aside because the owner had edited the draft: offered under the box, never swapped in on its own */
+  .alt{margin-top:var(--s2);padding:var(--s1) var(--s2);border-radius:var(--r1);background:rgba(0,0,0,.035);box-shadow:inset 0 0 0 1px rgba(0,0,0,.05)}
+  .alt .kick{margin-bottom:4px}
+  .alt .prose{font-size:var(--f2);line-height:1.6;color:var(--ink2);white-space:pre-wrap}
+  .alt .actions{margin-top:var(--s1)}
+  .alt .btn.quiet{margin-left:0;padding:0;height:auto;font-size:var(--f2);color:var(--accent-ink)}
+  .actions{display:flex;gap:var(--s2);margin-top:var(--s2);align-items:center}
+  .btn{appearance:none;border:0;background:rgba(255,255,255,.7);box-shadow:var(--ring);color:var(--ink);border-radius:var(--r1);padding:0 var(--s4);height:44px;font:inherit;font-size:var(--f3);font-weight:600;text-decoration:none;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex:0 1 auto;min-width:220px;transition:transform .2s var(--ease),background .2s var(--ease)}
+  .btn.wa{background:var(--wa);color:var(--wa-ink);font-weight:700;white-space:nowrap;box-shadow:inset 0 1px 0 rgba(255,255,255,.4),0 8px 20px -12px rgba(37,211,102,.8)}
+  /* On a narrow screen the green button says only "WhatsApp", it folded into three lines otherwise */
+  @media (max-width:860px){ .btn.wa .full{display:none} }
+  .btn.wa:hover{background:var(--wa-dark)}
+  .btn.quiet{background:transparent;box-shadow:none;color:var(--muted);margin-left:auto;padding:0 var(--s2);min-width:0;flex:0 0 auto}
+  .btn.quiet:hover{color:var(--ink)}
+  .btn:active{transform:scale(.98)}
+  .runmeta{font-family:var(--mono);font-size:var(--f1);color:var(--faint);margin-top:var(--s4);line-height:1.7}
+  /* ===== Right: recent messages ===== */
+  .chat{display:flex;flex-direction:column;overflow:hidden}
+  .thread{display:flex;flex-direction:column;gap:var(--s1);padding:var(--s3);overflow-y:auto;-webkit-overflow-scrolling:touch;flex:1;min-height:0}
+  .msg{max-width:82%;padding:var(--s1) var(--s2);border-radius:var(--r2);font-size:var(--f3);line-height:1.45;white-space:pre-wrap;word-break:break-word;background:var(--bubble-in);box-shadow:0 0 0 1px var(--hair),0 1px 2px rgba(20,20,40,.04);align-self:flex-start}
+  .msg.me{align-self:flex-end;background:var(--bubble-out);box-shadow:0 0 0 1px rgba(40,120,60,.1),0 1px 2px rgba(20,20,40,.04)}
+  .msg .who{font-size:var(--f1);color:var(--accent-ink);font-weight:700;margin-bottom:2px}
+  .msg .ts{font-family:var(--mono);font-size:var(--f1);color:var(--faint);margin-top:2px;text-align:right;font-variant-numeric:tabular-nums}
+  .msg .mt{font-size:var(--f2);color:var(--muted);font-style:italic}
+  /* Images and videos in the chat: bubble width, at most 320px tall, a tap on an image opens the file */
+  .msg .pic{display:block;max-width:100%;max-height:320px;border-radius:var(--r1);margin-top:4px;object-fit:contain;background:rgba(0,0,0,.04)}
+  .msg a.piclink{display:block}
+  .msg video.pic{width:100%}
+  .msg .thumbnote{font-size:var(--f1);color:var(--faint);margin-top:2px}
+  /* Voice note player, shown when the thread item carries audio_url */
+  .msg audio.voice{display:block;width:100%;max-width:280px;height:36px;margin-top:4px}
+  .day{align-self:center;font-family:var(--mono);font-size:var(--f1);font-weight:600;letter-spacing:.06em;color:var(--muted);background:rgba(255,255,255,.7);box-shadow:0 0 0 1px var(--hair);border-radius:var(--pill);padding:0 var(--s2);line-height:20px;margin:var(--s1) 0}
+  .chatnote{color:var(--muted);font-size:var(--f2);padding:var(--s3);text-align:center}
+  /* Narrower: the chat folds into the middle pane */
+  details.fold{margin-top:var(--s4);border-top:1px solid var(--hair)}
+  details.fold summary{cursor:pointer;padding:var(--s3) 0;font-size:var(--f1);font-weight:700;letter-spacing:.12em;color:var(--muted);list-style:none;display:flex;justify-content:space-between}
+  details.fold summary::-webkit-details-marker{display:none}
+  details.fold summary::after{content:var(--t-expand,"");font-weight:500;letter-spacing:0;font-size:var(--f2);color:var(--accent-ink)}
+  details.fold[open] summary::after{content:var(--t-collapse,"")}
+  details.fold .thread{background:var(--glass-lo);box-shadow:inset 0 0 0 1px var(--hair);max-height:60vh;border-radius:var(--r2)}
+  /* Digest: one cell under the chat in the right pane, reads GET /api/digest; a 404 or no fetch hides the whole cell.
+     When the chat folds into the middle pane, the cell follows that fold (drawn in renderMid), same open state. */
+  details.digest{flex:none;border-top:1px solid var(--hair);padding:0 var(--s3) calc(var(--s2) + env(safe-area-inset-bottom))}
+  details.digest summary{cursor:pointer;list-style:none;display:flex;justify-content:space-between;align-items:center;gap:var(--s2);padding:var(--s3) 0 var(--s2);font-size:var(--f1);font-weight:700;letter-spacing:.12em;color:var(--muted)}
+  details.digest summary::-webkit-details-marker{display:none}
+  details.digest summary .r{margin-left:auto;font-weight:500;letter-spacing:.02em;color:var(--faint);font-family:var(--mono);font-variant-numeric:tabular-nums}
+  details.digest summary::after{content:var(--t-expand,"");font-weight:500;letter-spacing:0;font-size:var(--f2);color:var(--accent-ink)}
+  details.digest[open] summary::after{content:var(--t-collapse,"")}
+  details.digest .lines{max-height:40vh;overflow-y:auto;-webkit-overflow-scrolling:touch;padding-bottom:var(--s2)}
+  details.digest .dl{font-size:var(--f2);line-height:1.6;color:var(--ink2);overflow-wrap:anywhere}
+  details.digest .dl:first-child{font-weight:600;color:var(--ink)}
+  #mid details.digest{margin-top:var(--s4);padding:0}
+  .placeholder{display:flex;align-items:center;justify-content:center;height:100%;color:var(--faint);font-size:var(--f2)}
+  .toast{position:fixed;left:50%;bottom:calc(var(--s4) + env(safe-area-inset-bottom));transform:translateX(-50%);background:rgba(29,29,31,.92);color:#fff;padding:var(--s1) var(--s3);border-radius:var(--pill);font-size:var(--f2);opacity:0;transition:opacity .2s var(--ease);pointer-events:none;z-index:9;box-shadow:var(--shadow);max-width:calc(100% - 2 * var(--s3));text-align:center}
+  .toast.show{opacity:1}
+  /* Breakpoints 1100 and 860: the script's wide() and the phone check use the same two numbers, change both together */
+  @media (max-width:1099px){
+    .app{grid-template-columns:300px minmax(0,1fr)}
+    .chat{display:none}
+  }
+  @media (max-width:860px){
+    .app{grid-template-columns:1fr;gap:0;padding:0}
+    .glass{border-radius:0;box-shadow:none;background:rgba(255,255,255,.55)}
+    .dhead{border-radius:0}
+    .mid{display:none}
+    .app.show-detail .rail{display:none}
+    .app.show-detail .mid{display:block}
+    .back{display:inline-block}
+    .dbody{max-width:none;padding:var(--s3) var(--s3) calc(var(--s5) + env(safe-area-inset-bottom))}
+    .draftbox{order:-1;margin:0 0 var(--s4)}   /* phone: the draft first, signal row, lede and timeline below */
+    .btn{flex:1 1 auto;min-width:0}
+    .btn.quiet,.btn.run{flex:0 0 auto}
+    .actions{flex-wrap:wrap}                  /* the calendar button makes the row too wide on a phone, so it wraps */
+    .cal .grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .cal input,.cal textarea{font-size:16px;min-height:44px}   /* 16px keeps iOS from zooming in on focus (same as .sig.pick select) */
+  }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <section class="rail glass">
+    <div class="hdr"><h1 id="title">WhatsApp Live</h1><span class="meta" id="meta"></span></div>
+    <div class="counts" id="chips"></div>
+    <div class="list" id="list"></div>
+    <div class="foot" id="foot"></div>
+  </section>
+  <section class="mid glass" id="mid"><div class="placeholder"></div></section>
+  <section class="chat glass" id="chat"><div class="hdr"><span class="lbl" id="chat-lbl"></span></div><div class="thread" id="chat-thread"><div class="chatnote"></div></div><details class="digest" id="digest" hidden><summary><span id="digest-title"></span><span class="r" id="digest-date"></span></summary><div class="lines" id="digest-lines"></div></details></section>
+</div>
+<div class="toast" id="toast"></div>
+<!--BOOT-->
+<script>
+// ===== Language tables =====
+// World, stage and priority labels are not here: they come from payload.ui.vocab (label for zh, label_en for en).
+// Every other visible string lives in these two tables, picked by payload.ui.lang. Add a key to both tables.
+const TEXT = {
+  zh: {
+    loading: '载入中…',
+    pickLeft: '左边点一个对话',
+    recentChat: '最近对话',
+    msgCount: n => ' · ' + n + ' 封',
+    justNow: '刚刚',
+    minAgo: n => n + ' 分钟前',
+    hourAgo: n => n + ' 小时前',
+    dayAgo: n => n + ' 天前',
+    youPrefix: '你: ',
+    expand: '展开',
+    collapse: '收起',
+    colon: '：',
+    back: '‹ 列表',
+    group: '群',
+    direct: '一对一',
+    bucket_open: '未处理', bucket_needs: '要回', bucket_waiting: '等对方', bucket_fyi: '看看就好', bucket_noise: '不用理', bucket_closed: '已回 / 已处理', bucket_all: '全部',
+    tag_open: '未处理', tag_replied: '你已回', tag_done: '已处理',
+    head_needs: '球在你', head_waiting: '球在对方', head_fyi: '看看就好', head_noise: '不用理', head_replied: '你已回', head_done: '已处理',
+    dim_world: '世界', dim_stage: '阶段', dim_priority: '优先',
+    legacyWorld: '未分',
+    auto: '自动',
+    notSet: '还没定',
+    changeDim: d => '改' + d,
+    tapWorld: '点一下改世界',
+    tapStage: '点一下改阶段',
+    stageTip: s => '阶段: ' + s + ' (点一下改)',
+    othersHead: '其他对话',
+    othersSub: (days, n) => (days ? '最近 ' + days + ' 天有动静 · ' : '最近有动静 · ') + n,
+    othersCapped: n => ' · 只列前 ' + n + ' 个',
+    judging: '判断中…',
+    emptyBucket: '这一格没有东西',
+    doneTip: '已处理 (选中后按 D, 手机左滑也行)',
+    doneWord: '已处理',
+    metaUpdated: a => '更新 ' + a,
+    metaPending: n => ' · ' + n + ' 个等中',
+    metaRunning: n => ' · ' + n + ' 在跑',
+    offline: '连不上 daemon',
+    footToday: (runs, read, cached, write) => '今天 ' + runs + ' 个 run · 读 ' + read + ' tokens (快取 ' + cached + ') · 写 ' + write,
+    footUsd: v => ' · 费用 ' + v,
+    footMark: pk => '水位 ' + pk,
+    footWal: h => ' · WhatsApp 库 ' + h + ' 小时前有动',
+    conf_high: '证据明确', conf_mid: '两可, 自己看一眼', conf_low: '读不到关键东西',
+    judgedAgo: a => '判断 ' + a,
+    lastIn: s => '来信 ' + s,
+    noteWord: '档',
+    noNote: '没有档',
+    noteRewrite: '重写档',
+    noteStart: '开档',
+    noteBusy: '档案 run 中…',
+    noteGaps: n => ' · ' + n + ' 待问',
+    noteOld: ' · 旧格式',
+    notJudged: '还没判断过',
+    judgeNow: '现在判断',
+    lastActivity: a => '最后动静 ' + a,
+    unread: n => '未读 ' + n,
+    notJudgedLede: '这条最近有动静, 但还没判断过',
+    noSituation: '还没有状况, 下一封讯息进来就会有',
+    stakeKick: '对你的利害',
+    howToTalk: '怎么跟对方讲',
+    refsKick: '可借鉴 · 相关资料',
+    memoKick: '脑的记忆',
+    memoNone: ' · 还没有 (下一次 run 会长出来)',
+    memoGrounded: (days, when) => (days ? '上次用 ' + days + ' 天原文重写: ' : '上次用原文整份重写: ') + when + ' · ',
+    memoWrong: '记得不对就 ',
+    fullRejudge: '全量重判',
+    timeline: '时间线',
+    noTimeline: '还没有时间线',
+    draftKick: '回覆草稿',
+    draftClosed: '这条已经结掉',
+    noDraft: '没有草稿',
+    phPhone: '写一句, 按钮直接带过去',
+    phGroup: '写一句, 复制再贴进群',
+    phCopy: '写一句, 复制再贴进对话',
+    waPre: '在 ', waPost: ' 打开',
+    copyDraft: '复制草稿',
+    packet: '带去 Claude Code',
+    packetTip: '复制一份自足的文字包, 贴进 Claude Code 用更强的模型深挖',
+    editing: '改中…', saved: '已存', notSaved: '没存到', offlineDraft: '离线, 按钮照常带最新的字',
+    brainAltKick: '脑的新草稿',
+    brainAltNote: '你改过的草稿留着',
+    brainAltUse: '用这版',
+    runMeta: (read, fresh, cached, write) => '上次 run: 读 ' + read + ' tokens (新读 ' + fresh + ' · 快取 ' + cached + ') · 写 ' + write,
+    runSecs: s => ' · ' + s + ' 秒',
+    runUsd: v => ' · ' + v,
+    threadError: '拿不到对话 (fetch 被挡?)',
+    threadEmpty: '这条对话最近没有内容讯息',
+    thumbNote: label => label + ' 原档不在本机, 这是缩图',
+    thumbNoteLocal: label => label + ' 原档在本机, 板上打不开这种档, 这是缩图',
+    notLocal: ' (不在本机)',
+    emptyMsg: '(空)',
+    type_text: '文字', type_image: '图片', type_video: '影片', type_voice: '语音', type_location: '位置', type_document: '文件',
+    type_gif: 'GIF', type_contact: '名片', type_sticker: '贴图', type_channel: '频道图文',
+    digestYesterday: '昨天',
+    digestTitle: '日报',
+    calButton: '加进日历',
+    calTipIcs: '生成一个 .ics 日历文件, 按了先给你看一张可改的小表',
+    calTip: '建进日历, 按了先给你看一张可改的小表',
+    calKick: '加进日历',
+    calSub: label => label + ' · 时间留空 = 全天',
+    calIcsLabel: '.ics 文件',
+    calGenericLabel: '日历',
+    calTitle: '标题', calDate: '日期', calTime: '时间', calDuration: '时长 (分钟)', calPlace: '地点', calNote: '备注',
+    calCreate: '建', calCreating: '建中…', calCancel: '取消',
+    calDone: '已建 · ',
+    calLink: '链接',
+    calOpenIcs: '打开 .ics',
+    calAddedIcs: '日历文件已生成, 点「打开 .ics」导入',
+    calAdded: '已建进日历',
+    calFailed: code => '没建到 (daemon 回 ' + code + ')',
+    changed: '已改',
+    notChanged: '没改到',
+    daemonMissed: 'daemon 没收到',
+    markedDone: '已处理',
+    draftCopied: '草稿已复制',
+    copyFailedDraft: '复制失败, 长按草稿自己选',
+    packetCopied: '交棒包已复制, 贴进 Claude Code',
+    copyFailed: '复制失败',
+    noteQueued: '排进去了, 几分钟后板上会更新',
+    noteAlready: '已在排队或正在跑',
+    judgeStarted: '开始判断, 大约一分钟',
+    fullStarted: '全量重判中, 大约一分钟',
+    alreadyJudging: '已经在判断中, 稍等',
+    gateConfirm: why => '这条对话没过闸' + (why ? ' (' + why + ')' : '') + '。还是要现在判断吗?'
+  },
+  en: {
+    loading: 'Loading…',
+    pickLeft: 'Pick a conversation on the left',
+    recentChat: 'Recent messages',
+    msgCount: n => ' · ' + n,
+    justNow: 'just now',
+    minAgo: n => n + ' min ago',
+    hourAgo: n => n + ' h ago',
+    dayAgo: n => n + ' d ago',
+    youPrefix: 'You: ',
+    expand: 'Show',
+    collapse: 'Hide',
+    colon: ': ',
+    back: '‹ List',
+    group: 'Group',
+    direct: 'Direct',
+    bucket_open: 'Open', bucket_needs: 'Reply', bucket_waiting: 'Waiting', bucket_fyi: 'FYI', bucket_noise: 'Ignore', bucket_closed: 'Replied / done', bucket_all: 'All',
+    tag_open: 'Open', tag_replied: 'You replied', tag_done: 'Done',
+    head_needs: 'Your move', head_waiting: 'Their move', head_fyi: 'FYI', head_noise: 'Ignore', head_replied: 'You replied', head_done: 'Done',
+    dim_world: 'World', dim_stage: 'Stage', dim_priority: 'Priority',
+    legacyWorld: 'Unsorted',
+    auto: 'auto',
+    notSet: 'Not set',
+    changeDim: d => 'Change ' + String(d).toLowerCase(),
+    tapWorld: 'Tap to change the world',
+    tapStage: 'Tap to change the stage',
+    stageTip: s => 'Stage: ' + s + ' (tap to change)',
+    othersHead: 'Other chats',
+    othersSub: (days, n) => (days ? 'active in the last ' + days + (Number(days) === 1 ? ' day' : ' days') : 'recently active') + ' · ' + n,
+    othersCapped: n => ' · first ' + n + ' only',
+    judging: 'Judging…',
+    emptyBucket: 'Nothing here',
+    doneTip: 'Done (select and press D, or swipe left on a phone)',
+    doneWord: 'Done',
+    metaUpdated: a => 'Updated ' + a,
+    metaPending: n => ' · ' + n + ' waiting',
+    metaRunning: n => ' · ' + n + ' running',
+    offline: 'Cannot reach the daemon',
+    footToday: (runs, read, cached, write) => 'Today ' + runs + ' runs · read ' + read + ' tokens (cached ' + cached + ') · wrote ' + write,
+    footUsd: v => ' · cost ' + v,
+    footMark: pk => 'Watermark ' + pk,
+    footWal: h => ' · WhatsApp database changed ' + h + ' h ago',
+    conf_high: 'clear evidence', conf_mid: 'could go either way, take a look', conf_low: 'key context missing',
+    judgedAgo: a => 'judged ' + a,
+    lastIn: s => 'last in ' + s,
+    noteWord: 'Note',
+    noNote: 'No note',
+    noteRewrite: 'Rewrite note',
+    noteStart: 'Start note',
+    noteBusy: 'Note run in progress…',
+    noteGaps: n => ' · ' + n + ' to ask',
+    noteOld: ' · old format',
+    notJudged: 'Not judged yet',
+    judgeNow: 'Judge now',
+    lastActivity: a => 'last activity ' + a,
+    unread: n => n + ' unread',
+    notJudgedLede: 'Recent activity, not judged yet',
+    noSituation: 'No situation yet, it appears with the next message',
+    stakeKick: 'What is at stake for you',
+    howToTalk: 'How to talk to them',
+    refsKick: 'Worth borrowing · related',
+    memoKick: 'Brain memory',
+    memoNone: ' · none yet (grows with the next run)',
+    memoGrounded: (days, when) => (days ? 'Last rewritten from ' + days + ' days of text: ' : 'Last rewritten from the full text: ') + when + ' · ',
+    memoWrong: 'Remembers it wrong? ',
+    fullRejudge: 'Full re-judge',
+    timeline: 'Timeline',
+    noTimeline: 'No timeline yet',
+    draftKick: 'Reply draft',
+    draftClosed: 'This one is closed',
+    noDraft: 'No draft',
+    phPhone: 'Write a line, the button carries it over',
+    phGroup: 'Write a line, copy it, paste it in the group',
+    phCopy: 'Write a line, copy it, paste it in the chat',
+    waPre: 'Open in ', waPost: '',
+    copyDraft: 'Copy draft',
+    packet: 'Take to Claude Code',
+    packetTip: 'Copies a self-contained text packet to paste into Claude Code for a deeper look',
+    editing: 'editing…', saved: 'saved', notSaved: 'not saved', offlineDraft: 'offline, the button still carries the latest text',
+    brainAltKick: 'New draft from the brain',
+    brainAltNote: 'your edited draft was kept',
+    brainAltUse: 'Use this one',
+    runMeta: (read, fresh, cached, write) => 'Last run: read ' + read + ' tokens (fresh ' + fresh + ' · cached ' + cached + ') · wrote ' + write,
+    runSecs: s => ' · ' + s + ' s',
+    runUsd: v => ' · ' + v,
+    threadError: 'Could not load the chat (fetch blocked?)',
+    threadEmpty: 'No recent content messages in this chat',
+    thumbNote: label => label + ': the original is not on this Mac, this is the thumbnail',
+    thumbNoteLocal: label => label + ': the original is on this Mac but the board cannot show this kind of file, this is the thumbnail',
+    notLocal: ' (not on this Mac)',
+    emptyMsg: '(empty)',
+    type_text: 'Text', type_image: 'Photo', type_video: 'Video', type_voice: 'Voice note', type_location: 'Location', type_document: 'Document',
+    type_gif: 'GIF', type_contact: 'Contact card', type_sticker: 'Sticker', type_channel: 'Channel post',
+    digestYesterday: 'Yesterday',
+    digestTitle: 'Digest',
+    calButton: 'Add to calendar',
+    calTipIcs: 'Creates a .ics calendar file; shows an editable form first',
+    calTip: 'Adds an event to your calendar; shows an editable form first',
+    calKick: 'Add to calendar',
+    calSub: label => label + ' · leave time empty for all day',
+    calIcsLabel: '.ics file',
+    calGenericLabel: 'Calendar',
+    calTitle: 'Title', calDate: 'Date', calTime: 'Time', calDuration: 'Length (min)', calPlace: 'Place', calNote: 'Note',
+    calCreate: 'Create', calCreating: 'Creating…', calCancel: 'Cancel',
+    calDone: 'Created · ',
+    calLink: 'link',
+    calOpenIcs: 'Open .ics',
+    calAddedIcs: 'Calendar file ready, tap "Open .ics" to import',
+    calAdded: 'Added to calendar',
+    calFailed: code => 'Not created (daemon answered ' + code + ')',
+    changed: 'Changed',
+    notChanged: 'Not changed',
+    daemonMissed: 'The daemon did not get it',
+    markedDone: 'Marked done',
+    draftCopied: 'Draft copied',
+    copyFailedDraft: 'Copy failed, long press the draft to select it',
+    packetCopied: 'Packet copied, paste it into Claude Code',
+    copyFailed: 'Copy failed',
+    noteQueued: 'Queued, the board updates in a few minutes',
+    noteAlready: 'Already queued or running',
+    judgeStarted: 'Judging, about a minute',
+    fullStarted: 'Full re-judge running, about a minute',
+    alreadyJudging: 'Already judging, hang on',
+    gateConfirm: why => 'This chat does not pass the gate' + (why ? ' (' + why + ')' : '') + '. Judge it anyway?'
+  }
+};
+
+// ===== Vocabulary: used only when the payload carries no ui.vocab (the same defaults as config.example.json) =====
+const DEFAULT_VOCAB = {
+  worlds: [ {key:'personal', label:'私人', label_en:'Personal', business:false},
+            {key:'work', label:'工作', label_en:'Work', business:true},
+            {key:'other', label:'其他', label_en:'Other', business:false} ],
+  stages: [ {key:'new', label:'新', label_en:'New'}, {key:'talking', label:'在谈', label_en:'Talking'},
+            {key:'offered', label:'已报价', label_en:'Offered'}, {key:'won', label:'已成交', label_en:'Won'},
+            {key:'active', label:'服务中', label_en:'Active'}, {key:'done', label:'结束', label_en:'Done'},
+            {key:'parked', label:'搁置', label_en:'Parked'} ],
+  priorities: [ {key:'now', label:'现在', label_en:'Now'}, {key:'soon', label:'这几天', label_en:'Soon'},
+                {key:'low', label:'不急', label_en:'Low'} ]
+};
+const NOISE_WORLD = 'other';        // reserved world key: the "ignore" bucket, always a gray dot
+const PARKED_STAGE = 'parked';      // reserved stage key: the parked rule moves rows here, always shown, gray dot
+const WORLD_PALETTE = ['rose', 'blue', 'violet', 'teal', 'amber', 'green'];
+// Message types: the daemon may name them in Chinese (the reader's names) or with English keys; both map to one key
+const TYPE_KEY = {'文字':'text', '图片':'image', '影片':'video', '语音':'voice', '位置':'location', '文件':'document', 'GIF':'gif', '名片':'contact', '贴图':'sticker', '频道图文':'channel',
+  text:'text', image:'image', photo:'image', picture:'image', video:'video', voice:'voice', audio:'voice', ptt:'voice',
+  location:'location', document:'document', file:'document', gif:'gif', contact:'contact', vcard:'contact', sticker:'sticker', channel:'channel'};
+const TYPE_ICON = {image:'🖼️', video:'🎬', voice:'🎤', location:'📍', document:'📎', gif:'🎞️', contact:'👤', sticker:'🩹', channel:'🖼️'};
+
+let UI = null, uiSig = null, L = TEXT.zh;
+let data = null, filter = 'open', selected = null, editing = null, fetchWorks = true;
+let midSig = '', midJid = null, threadSig = '', foldOpen = false;
+// Touch accuracy: list redraw signatures, finger state, and the row a tap just opened (to swallow the late click)
+let listSig = '', chipsSig = '', listRetry = null, railScroll = 0;
+let touchDown = false, lastTouchEnd = 0, lastListScroll = 0, tapOpened = null;
+function touchBusy(){ return touchDown || Date.now() - lastTouchEnd < 350 || Date.now() - lastListScroll < 250; }
+let digest = null, digestOpen = false;   // GET /api/digest answer {date, text, lines}; null hides the cell
+let calOpen = null;                      // jid whose calendar form is open; renderMid leaves it alone unless forced
+const calDoneLocal = {};                 // jid -> {at, url, title}: shown as created until calendar_done comes back from the daemon
+// Load ordering: a board answer whose request started before a local change landed is dropped (it would undo the change on screen)
+let loadSeq = 0, shownSeq = 0, staleBefore = 0;
+const saveTimers = {}; const threads = {}; const threadErr = {};
+const unsaved = {};                      // jid -> true while typed draft text has not reached the daemon
+const $ = s => document.querySelector(s);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;'}[c]));
+const wide = () => window.innerWidth >= 1100;
+
+function t(key){
+  const args = Array.prototype.slice.call(arguments, 1);
+  let v = L[key]; if(v === undefined) v = TEXT.zh[key]; if(v === undefined) return key;
+  return typeof v === 'function' ? v.apply(null, args) : v;
+}
+function ago(iso){ if(!iso) return ''; const d = (Date.now() - new Date(iso).getTime()) / 1000; if(!isFinite(d)) return ''; if(d < 60) return t('justNow'); if(d < 3600) return t('minAgo', Math.floor(d / 60)); if(d < 86400) return t('hourAgo', Math.floor(d / 3600)); return t('dayAgo', Math.floor(d / 86400)); }
+function hm(iso){ return iso ? String(iso).slice(11, 16) : ''; }
+function dayOf(iso){ return iso ? String(iso).slice(5, 10).replace('-', '/') : ''; }
+function localDay(offset){ const d = new Date(); d.setDate(d.getDate() + offset); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+function k(n){ n = Number(n || 0); return n >= 10000 ? (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k' : (n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n)); }
+function usd(v){ const n = Number(v); return isFinite(n) ? '$' + (n > 0 && n < 0.1 ? n.toFixed(3) : n.toFixed(2)) : ''; }
+function toast(text, ms){ const el = $('#toast'); el.textContent = text; el.classList.add('show'); clearTimeout(toast.timer); toast.timer = setTimeout(() => el.classList.remove('show'), ms || 1400); }
+
+// ===== payload.ui: language, vocabulary, feature switches =====
+function listOf(v, fallback){
+  const src = Array.isArray(v) && v.length ? v : fallback;
+  return src.map(x => typeof x === 'string' ? {key: x, label: x, label_en: x} : Object.assign({}, x)).filter(x => x && x.key);
+}
+function setupUi(p){
+  const ui = (p && p.ui && typeof p.ui === 'object') ? p.ui : {};
+  const sig = JSON.stringify(ui);
+  if(UI && sig === uiSig) return false;
+  uiSig = sig;
+  const v = ui.vocab || {};
+  const worlds = listOf(v.worlds, DEFAULT_VOCAB.worlds);
+  const stages = listOf(v.stages, DEFAULT_VOCAB.stages);
+  const priorities = listOf(v.priorities, DEFAULT_VOCAB.priorities);
+  let wi = 0;
+  worlds.forEach(w => { w.business = !!w.business; w.color = w.key === NOISE_WORLD ? 'gray' : WORLD_PALETTE[(wi++) % WORLD_PALETTE.length]; });
+  // Stage colors by position: the forward order is every stage but parked, its last stage is the terminal one (gray).
+  // The stages before it ramp blue, amber, green. After the first green stage the rest are steady state and draw as a ghost dot.
+  // the side stage: an entry with side true (same rule as the daemon), else the key parked
+  const sideKey = stages.some(s => s && 'side' in s) ? ((stages.find(s => s.side === true) || {}).key || null) : PARKED_STAGE;
+  const forward = stages.filter(s => s.key !== sideKey);
+  const live = forward.slice(0, -1);
+  live.forEach((s, i) => { const pos = live.length > 1 ? i / (live.length - 1) : 0; s.color = pos < 0.35 ? 'blue' : (pos <= 0.65 ? 'amber' : 'green'); });
+  if(forward.length) forward[forward.length - 1].color = 'gray';
+  const firstGreen = live.findIndex(s => s.color === 'green');
+  forward.forEach((s, i) => { s.showWord = firstGreen < 0 ? true : i <= firstGreen; });
+  stages.forEach(s => { if(s.key === sideKey){ s.color = 'gray'; s.showWord = true; } if(typeof s.show === 'boolean') s.showWord = s.show; });
+  priorities.forEach((p, i) => { p.tone = i === 0 ? 'hot' : (i === 1 ? 'warm' : 'cool'); });
+  const f = ui.features || {};
+  const num = (x, d) => { const n = Number(x); return isFinite(n) && n > 0 ? n : d; };
+  UI = {
+    lang: ui.lang === 'en' ? 'en' : 'zh',
+    showUsd: ui.show_usd === true,
+    calendar: typeof ui.calendar === 'string' && ui.calendar ? ui.calendar : 'none',
+    calendarLabel: ui.calendar_label ? String(ui.calendar_label) : '',
+    features: {dossier: f.dossier === true, digest: f.digest !== false},   // intake and voice have no board element
+    ownerLabel: ui.owner_label ? String(ui.owner_label) : '',
+    vaultName: ui.vault_name ? String(ui.vault_name) : '',
+    contextDays: num(ui.context_days, 0), groupContextDays: num(ui.group_context_days, 0),
+    othersDays: num(ui.others_days, 0), othersLimit: num(ui.others_limit, 0), staleHours: num(ui.stale_alert_hours, 6),
+    worlds, stages, priorities, world: {}, stage: {}, priority: {}
+  };
+  worlds.forEach(w => { UI.world[w.key] = w; });
+  stages.forEach(s => { UI.stage[s.key] = s; });
+  priorities.forEach(p => { UI.priority[p.key] = p; });
+  L = TEXT[UI.lang] || TEXT.zh;
+  return true;
+}
+function cssString(s){ return '"' + String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/[\r\n]+/g, ' ') + '"'; }
+function applyStatic(){
+  const root = document.documentElement;
+  root.lang = UI.lang;
+  root.style.setProperty('--t-you', cssString(t('youPrefix')));
+  root.style.setProperty('--t-expand', cssString(t('expand')));
+  root.style.setProperty('--t-collapse', cssString(t('collapse')));
+  root.style.setProperty('--t-colon', cssString(t('colon')));
+  document.title = 'WhatsApp Live' + (UI.ownerLabel ? ' · ' + UI.ownerLabel : '');
+  $('#title').title = UI.ownerLabel;
+  if(!data){ $('#meta').textContent = t('loading'); }
+  $('#chat-lbl').textContent = t('recentChat');
+  const ph = $('#mid .placeholder'); if(ph) ph.textContent = t('pickLeft');
+  const cn = $('#chat-thread .chatnote'); if(cn && !selected) cn.textContent = t('pickLeft');
+  renderDigest();
+}
+function vlabel(item){ if(!item) return ''; const s = UI.lang === 'en' ? (item.label_en || item.label) : (item.label || item.label_en); return String(s || item.key); }
+function worldInfo(key){ return key ? (UI.world[key] || {key: key, label: key, label_en: key, color: 'gray', business: false, unknown: true}) : null; }
+function stageInfo(key){ return key ? (UI.stage[key] || {key: key, label: key, label_en: key, color: 'gray', showWord: true, unknown: true}) : null; }
+function priorityInfo(key){ return key ? (UI.priority[key] || null) : null; }
+function dimLabel(dim){ return t('dim_' + dim); }
+function tagWord(tag){ return L['tag_' + tag] !== undefined || TEXT.zh['tag_' + tag] !== undefined ? t('tag_' + tag) : String(tag || ''); }
+
+// tag holds only system values open, replied, done; anything else counts as open
+function isOpen(r){ return !['replied', 'done'].includes(r.tag); }
+function isNoise(r){ return r.world === NOISE_WORLD; }
+// The seven list buckets: one function drives the filter, the counts and the verdict word. Buckets may overlap.
+function inBucket(r, key){
+  switch(key){
+    case 'all': return true;
+    case 'open': return isOpen(r);
+    case 'needs': return isOpen(r) && !!r.needs_me;
+    case 'waiting': return isOpen(r) && !!r.waiting;
+    case 'fyi': return isOpen(r) && !r.needs_me && !isNoise(r);
+    case 'noise': return isOpen(r) && isNoise(r);
+    case 'closed': return !isOpen(r);
+  }
+  return false;
+}
+function matches(r){ return inBucket(r, filter); }
+function headKey(r){ if(!isOpen(r)) return r.tag === 'replied' ? 'replied' : 'done'; if(r.needs_me) return 'needs'; if(r.waiting) return 'waiting'; if(isNoise(r)) return 'noise'; return 'fyi'; }
+function rowOf(jid){ if(!data || !jid) return null; return (data.rows || []).find(x => x.jid === jid) || (data.others || []).find(x => x.jid === jid) || null; }
+function isJudged(r){ return !!(r && r.tag); }
+function judgedAt(r){ return r.judged_at || r.updated_at; }
+function isRunning(jid){ return (((data && data.status) || {}).running_jids || []).includes(jid); }
+function linkFor(r, text){ return r && r.phone ? 'whatsapp://send?phone=' + encodeURIComponent(r.phone) + '&text=' + encodeURIComponent(text || '') : null; }
+function confWord(c){ if(c == null) return ''; if(c >= 0.8) return t('conf_high'); if(c >= 0.5) return t('conf_mid'); return t('conf_low'); }
+function tokensOf(run){ if(!run || run.output_tokens == null) return null; const read = (run.input_tokens || 0) + (run.cache_read_tokens || 0) + (run.cache_create_tokens || 0); return {read, write: run.output_tokens || 0, fresh: run.input_tokens || 0, cached: run.cache_read_tokens || 0}; }
+// Only same origin paths, http(s) and inline media reach an href or src
+function safeUrl(u){ const s = String(u || '').trim(); if(!s) return ''; return (/^\/(?!\/)/.test(s) || /^https?:\/\//i.test(s) || /^data:(image|video|audio)\//i.test(s)) ? s : ''; }
+// Person notes and refs: an obsidian:// link only when the payload names the vault (ui.vault_name) and the path is vault relative
+function vaultRel(p){
+  const s = String(p || '').replace(/\\/g, '/').trim();
+  if(!s || /^[a-z][a-z0-9+.]*:/i.test(s) || s.startsWith('/') || s.startsWith('~') || s.split('/').some(seg => seg === '..')) return '';
+  return s;
+}
+function fileLabel(p){ return String(p || '').replace(/\\/g, '/').split('/').pop().replace(/\.md$/i, ''); }
+function noteRef(path, file){
+  const name = fileLabel(file || path), rel = vaultRel(path);
+  if(UI.vaultName && rel) return `<a href="${esc('obsidian://open?vault=' + encodeURIComponent(UI.vaultName) + '&file=' + encodeURIComponent(rel.replace(/\.md$/i, '')))}">${esc(name)}</a>`;
+  return esc(name);
+}
+const CHAT_REF = /^\s*(对话|chat|conversation)\s*[:：]/i;   // refs pointing at another chat, shown as text
+function typeKey(type){ const s = String(type || ''); return TYPE_KEY[s] || TYPE_KEY[s.toLowerCase()] || ''; }
+function typeLabel(type){ const key = typeKey(type); return key ? t('type_' + key) : String(type || ''); }
+// Lede: the first sentence of the situation is the headline, the rest is body text; a headline over 56 characters drops one size.
+// The stake card shows only the stake field. An empty stake draws no card (the situation is never shown as the stake).
+function splitFirst(s){
+  for(let i = 0; i < s.length; i++){
+    const c = s[i];
+    if('。；;!！?？'.indexOf(c) >= 0 || (c === '.' && i >= 12 && /\s/.test(s[i + 1] || ''))) return [s.slice(0, i + 1), s.slice(i + 1).trim()];
+  }
+  return [s, ''];
+}
+function ledeOf(r){
+  const s = String(r.situation || '').trim();
+  const stake = String(r.stake || '').trim();
+  if(!s) return {head: '', rest: '', stake, noSit: true, long: false};
+  const parts = splitFirst(s);
+  const head = parts[0].replace(/[。；;.]$/, '');
+  return {head, rest: parts[1], stake, noSit: false, long: head.length > 56};
+}
+
+// ===== Signal chips: one component takes a dimension and a color class; opts.sm list size, opts.pick a select on top, opts.ghost dot only, opts.auto adds the auto marker =====
+function sigChip(dim, cls, label, opts){
+  opts = opts || {};
+  const klass = 'sig' + (opts.sm ? ' sm' : '') + (opts.pick ? ' pick' : '') + (opts.ghost ? ' ghost' : '') + (cls ? ' ' + cls : '');
+  return `<span class="${klass}" data-dim="${esc(dim)}"${opts.title ? ` title="${esc(opts.title)}"` : ''}><i class="dot"></i>${(opts.sm || opts.ghost) ? '' : `<small>${esc(dimLabel(dim))}</small>`}${opts.ghost ? '' : `<b>${esc(label)}</b>`}${opts.auto ? `<em class="auto">${esc(t('auto'))}</em>` : ''}${opts.pick || ''}</span>`;
+}
+// World and stage are editable on the board: a native select over the chip, its change event POSTs /api/field
+function picker(field, r){
+  const items = field === 'world' ? UI.worlds : UI.stages;
+  const cur = r[field] || '';
+  const known = items.some(x => x.key === cur);
+  const first = !cur ? `<option value="" selected disabled>${esc(t('notSet'))}</option>` : (known ? '' : `<option value="${esc(cur)}" selected>${esc(cur)}</option>`);
+  return `<select class="picker" data-field="${field}" data-jid="${esc(r.jid)}" aria-label="${esc(t('changeDim', dimLabel(field)))}">${first}${items.map(x => `<option value="${esc(x.key)}"${x.key === cur ? ' selected' : ''}>${esc(vlabel(x))}</option>`).join('')}</select>`;
+}
+function worldChip(r, sm){
+  const w = worldInfo(r.world);
+  const cls = w ? 'c-' + w.color : 'legacy', label = w ? vlabel(w) : t('legacyWorld');
+  if(sm) return sigChip('world', cls, label, {sm: true});
+  return sigChip('world', cls, label, {pick: picker('world', r), title: t('tapWorld')});
+}
+function stageChip(r, sm){
+  const s = r.stage || null;
+  const w = r.world ? UI.world[r.world] : null;
+  if(w && !w.business) return '';      // a non business world has no stage, even while an old one lingers in the data
+  if(!w && !s) return '';              // no world (or an unknown one) and no stage
+  const info = stageInfo(s);
+  const show = !!(info && info.showWord);
+  if(sm) return show ? sigChip('stage', 'c-' + info.color, vlabel(info), {sm: true, auto: !!r.stage_auto}) : '';
+  if(!show) return sigChip('stage', 'c-' + (info ? info.color : 'gray'), '', {ghost: true, pick: picker('stage', r), title: t('stageTip', info ? vlabel(info) : t('notSet'))});
+  return sigChip('stage', 'c-' + info.color, vlabel(info), {pick: picker('stage', r), auto: !!r.stage_auto, title: t('tapStage')});
+}
+function priorityChip(r){ const p = priorityInfo(r.priority); if(!p) return ''; return sigChip('priority', 'pr-' + p.tone, vlabel(p)); }
+// Middle signal row: line one the world, stage and priority chips; line two confidence, judged time, last inbound, person note
+function stripOf(r){
+  const conf = r.confidence != null ? `<span class="conf"><b>${Math.round(r.confidence * 100)}%</b> ${esc(confWord(r.confidence))}</span>` : '';
+  // Person note (only when ui.features.dossier): a note gives its name (a link when the vault is named), date, open questions and a rewrite button; no note gives a start button; groups show nothing
+  let dos = '';
+  if(UI.features.dossier && r.kind !== 'group'){
+    const d = r.dossier;
+    const busy = r.dossier_busy ? `<span class="tagword busy">${esc(t('noteBusy'))}</span>` : `<button class="btn quiet" data-dossier="${esc(r.jid)}">${esc(d ? t('noteRewrite') : t('noteStart'))}</button>`;
+    dos = d
+      ? `<span>${esc(t('noteWord'))} ${noteRef(d.path, d.file)}${d.updated ? ' · ' + esc(String(d.updated).slice(5, 10)) : ''}${d.gaps ? esc(t('noteGaps', d.gaps)) : ''}${(d.dossier === null || d.dossier === false) ? esc(t('noteOld')) : ''}</span>${busy}`
+      : `<span>${esc(t('noNote'))}</span>${busy}`;
+  }
+  const at = judgedAt(r);
+  return `<div class="strip"><div class="sigs">${worldChip(r)}${stageChip(r)}${priorityChip(r)}</div><div class="stamp">${conf}${at ? `<span>${esc(t('judgedAgo', ago(at)))}</span>` : ''}${r.last_in_at ? `<span>${esc(t('lastIn', dayOf(r.last_in_at) + ' ' + hm(r.last_in_at)))}</span>` : ''}${dos}</div></div>`;
+}
+
+function renderList(){
+  const rows = data.rows || [];
+  const allOthers = data.others || [];
+  const keys = ['open', 'needs', 'waiting', 'fyi', 'noise', 'closed', 'all'];
+  const chipsHtml = keys.map(kk => { const n = kk === 'all' ? rows.length + allOthers.length : rows.filter(r => inBucket(r, kk)).length; return `<span class="chip${filter === kk ? ' on' : ''}" data-f="${kk}">${esc(t('bucket_' + kk))}<b>${n}</b></span>`; }).join('');
+  if(chipsHtml !== chipsSig){ $('#chips').innerHTML = chipsHtml; chipsSig = chipsHtml; }
+  const shown = rows.filter(matches);
+  const others = filter === 'all' ? allOthers : [];
+  const runningSet = new Set(((data.status || {}).running_jids) || []);
+  const list = $('#list');
+  const capped = UI.othersLimit && allOthers.length >= UI.othersLimit ? t('othersCapped', UI.othersLimit) : '';
+  const othersHtml = others.length ? `<div class="sub kick">${esc(t('othersHead'))}<span class="r">${esc(t('othersSub', UI.othersDays, others.length) + capped)}</span></div>` + others.map(o => `
+    <div class="row other${selected === o.jid ? ' sel' : ''}" data-open="${esc(o.jid)}">
+      <span class="name">${esc(o.name)}</span><span class="when">${ago(o.last_at)}</span>
+      <span class="snip${o.last_from_me ? ' me' : ''}">${esc(o.snippet || '')}</span>
+      <span class="pills"><span class="tagword">${esc(o.kind === 'group' ? t('group') : t('direct'))}</span>${o.unread ? `<span class="unread">${esc(o.unread)}</span>` : ''}${runningSet.has(o.jid) ? `<span class="tagword busy">${esc(t('judging'))}</span>` : ''}</span>
+    </div>`).join('') : '';
+  const listHtml = (shown.length || others.length) ? shown.map(r => { const open = isOpen(r), p = priorityInfo(r.priority); return `
+    <div class="row${r.needs_me && open ? ' needs' : ''}${p ? ' pr-' + p.tone : ''}${open ? '' : ' dim'}${selected === r.jid ? ' sel' : ''}" data-open="${esc(r.jid)}">
+      <span class="name">${esc(r.name)}</span><span class="when">${ago(judgedAt(r))}</span>${open ? `<button class="ck" data-done="${esc(r.jid)}" title="${esc(t('doneTip'))}" aria-label="${esc(t('doneWord'))}">✓</button>` : '<span></span>'}
+      <span class="snip">${esc(r.situation || '')}</span>
+      <span class="pills">${worldChip(r, true)}${stageChip(r, true)}${open ? (r.waiting ? `<span class="tagword">${esc(t('bucket_waiting'))}</span>` : '') : `<span class="tagword">${esc(tagWord(r.tag))}</span>`}</span>
+    </div>`; }).join('') + othersHtml : `<div class="empty">${esc(t('emptyBucket'))}</div>`;
+  // Touch accuracy: never redraw an unchanged list; while a finger is down (or just lifted, or the list just scrolled) wait and retry
+  if(listHtml !== listSig){
+    if(touchBusy()){ clearTimeout(listRetry); listRetry = setTimeout(renderList, 400); }
+    else { const st0 = list.scrollTop; list.innerHTML = listHtml; listSig = listHtml; list.scrollTop = st0; }
+  }
+  const st = data.status || {};
+  $('#meta').textContent = t('metaUpdated', ago(data.generated_at)) + (st.pending ? t('metaPending', st.pending) : '') + (st.running ? t('metaRunning', st.running) : '');
+  $('#meta').className = 'meta' + (st.wal_age_hours != null && st.wal_age_hours > UI.staleHours ? ' bad' : '');
+  const tk = st.tokens_today || {};
+  const b = x => '<b>' + esc(x) + '</b>';
+  // Tokens always; USD only when ui.show_usd (on a subscription the dollar figure is notional and misleads)
+  $('#foot').innerHTML = t('footToday', b(st.runs_today || 0), b(k((tk.input || 0) + (tk.cache_read || 0) + (tk.cache_create || 0))), b(k(tk.cache_read || 0)), b(k(tk.output || 0)))
+    + (UI.showUsd && tk.cost_usd != null ? t('footUsd', b(usd(tk.cost_usd))) : '')
+    + '<br>' + t('footMark', b(st.last_pk || '?'))
+    + (st.wal_age_hours != null ? t('footWal', b(Number(st.wal_age_hours).toFixed(1))) : '');
+}
+
+function mediaBusy(root){ return !!root && Array.prototype.some.call(root.querySelectorAll('audio,video'), m => !m.paused && !m.ended); }
+function threadHtml(msgs, jid){
+  if(!msgs) return threadErr[jid] ? `<div class="chatnote">${esc(t('threadError'))}</div>` : `<div class="chatnote">${esc(t('loading'))}</div>`;
+  if(!msgs.length) return `<div class="chatnote">${esc(t('threadEmpty'))}</div>`;
+  const r = rowOf(jid);
+  let out = '', lastDay = '';
+  for(const m of msgs){
+    const d = dayOf(m.at); if(d !== lastDay){ out += `<div class="day">${esc(d)}</div>`; lastDay = d; }
+    const tkey = typeKey(m.type), icon = TYPE_ICON[tkey] || '', label = typeLabel(m.type);
+    const media = safeUrl(m.media_url), audio = safeUrl(m.audio_url);
+    let body = '';
+    if(m.text) body += esc(m.text);
+    // A voice note's media_url is its audio: the player below shows it, never a picture link (a broken image otherwise)
+    if(media && !audio && !String(m.media_ctype || '').startsWith('audio/')){
+      if(String(m.media_ctype || '').startsWith('video/')) body += (body ? '\n' : '') + `<video class="pic" controls preload="metadata" playsinline src="${esc(media)}"></video>`;
+      else body += (body ? '\n' : '') + `<a class="piclink" href="${esc(media)}" target="_blank" rel="noopener"><img class="pic" src="${esc(media)}" loading="lazy" alt="${esc(label)}"></a>`;
+      if(m.media_is_thumb) body += `<div class="thumbnote">${icon} ${esc(t(m.media_local ? 'thumbNoteLocal' : 'thumbNote', label))}</div>`;
+    }
+    if(tkey === 'voice' || audio){
+      // Voice note: the transcript (from the reader's shared cache) or the type word, then a player when the daemon serves the audio
+      body += (body ? '\n' : '') + `<span class="mt">🎤 ${m.transcript ? esc(m.transcript) : esc(label) + ((m.media_local || audio) ? '' : esc(t('notLocal')))}</span>`;
+      if(audio) body += `<audio class="voice" controls preload="none" src="${esc(audio)}"></audio>`;
+    } else if(m.transcript) body += (body ? '\n' : '') + `<span class="mt">🎤 ${esc(m.transcript)}</span>`;
+    else if(icon && !media) body += (body ? '\n' : '') + `<span class="mt">${icon} ${esc(label)}${m.media_local ? '' : esc(t('notLocal'))}</span>`;
+    // Direct chats show no speaker; groups do, unless the push name looks like an internal id (a long base64 run)
+    const nameOk = m.speaker && !(m.speaker.length > 20 && /^[A-Za-z0-9+/=]+$/.test(m.speaker));
+    const who = (!m.from_me && r && r.kind === 'group' && nameOk) ? `<div class="who">${esc(m.speaker)}</div>` : '';
+    out += `<div class="msg${m.from_me ? ' me' : ''}">${who}${body || `<span class="mt">${esc(t('emptyMsg'))}</span>`}<div class="ts">${esc(hm(m.at))}</div></div>`;
+  }
+  return out;
+}
+// Digest cell: drawn into #digest in the right pane when wide; when narrow renderMid appends digestHtml() after the folded chat
+function digestTitle(){ return digest && digest.date === localDay(-1) ? t('digestYesterday') : t('digestTitle'); }
+function digestHtml(){
+  if(!UI.features.digest || !digest || !digest.lines || !digest.lines.length) return '';
+  return `<details class="digest"${digestOpen ? ' open' : ''}><summary>${esc(digestTitle())}<span class="r">${esc(digest.date || '')}</span></summary><div class="lines">${digest.lines.map(l => `<div class="dl">${esc(l)}</div>`).join('')}</div></details>`;
+}
+function renderDigest(){
+  const el = $('#digest'); if(!el) return;
+  if(!UI.features.digest || !digest || !digest.lines || !digest.lines.length){ el.hidden = true; return; }
+  $('#digest-title').textContent = digestTitle();
+  $('#digest-date').textContent = digest.date || '';
+  $('#digest-lines').innerHTML = digest.lines.map(l => `<div class="dl">${esc(l)}</div>`).join('');
+  el.open = digestOpen; el.hidden = false;
+}
+async function loadDigest(){
+  if(!UI.features.digest){ if(digest){ digest = null; renderDigest(); } return; }
+  try{
+    const r = await fetch('/api/digest', {cache: 'no-store'}); if(!r.ok) return;   // 404: no digest yet, the cell stays hidden
+    const j = await r.json(); if(!j || !Array.isArray(j.lines) || !j.lines.length) return;
+    const changed = !digest || digest.date !== j.date || digest.text !== j.text;
+    digest = j; renderDigest();
+    if(changed && !wide() && !editing){ midSig = ''; renderMid(); }
+  }catch(e){}
+}
+function renderThread(){
+  const r = rowOf(selected);
+  const msgs = r ? threads[r.jid] : null;
+  const sig = (r ? r.jid : '') + '|' + UI.lang + '|' + (msgs ? msgs.length + ':' + (msgs.length ? msgs[msgs.length - 1].pk : '') : (r && threadErr[r.jid] ? 'err' : 'none'));
+  const html = r ? threadHtml(msgs, r.jid) : `<div class="chatnote">${esc(t('pickLeft'))}</div>`;
+  const el = wide() ? $('#chat-thread') : document.querySelector('#mid .fold .thread');
+  if(el && sig !== threadSig){
+    if(r && el.dataset.for === r.jid && mediaBusy(el)) return;   // a voice note or video is playing: redraw on a later pass
+    el.innerHTML = html; el.dataset.for = r ? r.jid : ''; el.scrollTop = el.scrollHeight;
+  }
+  if(wide()) $('#chat-lbl').textContent = t('recentChat') + (r && msgs && msgs.length ? t('msgCount', msgs.length) : '');
+  if(el || !wide()) threadSig = sig;
+}
+
+// ===== Add to calendar =====
+// Row contract: calendar_hint = {title, date, time, duration_min, place, who} or null; calendar_done = {at, url, title} or null.
+// Validity is judged by the daemon only; the board checks presence. ui.calendar "none" hides the whole feature.
+function calEnabled(){ return !!UI.calendar && UI.calendar !== 'none'; }
+function isIcs(url){ return UI.calendar === 'ics' || /\.ics([?#]|$)/i.test(String(url || '')); }
+function calHintOf(r){ const h = r && r.calendar_hint; return (h && typeof h === 'object' && h.title && h.date) ? h : null; }
+function calDoneOf(r){ if(!r) return null; const d = r.calendar_done; if(d && typeof d === 'object') return d; return calDoneLocal[r.jid] || null; }
+function calButton(r){
+  if(!calEnabled() || !calHintOf(r) || calDoneOf(r) || calOpen === r.jid) return '';
+  return `<button class="btn quiet" data-cal="${esc(r.jid)}" title="${esc(UI.calendar === 'ics' ? t('calTipIcs') : t('calTip'))}">${esc(t('calButton'))}</button>`;
+}
+function calBlock(r){
+  if(!calEnabled()) return '';
+  const d = calDoneOf(r);
+  if(d){ const url = safeUrl(d.url); return `<div class="caldone">${esc(t('calDone'))}${esc(d.title || '')}${url ? ` · <a href="${esc(url)}" target="_blank" rel="noopener">${esc(isIcs(url) ? t('calOpenIcs') : t('calLink'))}</a>` : ''}</div>`; }
+  const h = calHintOf(r);
+  if(!h || calOpen !== r.jid) return '';
+  const dur = Number(h.duration_min) || 60;
+  // <input type="date"> takes only zero padded YYYY-MM-DD; the daemon pads already, this guards an unpadded value
+  const dm = String(h.date).match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  const dateVal = dm ? dm[1] + '-' + dm[2].padStart(2, '0') + '-' + dm[3].padStart(2, '0') : String(h.date);
+  const where = UI.calendar === 'ics' ? t('calIcsLabel') : (UI.calendarLabel || t('calGenericLabel'));
+  return `<div class="cal" data-cal-form="${esc(r.jid)}"><div class="kick">${esc(t('calKick'))}<span class="r">${esc(t('calSub', where))}</span></div>
+    <div class="grid">
+      <label class="w4">${esc(t('calTitle'))}<input name="title" type="text" maxlength="80" value="${esc(h.title)}"></label>
+      <label class="w2">${esc(t('calDate'))}<input name="date" type="date" value="${esc(dateVal)}"></label>
+      <label>${esc(t('calTime'))}<input name="time" type="text" inputmode="text" placeholder="15:00" value="${esc(h.time || '')}"></label>
+      <label>${esc(t('calDuration'))}<input name="duration_min" type="number" inputmode="numeric" min="15" max="600" step="15" value="${esc(dur)}"></label>
+      <label class="w4">${esc(t('calPlace'))}<input name="place" type="text" maxlength="120" value="${esc(h.place || '')}"></label>
+      <label class="w4">${esc(t('calNote'))}<textarea name="note" rows="2">${esc(h.who || '')}</textarea></label>
+    </div>
+    <div class="err"></div>
+    <div class="actions"><button class="btn" data-cal-go="${esc(r.jid)}">${esc(t('calCreate'))}</button><button class="btn quiet" data-cal-cancel="${esc(r.jid)}">${esc(t('calCancel'))}</button></div></div>`;
+}
+function openCal(jid){ calOpen = jid; midSig = ''; renderMid(true); const f = document.querySelector(`.cal[data-cal-form="${CSS.escape(jid)}"]`); if(f) f.scrollIntoView({block: 'nearest'}); }
+function closeCal(){ calOpen = null; midSig = ''; renderMid(true); }
+async function submitCal(jid, btn){
+  const box = document.querySelector(`.cal[data-cal-form="${CSS.escape(jid)}"]`); if(!box) return;
+  const val = n => { const el = box.querySelector(`[name="${n}"]`); return el ? String(el.value || '').trim() : ''; };
+  const body = {jid, title: val('title'), date: val('date'), time: val('time'), duration_min: Number(val('duration_min')) || 60, place: val('place'), note: val('note')};
+  const err = box.querySelector('.err'); err.textContent = '';
+  btn.disabled = true; btn.textContent = t('calCreating');
+  try{
+    const res = await fetch('/api/calendar', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    let j = null; try{ j = await res.json(); }catch(e){}
+    if(j && j.ok){
+      calDoneLocal[jid] = {at: new Date().toISOString(), url: j.url || '', title: body.title};
+      toast(isIcs(j.url) ? t('calAddedIcs') : t('calAdded'), 2400); markMutation(); closeCal(); load();
+      return;
+    }
+    err.textContent = (j && j.error) ? j.error : t('calFailed', res.status);
+  }catch(e){ err.textContent = t('daemonMissed'); }
+  btn.disabled = false; btn.textContent = t('calCreate');
+}
+// How to talk to them: one line under the stake card from row.dossier.how_to_talk; skipped when the stake already quotes it
+function talkLine(r){
+  if(!UI.features.dossier) return '';
+  const said = r && r.dossier && typeof r.dossier.how_to_talk === 'string' ? r.dossier.how_to_talk.trim() : '';
+  if(!said) return '';
+  if(String(r.stake || '').indexOf(said.slice(0, 12)) >= 0) return '';
+  return `<div class="talk"><b>${esc(t('howToTalk'))}</b>${esc(said)}</div>`;
+}
+function draftPlaceholder(r){ return r.phone ? t('phPhone') : (r.kind === 'group' ? t('phGroup') : t('phCopy')); }
+function draftArea(r){ return `<textarea class="draft" data-jid="${esc(r.jid)}" rows="1" placeholder="${esc(draftPlaceholder(r))}">${esc(r.draft || '')}</textarea>`; }
+function waButton(r, text){
+  if(r.phone) return `<a class="btn wa" data-link="${esc(r.jid)}" href="${esc(linkFor(r, text))}"><span class="full">${esc(t('waPre'))}</span>WhatsApp<span class="full">${esc(t('waPost'))}</span></a>`;
+  return `<button class="btn wa" data-copy="${esc(r.jid)}">${esc(t('copyDraft'))}</button>`;
+}
+// A newer brain draft kept aside (row.draft_brain) because the owner edited the draft; offered, never swapped in silently
+function brainAlt(r){
+  const alt = String(r.draft_brain || '').trim();
+  if(!alt || alt === String(r.draft || '').trim()) return '';
+  return `<div class="alt"><div class="kick">${esc(t('brainAltKick'))}<span class="r">${esc(t('brainAltNote'))}</span></div><div class="prose">${esc(alt)}</div><div class="actions"><button class="btn quiet" data-use-brain="${esc(r.jid)}">${esc(t('brainAltUse'))}</button></div></div>`;
+}
+
+function renderMid(force){
+  const r = rowOf(selected);
+  const mid = $('#mid');
+  if(calOpen && calOpen === selected && !force) return;   // calendar form open: wait for create or cancel
+  if(!r){ if(midSig !== ''){ mid.innerHTML = `<div class="placeholder">${esc(t('pickLeft'))}</div>`; midSig = ''; midJid = null; } return; }
+  const running = isRunning(r.jid);
+  const sig = JSON.stringify([r.jid, r.name, r.kind, r.phone, r.tag, r.world, r.stage, r.stage_auto, r.priority, r.needs_me, r.waiting, r.draft, r.draft_brain, r.situation, r.stake, r.summary, r.grounded_at, r.refs, r.dossier, r.dossier_busy, r.timeline, r.updated_at, r.judged_at, r.last_in_at, r.confidence, r.run, r.calendar_hint, calDoneOf(r), calOpen === r.jid, running, r.snippet, r.last_at, r.unread, wide(), uiSig]);
+  if(sig === midSig) return;          // nothing changed: no redraw, no jump every 30 seconds
+  if(!force && midJid === r.jid && mediaBusy(mid)) return;   // folded chat is playing a voice note or video
+  midSig = sig; midJid = r.jid;
+  const st0 = mid.scrollTop;
+  const head = `<div class="dhead hdr"><button class="back" id="back">${esc(t('back'))}</button><span class="dname">${esc(r.name)}</span><span class="kind">${esc(r.kind === 'group' ? t('group') : t('direct'))}</span></div>`;
+  if(!isJudged(r)){
+    // Other chats: never judged, so only the recent messages, a writable draft and a judge now button
+    const fold0 = wide() ? '' : `<details class="fold" open><summary>${esc(t('recentChat'))}</summary><div class="thread" data-for="${esc(r.jid)}">${threadHtml(threads[r.jid], r.jid)}</div></details>`;
+    mid.innerHTML = head + `
+    <div class="dbody">
+      <div class="strip"><div class="sigs"><span class="sig legacy" data-dim="tag"><i class="dot"></i><b>${esc(t('notJudged'))}</b></span>${running ? `<span class="tagword busy">${esc(t('judging'))}</span>` : `<button class="btn run" data-run="${esc(r.jid)}">${esc(t('judgeNow'))}</button>`}</div><div class="stamp"><span>${esc(t('lastActivity', ago(r.last_at)))}</span>${r.unread ? `<span>${esc(t('unread', r.unread))}</span>` : ''}</div></div>
+      <h2 class="head long"><em>${esc(t('notJudged'))}</em>${esc(r.snippet || t('notJudgedLede'))}</h2>
+      <div class="draftbox"><div class="kick acc">${esc(t('draftKick'))}<span class="r saved" data-saved="${esc(r.jid)}"></span></div>${draftArea(r)}
+        <div class="actions">${waButton(r, r.draft || '')}</div></div>
+      ${fold0}${wide() ? '' : digestHtml()}
+    </div>`;
+    document.querySelectorAll('textarea.draft').forEach(autosize);
+    mid.scrollTop = st0;
+    return;
+  }
+  const open = isOpen(r);
+  const tk = tokensOf(r.run);
+  const lede = ledeOf(r);
+  const hk = headKey(r);
+  const n = (r.timeline || []).length;
+  const tl = (r.timeline || []).map(s => { const m = String(s).match(/^(\d\d-\d\d(?:\s\d\d:\d\d)?)\s+(.*)$/); return m ? `<li><span class="t">${esc(m[1])}</span><span class="dot"></span><span class="ev">${esc(m[2])}</span></li>` : `<li><span class="t"></span><span class="dot"></span><span class="ev">${esc(s)}</span></li>`; }).join('');
+  const headline = lede.noSit
+    ? `<h2 class="head long"><em>${esc(t('head_' + hk))}</em><span class="muted-in">${esc(t('noSituation'))}</span></h2>`
+    : `<h2 class="head${lede.long ? ' long' : ''}"><em>${esc(t('head_' + hk))}</em>${esc(lede.head)}</h2>`;
+  const bodyText = lede.rest ? `<p class="body">${esc(lede.rest)}</p>` : '';
+  const stakeBox = (lede.stake ? `<div class="stake"><div class="kick acc">${esc(t('stakeKick'))}</div><p>${esc(lede.stake)}</p></div>` : '') + talkLine(r);
+  const refsBox = (r.refs && r.refs.length) ? `<div class="refs"><div class="kick">${esc(t('refsKick'))}</div><ul>${r.refs.map(x => { const w = String(x.where || ''); const isPath = /\.md$/i.test(w) && !CHAT_REF.test(w) && !!vaultRel(w); const link = isPath ? noteRef(w, w) : esc(w); return `<li>${esc(x.what || '')}${w ? ` <span class="w">· ${link}</span>` : ''}${x.why ? `<br><span class="w">${esc(x.why)}</span>` : ''}</li>`; }).join('')}</ul></div>` : '';
+  const days = r.kind === 'group' ? UI.groupContextDays : UI.contextDays;
+  const memo = `<details class="memo"><summary>${esc(t('memoKick'))}${r.summary ? '' : esc(t('memoNone'))}</summary>${r.summary ? `<p>${esc(r.summary)}</p>` : ''}<p class="muted">${r.grounded_at ? esc(t('memoGrounded', days, dayOf(r.grounded_at) + ' ' + hm(r.grounded_at))) : ''}${esc(t('memoWrong'))}<button class="btn quiet" data-run-full="${esc(r.jid)}">${esc(t('fullRejudge'))}</button></p></details>`;
+  const draftBox = open
+    ? `<div class="draftbox"><div class="kick acc">${esc(t('draftKick'))}<span class="r saved" data-saved="${esc(r.jid)}"></span></div>${draftArea(r)}${brainAlt(r)}
+        <div class="actions">${waButton(r, r.draft || '')}${calButton(r)}<button class="btn quiet" data-packet="${esc(r.jid)}" title="${esc(t('packetTip'))}">${esc(t('packet'))}</button><button class="btn quiet" data-done="${esc(r.jid)}">${esc(t('doneWord'))}</button></div>${calBlock(r)}</div>${refsBox}`
+    : `<div class="draftbox closed"><div class="kick">${esc(t('draftKick'))}<span class="r">${esc(t('draftClosed'))}</span></div><div class="prose muted">${r.draft ? esc(r.draft) : esc(t('noDraft'))}</div><div class="actions">${calButton(r)}<button class="btn quiet" data-packet="${esc(r.jid)}" title="${esc(t('packetTip'))}">${esc(t('packet'))}</button></div>${calBlock(r)}</div>${refsBox}`;
+  const fold = wide() ? '' : `<details class="fold"${foldOpen ? ' open' : ''}><summary>${esc(t('recentChat'))}</summary><div class="thread" data-for="${esc(r.jid)}">${threadHtml(threads[r.jid], r.jid)}</div></details>`;
+  const runmeta = tk ? `<div class="runmeta">${esc(t('runMeta', k(tk.read), k(tk.fresh), k(tk.cached), k(tk.write)))}${r.run.duration_ms ? esc(t('runSecs', (r.run.duration_ms / 1000).toFixed(0))) : ''}${UI.showUsd && r.run.cost_usd != null ? esc(t('runUsd', usd(r.run.cost_usd))) : ''}</div>` : '';
+  mid.innerHTML = head + `
+    <div class="dbody">
+      ${stripOf(r)}
+      ${headline}
+      ${bodyText}
+      ${stakeBox}
+      <div class="ovl">${esc(t('timeline'))}${n ? ` · ${n}` : ''}</div>
+      ${tl ? `<ol class="tl">${tl}</ol>` : `<div class="prose muted">${esc(t('noTimeline'))}</div>`}
+      ${memo}
+      ${draftBox}
+      ${fold}${wide() ? '' : digestHtml()}
+      ${runmeta}
+    </div>`;
+  document.querySelectorAll('textarea.draft').forEach(autosize);
+  mid.scrollTop = st0;
+}
+function render(){ if(!data) return; if(editing) return; renderList(); renderMid(); renderThread(); }
+function select(jid){
+  if(calOpen !== jid) calOpen = null;   // another chat closes the calendar form
+  selected = jid; midSig = ''; threadSig = '';
+  railScroll = $('#list').scrollTop;   // phone: the hidden list forgets its scroll, the back button puts it back
+  $('#app').classList.add('show-detail'); render(); $('#mid').scrollTop = 0;
+  if(!threads[jid]) loadThread(jid);
+}
+async function loadThread(jid){
+  try{
+    const r = await fetch('/api/thread?jid=' + encodeURIComponent(jid) + '&n=40', {cache: 'no-store'});
+    const j = await r.json(); threads[jid] = j.messages || []; threadErr[jid] = false;
+  }catch(e){ if(!threads[jid]) threadErr[jid] = true; }
+  if(selected === jid && !editing) renderThread();
+}
+function autosize(ta){ if(!ta.value){ ta.style.height = '52px'; return; } ta.style.height = 'auto'; ta.style.height = Math.min(Math.max(ta.scrollHeight + 2, 52), 280) + 'px'; }
+function draftOf(jid){ const ta = document.querySelector(`textarea.draft[data-jid="${CSS.escape(jid)}"]`); const r = rowOf(jid); return ta ? ta.value : (r ? (r.draft || '') : ''); }
+function markMutation(){ staleBefore = loadSeq; }
+async function saveDraft(jid){
+  const r = rowOf(jid); if(!r) return;
+  const text = draftOf(jid);
+  if(text === (r.draft || '') && !unsaved[jid]) return;
+  r.draft = text;
+  const el = document.querySelector(`[data-saved="${CSS.escape(jid)}"]`);
+  try{
+    const res = await fetch('/api/draft', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({jid, draft: text, name: r.name, kind: r.kind})});
+    if(res.ok){ if(draftOf(jid) === text) delete unsaved[jid]; markMutation(); if(el) el.textContent = t('saved'); }
+    else { unsaved[jid] = true; if(el) el.textContent = t('notSaved'); }
+  }
+  catch(e){ unsaved[jid] = true; if(el) el.textContent = t('offlineDraft'); }
+}
+// World or stage changed on the board: POST /api/field {jid, field, value}; on success update the row and toast, on failure put the select back
+async function saveField(sel){
+  const jid = sel.dataset.jid, field = sel.dataset.field, value = sel.value;
+  const r = rowOf(jid); if(!r || !value) return;
+  const prev = r[field] || '';
+  try{
+    const res = await fetch('/api/field', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({jid, field, value})});
+    if(res.ok){
+      r[field] = value;
+      if(field === 'stage') r.stage_auto = false;
+      if(field === 'world'){ const w = UI.world[value]; if(w && !w.business) r.stage = null; }   // the daemon clears it too; the chip stays gone
+      markMutation(); toast(t('changed')); midSig = ''; render(); load();
+    } else { toast(t('notChanged')); sel.value = prev; }
+  }catch(e){ toast(t('daemonMissed')); sel.value = prev; }
+}
+async function load(){
+  const seq = ++loadSeq;
+  try{
+    const r = await fetch('/api/board', {cache: 'no-store'}); const j = await r.json(); fetchWorks = true;
+    if(seq <= staleBefore || seq < shownSeq || !j || !Array.isArray(j.rows)) return;
+    shownSeq = seq;
+    if(data){ for(const nr of j.rows.concat(j.others || [])){ if(editing === nr.jid || unsaved[nr.jid]) nr.draft = draftOf(nr.jid); } }
+    data = j;
+    if(setupUi(j)){ applyStatic(); midSig = ''; threadSig = ''; listSig = ''; chipsSig = ''; if(UI.features.digest) loadDigest(); }
+    render();
+  }
+  catch(e){ fetchWorks = false; if(!data){ $('#meta').textContent = t('offline'); $('#meta').className = 'meta bad'; } }
+}
+function copyText(text){
+  if(navigator.clipboard && window.isSecureContext){ return navigator.clipboard.writeText(text); }
+  return new Promise((ok, no) => { const ta = document.createElement('textarea'); ta.value = text; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.top = '-1000px'; document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, text.length); const done = document.execCommand('copy'); document.body.removeChild(ta); done ? ok() : no(new Error('execCommand')); });
+}
+document.addEventListener('input', ev => {
+  const ta = ev.target.closest && ev.target.closest('textarea.draft'); if(!ta) return;
+  autosize(ta);
+  const jid = ta.dataset.jid; const r = rowOf(jid);
+  unsaved[jid] = true;
+  const a = document.querySelector(`a[data-link="${CSS.escape(jid)}"]`); if(a && r) a.href = linkFor(r, ta.value);
+  const el = document.querySelector(`[data-saved="${CSS.escape(jid)}"]`); if(el) el.textContent = t('editing');
+  clearTimeout(saveTimers[jid]); saveTimers[jid] = setTimeout(() => saveDraft(jid), 800);
+});
+document.addEventListener('change', ev => { const sel = ev.target.closest && ev.target.closest('select.picker'); if(sel) saveField(sel); });
+document.addEventListener('focusin', ev => { const ta = ev.target.closest && ev.target.closest('textarea.draft'); if(ta){ editing = ta.dataset.jid; autosize(ta); } });
+document.addEventListener('focusout', ev => { const ta = ev.target.closest && ev.target.closest('textarea.draft'); if(ta){ editing = null; clearTimeout(saveTimers[ta.dataset.jid]); saveDraft(ta.dataset.jid); } });
+// A loaded image makes its bubble taller: a chat that was at the bottom follows it down so the newest message stays in view
+document.addEventListener('load', ev => { const im = ev.target; if(!(im && im.classList && im.classList.contains('pic'))) return; const el = im.closest('.thread'); if(el && el.scrollHeight - el.scrollTop - el.clientHeight < 600) el.scrollTop = el.scrollHeight; }, true);
+document.addEventListener('toggle', ev => { const d = ev.target.closest && ev.target.closest('details.fold'); if(d){ foldOpen = d.open; } const g = ev.target.closest && ev.target.closest('details.digest'); if(g){ digestOpen = g.open; } }, true);
+
+async function dismissJid(jid){
+  const el = document.querySelector('.row[data-open="' + CSS.escape(jid) + '"]');
+  if(el){ el.classList.add('gone'); }
+  if(!fetchWorks){ location.href = '/dismiss?jid=' + encodeURIComponent(jid); return; }
+  try{ const res = await fetch('/api/dismiss', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({jid})}); if(res.ok){ toast(t('markedDone')); const r = rowOf(jid); if(r){ r.tag = 'done'; r.needs_me = false; } markMutation(); render(); load(); } else { if(el) el.classList.remove('gone'); toast(t('daemonMissed')); } }
+  catch(e){ location.href = '/dismiss?jid=' + encodeURIComponent(jid); }
+}
+async function runJudge(jid, full, confirmed){
+  if(isRunning(jid)){ toast(t('alreadyJudging')); return; }
+  const body = {jid}; if(full) body.full = true; if(confirmed) body.confirm = true;
+  try{
+    const res = await fetch('/api/run', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    let j = null; try{ j = await res.json(); }catch(e){}
+    if(j && j.ok){ toast(j.already ? t('alreadyJudging') : (full ? t('fullStarted') : t('judgeStarted'))); markMutation(); midSig = ''; load(); return; }
+    // The gate said no: judge only after the owner confirms on the board
+    if(j && j.needs_confirm && !confirmed){ if(window.confirm(t('gateConfirm', j.gate || j.reason || ''))) await runJudge(jid, full, true); return; }
+    toast((j && j.error) || t('daemonMissed'), 2400);
+  }catch(e){ toast(t('daemonMissed')); }
+}
+async function queueNote(jid){
+  try{
+    const res = await fetch('/api/dossier', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({jid})});
+    let j = null; try{ j = await res.json(); }catch(e){}
+    if(!j){ toast(t('daemonMissed')); return; }
+    if(j.ok === false){ toast(j.error || t('daemonMissed'), 2400); return; }
+    toast(j.queued ? t('noteQueued') : t('noteAlready'), 2000); markMutation(); midSig = ''; load();
+  }catch(e){ toast(t('daemonMissed')); }
+}
+// Keyboard: with a judged open row selected, a plain D marks it done (not with Cmd, Ctrl or Alt, not inside a field)
+document.addEventListener('keydown', ev => {
+  if(ev.key !== 'd' && ev.key !== 'D') return;
+  if(ev.metaKey || ev.ctrlKey || ev.altKey || ev.repeat) return;
+  const tg = ev.target; if(tg && (tg.tagName === 'INPUT' || tg.tagName === 'TEXTAREA' || tg.tagName === 'SELECT' || tg.isContentEditable)) return;
+  if(!selected) return; const r = rowOf(selected); if(!isJudged(r) || !isOpen(r)) return;
+  ev.preventDefault(); dismissJid(selected);
+});
+// Phone: swipe a list row left past 72px marks it done; a light tap opens it.
+// Opening used to rely on the browser's synthesized click, which iPhone drops when the finger wobbles, the list was scrolling or the row was redrawn.
+// Now touchend decides: moved under 10px, held under 600ms and the list was not scrolling means a tap; the late click is swallowed.
+// A swipe needs 12px of sideways travel, clearly more than vertical, so a wobbling tap never drags the row.
+(function(){
+  let sx = 0, sy = 0, st = 0, el = null, dx = 0, horiz = false, moved = false, wasScrolling = false;
+  const list = document.getElementById('list'); if(!list) return;
+  list.addEventListener('scroll', () => { lastListScroll = Date.now(); }, {passive: true});
+  list.addEventListener('touchstart', e => {
+    touchDown = true;
+    el = e.target.closest('.row[data-open]'); if(!el) return;
+    sx = e.touches[0].clientX; sy = e.touches[0].clientY; st = Date.now(); dx = 0; horiz = false; moved = false;
+    wasScrolling = Date.now() - lastListScroll < 120;
+    el.classList.add('press');
+  }, {passive: true});
+  list.addEventListener('touchmove', e => {
+    if(!el) return;
+    const mx = e.touches[0].clientX - sx, my = e.touches[0].clientY - sy;
+    if(Math.abs(mx) > 10 || Math.abs(my) > 10){ moved = true; el.classList.remove('press'); }
+    if(!horiz && Math.abs(mx) > 12 && Math.abs(mx) > Math.abs(my) * 1.5 && !el.classList.contains('other')){ horiz = true; el.classList.add('swiping'); }
+    if(!horiz) return;
+    dx = mx; el.style.transform = 'translateX(' + Math.max(Math.min(dx, 0), -120) + 'px)';
+  }, {passive: true});
+  const end = e => {
+    touchDown = false; lastTouchEnd = Date.now();
+    if(!el) return;
+    const target = el; el = null;
+    target.classList.remove('swiping', 'press'); target.style.transform = '';
+    if(horiz){ if(dx < -72){ const r = rowOf(target.dataset.open); if(isJudged(r) && isOpen(r)) dismissJid(target.dataset.open); } return; }
+    if(e.type !== 'touchend' || moved || wasScrolling || Date.now() - st > 600) return;
+    if(e.target.closest && e.target.closest('[data-done]')) return;   // the check button still goes through click
+    if(e.cancelable) e.preventDefault();   // the list hides after opening; without this the late click lands on a middle pane button
+    tapOpened = {jid: target.dataset.open, at: Date.now()};
+    select(target.dataset.open);
+  };
+  list.addEventListener('touchend', end, {passive: false});
+  list.addEventListener('touchcancel', end, {passive: true});
+})();
+
+// For 700ms after a tap opened a chat, swallow every click (the synthesized one or a second tap must not hit a middle pane button)
+document.addEventListener('click', ev => { if(tapOpened && Date.now() - tapOpened.at < 700){ ev.preventDefault(); ev.stopPropagation(); } }, true);
+document.addEventListener('click', async ev => {
+  const chip = ev.target.closest('.chip'); if(chip){ filter = chip.dataset.f; renderList(); return; }
+  if(ev.target.closest('[data-done]')){ await dismissJid(ev.target.closest('[data-done]').dataset.done); return; }
+  const cg = ev.target.closest('[data-cal-go]'); if(cg){ ev.preventDefault(); if(!cg.disabled) await submitCal(cg.dataset.calGo, cg); return; }
+  const cc = ev.target.closest('[data-cal-cancel]'); if(cc){ ev.preventDefault(); closeCal(); return; }
+  const co = ev.target.closest('[data-cal]'); if(co){ ev.preventDefault(); openCal(co.dataset.cal); return; }
+  const row = ev.target.closest('[data-open]'); if(row){ select(row.dataset.open); return; }
+  if(ev.target.closest('#back')){ $('#app').classList.remove('show-detail'); selected = null; calOpen = null; midSig = 'x'; render(); $('#list').scrollTop = railScroll; return; }
+  const a = ev.target.closest('a[data-link]'); if(a){ const r = rowOf(a.dataset.link); if(r){ a.href = linkFor(r, draftOf(r.jid)); clearTimeout(saveTimers[r.jid]); saveDraft(r.jid); } return; }
+  const cp = ev.target.closest('[data-copy]'); if(cp){ try{ await copyText(draftOf(cp.dataset.copy)); toast(t('draftCopied')); }catch(e){ toast(t('copyFailedDraft'), 2000); } return; }
+  const ub = ev.target.closest('[data-use-brain]'); if(ub){
+    ev.preventDefault(); const jid = ub.dataset.useBrain; const r = rowOf(jid);
+    const ta = document.querySelector(`textarea.draft[data-jid="${CSS.escape(jid)}"]`);
+    if(r && ta){ ta.value = r.draft_brain || ''; autosize(ta); const wa = document.querySelector(`a[data-link="${CSS.escape(jid)}"]`); if(wa) wa.href = linkFor(r, ta.value); unsaved[jid] = true; await saveDraft(jid); midSig = ''; renderMid(); }
+    return;
+  }
+  const ds = ev.target.closest('[data-dossier]'); if(ds){ ev.preventDefault(); await queueNote(ds.dataset.dossier); return; }
+  const pk = ev.target.closest('[data-packet]'); if(pk){ ev.preventDefault(); try{ const res = await fetch('/api/packet?jid=' + encodeURIComponent(pk.dataset.packet), {cache: 'no-store'}); if(!res.ok) throw new Error(String(res.status)); const text = await res.text(); await copyText(text); toast(t('packetCopied'), 2000); }catch(e){ toast(t('copyFailed')); } return; }
+  const rf = ev.target.closest('[data-run-full]'); if(rf){ ev.preventDefault(); await runJudge(rf.dataset.runFull, true); return; }
+  const rn = ev.target.closest('[data-run]'); if(rn){ ev.preventDefault(); await runJudge(rn.dataset.run, false); return; }
+});
+
+// ===== Boot: the daemon inlines the first payload at the BOOT marker, so a phone with fetch blocked still sees the board =====
+const bootEl = document.getElementById('boot');
+if(bootEl){ try{ data = JSON.parse(bootEl.textContent); }catch(e){ data = null; } }
+if(data && !Array.isArray(data.rows)) data = null;
+setupUi(data);
+applyStatic();
+if(data){ if(window.innerWidth > 860 && data.rows.length && !selected){ selected = data.rows[0].jid; loadThread(selected); } render(); }
+load();
+if(UI.features.digest) loadDigest();
+// Every 30 seconds: refresh (redraws only what changed). With fetch blocked, reload the page instead, but never while a draft
+// is being edited, a draft has not reached the daemon, or the calendar form is open.
+setInterval(() => {
+  if(fetchWorks){ load(); if(selected && !editing) loadThread(selected); }
+  else if(!editing && !calOpen && !Object.keys(unsaved).length) location.reload();
+}, 30000);
+setInterval(() => { if(fetchWorks && UI.features.digest) loadDigest(); }, 300000);   // the digest cell checks every five minutes
+document.addEventListener('visibilitychange', () => { if(!document.hidden){ load(); if(selected) loadThread(selected); if(UI.features.digest) loadDigest(); } });
+window.addEventListener('resize', () => { midSig = ''; threadSig = ''; if(window.innerWidth > 860 && data && data.rows.length && !selected && !editing){ selected = data.rows[0].jid; loadThread(selected); } if(!editing) render(); });
+</script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+{
+  "_seed": "seed: breakthrough-whatsapp-live daemon/templates/topic-map.example.json v1.0.0",
+  "_note": "Topic map: when a burst or the latest situation contains any word from keys (case insensitive), the files listed next to it are offered to the brain as candidate reading, and the brain decides whether to open them (two at most per run). Paths are relative to the vault root. Point it only at notes that answer questions people actually ask: project briefs, SOPs, decisions, price and link registries. The daemon reads this file on every run, so edits need no restart. The rules below are an invented example for a small baking school; replace them with your own.",
+  "rules": [
+    {"keys": ["weekend class", "weekend course", "周末班", "两天课"],
+     "files": ["Work/Weekend-Class/_Weekend-Class-Brief.md", "SOP/Class-Enrolment-SOP.md"]},
+    {"keys": ["price", "fee", "how much", "discount", "coupon", "refund", "价钱", "多少钱", "折扣", "退款"],
+     "files": ["Assets/Price-and-Links-Registry.md", "Decisions/2026-01-15-refund-window-is-seven-days.md"]},
+    {"keys": ["register", "sign up", "payment link", "报名", "付款", "链接"],
+     "files": ["Assets/Price-and-Links-Registry.md", "SOP/Class-Enrolment-SOP.md"]},
+    {"keys": ["corporate", "team building", "company event", "公司活动"],
+     "files": ["Work/Corporate-Workshops/_Corporate-Workshops-Brief.md"]},
+    {"keys": ["venue", "parking", "address", "地址", "停车"],
+     "files": ["Assets/Venue-Guide.md"]}
+  ]
+}
