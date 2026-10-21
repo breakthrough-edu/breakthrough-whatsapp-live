@@ -11,7 +11,7 @@ missing adapter only stops that one block:
 
 `load(module_name)` imports one of them. The value cleaners below are shared by every adapter that reads rows from
 somebody else's system (a CSV export, a Lark Base, a spreadsheet): records come back in many shapes (empty strings,
-the string "null", millisecond timestamps, "1,988.00", link arrays), and each cleaner turns one of those into a single
+the string "null", millisecond timestamps, "1,250.00", link arrays), and each cleaner turns one of those into a single
 predictable shape. Python 3.9 standard library only.
 """
 
@@ -223,7 +223,7 @@ def clean_date(v, day_first=True):
 
 
 def clean_amount(v):
-    """An amount to int (when whole) or float, or None. "RM 1,988.00" is 1988, "1.988,50" is 1988.5, "(20)" is -20."""
+    """An amount to int (when whole) or float, or None. "RM 1,250.00" is 1250, "1.250,50" is 1250.5, "(20)" is -20."""
     v = clean_null(v)
     if v is None or isinstance(v, bool):
         return None
@@ -285,7 +285,7 @@ def _selftest():
           and clean_tri([{"id": "x"}]) is True, "clean_tri three states")
     check(clean_date("31/07/2026") == "2026-07-31" and clean_date("03/04/2026") == "2026-04-03" and clean_date("03/04/2026", day_first=False) == "2026-03-04"
           and clean_date("Jul 31, 2026") == "2026-07-31" and clean_date("2026-02-30") is None and clean_date("soon") is None, "clean_date")
-    check(clean_amount("RM 1,988.00") == 1988 and clean_amount("1.988,50") == 1988.5 and clean_amount("(20)") == -20
+    check(clean_amount("RM 1,250.00") == 1250 and clean_amount("1.250,50") == 1250.5 and clean_amount("(20)") == -20
           and clean_amount("12,5") == 12.5 and clean_amount(True) is None and clean_int("4 seats") == 4, "clean_amount and clean_int")
     print("adapters selftest %s (%d failed)" % ("PASS" if not fails else "FAIL", len(fails)))
     return 1 if fails else 0

@@ -514,7 +514,7 @@ def selftest():
             td = Path(td)
             vault = td / "vault"
             note(vault, "People/Aiko-Tan.md", "---\ntype: person\nroles: [lead]\nwa_jid: 15550100001@s.whatsapp.net\n---\n\n# Aiko Tan\n\nAsked about the Saturday class.\n")
-            note(vault, "People/Ben Lim.md", "---\ntype: person\nwa_phone: \"+1 555 0100 002\"\n---\n\n# Ben Lim\n")
+            note(vault, "People/Quinn Hale.md", "---\ntype: person\nwa_phone: \"+1 555 0100 002\"\n---\n\n# Quinn Hale\n")
             note(vault, "People/Cara-Chen.md", "---\ntype: person\naliases:\n  - Cara C\n---\n\n# Cara Chen\n")
             note(vault, "Work/Projects/Weekend-Hikers-Trip.md", "# Weekend Hikers trip\n\nRoute planning.\n")
             note(vault, "01_Daily/2026-03-09.md", "# 2026-03-09\n\nMet Aiko Tan at the cafe.\n")
@@ -526,7 +526,7 @@ def selftest():
             sweep = {"schema": "wa-sweep/1", "chats": [
                 {"jid": "15550100001@s.whatsapp.net", "kind": "direct", "name": "Aiko Tan (WA 显示 Aiko)", "phone": "15550100001", "participants": []},
                 {"jid": "15550100000-1700000000@g.us", "kind": "group", "name": "Weekend Hikers", "phone": None, "participants": [
-                    {"name": "Ben Lim", "source": "通讯录", "phone": "15550100002", "jid": "222@lid", "n": 1},
+                    {"name": "Quinn Hale", "source": "通讯录", "phone": "15550100002", "jid": "222@lid", "n": 1},
                     {"name": "Cara C", "source": "自称", "phone": "15550100003", "jid": "15550100003@s.whatsapp.net", "n": 1},
                     {"name": "Mika", "source": "群内名", "phone": None, "jid": "444@lid", "n": 1}]},
                 {"jid": "999@lid", "kind": "direct", "name": "Nobody Known", "phone": None, "participants": []},
@@ -551,7 +551,7 @@ def selftest():
                   and doc["indexed"] == 9, doc["indexed"])
             g = by.get("15550100000-1700000000@g.us", {}).get("hits", [])
             paths = [h["path"] for h in g]
-            check("wa_phone matches a speaker's phone", any(h["path"] == "People/Ben Lim.md" and h["score"] >= 100 for h in g), g)
+            check("wa_phone matches a speaker's phone", any(h["path"] == "People/Quinn Hale.md" and h["score"] >= 100 for h in g), g)
             check("aliases match a speaker name", any(h["path"] == "People/Cara-Chen.md" and "aliases" in "; ".join(h["why"]) for h in g), g)
             check("group name matches a project note", "Work/Projects/Weekend-Hikers-Trip.md" in paths, paths)
             check("the owner's own name is never a key", "Notes/Mika-diary.md" not in paths, paths)

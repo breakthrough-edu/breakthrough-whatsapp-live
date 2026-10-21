@@ -238,6 +238,9 @@
   .actions{display:flex;gap:var(--s2);margin-top:var(--s2);align-items:center}
   .btn{appearance:none;border:0;background:rgba(255,255,255,.7);box-shadow:var(--ring);color:var(--ink);border-radius:var(--r1);padding:0 var(--s4);height:44px;font:inherit;font-size:var(--f3);font-weight:600;text-decoration:none;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex:0 1 auto;min-width:220px;transition:transform .2s var(--ease),background .2s var(--ease)}
   .btn.wa{background:var(--wa);color:var(--wa-ink);font-weight:700;white-space:nowrap;box-shadow:inset 0 1px 0 rgba(255,255,255,.4),0 8px 20px -12px rgba(37,211,102,.8)}
+  /* The label table's spaces ("Open in " + WhatsApp, "在 " + WhatsApp + " 打开") sit at the edge of a flex item, where
+     normal white space is trimmed; pre keeps them */
+  .btn.wa .full{white-space:pre}
   /* On a narrow screen the green button says only "WhatsApp", it folded into three lines otherwise */
   @media (max-width:860px){ .btn.wa .full{display:none} }
   .btn.wa:hover{background:var(--wa-dark)}

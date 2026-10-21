@@ -241,8 +241,8 @@ def selftest():
                                          "date": "Paid On", "product": "Plan", "attended": "Showed Up", "record_id": "Row ID",
                                          "colour": "Favourite"}}}}
     text = ("\ufeffRow ID,Full Name,WhatsApp,Status,Amount,Paid On,Plan,Showed Up\n"
-            "r1,Alex Rivera,+60 12-000 0001,paid,\"RM 1,988.00\",31/07/2026,Workshop,yes\n"
-            "r2,Blake Chen,012-000 0002,succeeded,2788,2026-09-01T10:00:00+08:00,Coaching,\n"
+            "r1,Alex Rivera,+60 12-000 0001,paid,\"RM 1,250.00\",31/07/2026,Workshop,yes\n"
+            "r2,Blake Chen,012-000 0002,succeeded,1460,2026-09-01T10:00:00+08:00,Coaching,\n"
             "r3,Casey Ng,,unpaid,0,03/04/2026,Workshop,no\n"
             ",,,,,,,\n"
             "r4,Dana Park,+65 9000 0001,maybe,100,Jul 31 2026,Workshop,\n")
@@ -257,7 +257,7 @@ def selftest():
     p1, pay1 = got["people"][0], got["payments"][0]
     check(p1["phone"] == "+60 12-000 0001" and p1["date"] == "2026-07-31" and p1["attended"] is True and p1["show"] is True,
           "row 1: raw phone kept, D/M/YYYY date, attended, shown because attendance is known")
-    check(pay1["amount"] == 1988 and pay1["currency"] == "MYR" and pay1["person_record"] == "r1", "payment amount cleaned, currency default, linked to its row")
+    check(pay1["amount"] == 1250 and pay1["currency"] == "MYR" and pay1["person_record"] == "r1", "payment amount cleaned, currency default, linked to its row")
     check(got["people"][1]["show"] is False and got["payments"][1]["date"] == "2026-09-01", "paid row without attendance is identity only")
     check(got["people"][2]["attended"] is False and got["people"][2]["date"] == "2026-04-03", "unpaid row kept as a person, day_first date")
     check(got["people"][3]["date"] == "2026-07-31" and any("maybe" in w for w in got["warnings"])

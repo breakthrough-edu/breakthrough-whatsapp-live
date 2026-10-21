@@ -52,6 +52,13 @@ Every key the kit's code reads from `live/config.json`, grouped by section, plus
 | `debounce.max_wait_seconds` | `180` | number | A burst starts at the latest this long after its first message, even while messages keep coming. | C2 | restart |
 | `debounce.global_concurrency` | `2` | integer | Brain runs allowed at the same time (one per conversation always). | C2 | restart |
 
+## `edit_watch`
+
+| Key | Default | Type | What it changes | Station | Restart |
+|---|---|---|---|---|---|
+| `edit_watch.enabled` | `true` | boolean | A message that passed the gate is read again while its window lasts; when the person edited it, a burst still waiting gets the new text, and a burst already judged is queued again with the old and the new version (default 15). The words wait in the `edit_watch` table of `state.sqlite` (`references/privacy.md`). | C2 | restart |
+| `edit_watch.minutes` | `30` | integer, 1 to 1440 | How long a message stays on the watch list after it passed the gate. WhatsApp allows edits for about a quarter hour after sending, and a run may still be in flight then. | C2 | restart |
+
 ## `doorbell`
 
 | Key | Default | Type | What it changes | Station | Restart |
@@ -311,6 +318,7 @@ The evening job loads the config fresh every evening (`wa_intake.py --evening-st
 | `intake.buffer` | `""` | path | The buffer note; same file as `paths.intake_buffer`, and this key wins when both are set. Its folder must exist. | O7 | restart |
 | `intake.evening_push` | `false` | boolean | Push the open entries every evening with a suggested place each. `install-launchd --intake` refuses unless this and `intake.enabled` are true. | O7 | no |
 | `intake.evening_at` | `"20:00"` | `HH:MM` | Time of the evening job, written into its plist. | O7 | reinstall |
+| `intake.verify_quotes` | `true` | boolean | Every WhatsApp quote in an intake entry is looked up in the run's own pack before it is written: found is marked 🗣 (🎙, 📄) with the message's stored words, not found ≈ as a gist. `false` writes every quote as ≈ not checked (`references/vault-proposals.md`, proposal c). | O7 | restart |
 | `intake.rules_file` | `""` | path | Optional note saying where each kind of entry usually goes; the pre-sort reads its first 6000 characters. Empty: built in places. | O7 | no |
 
 ## `voice`

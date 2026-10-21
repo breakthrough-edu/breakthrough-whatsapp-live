@@ -46,8 +46,8 @@ This changelog is payload metadata. It is never copied into a vault.
   once when it opens and once when it closes; the fix is logging in once on the always-on
   Mac (or renewing the setup token) or waiting for the limit to reset. Nothing else in the
   method changed.
-- Example stories elsewhere in the playbook ("When to run it", weighs 6, 7, 8, 9 and 10, and
-  the closing list) were rewritten as generic reasons. Nothing in the method changed.
+- The reasons in "When to run it", weighs 6, 7, 8, 9 and 10, and the closing list are written
+  as generic mechanisms. Nothing in the method changed.
 
 ### 1.0.1 · 2026-10-21
 
@@ -134,9 +134,14 @@ This changelog is payload metadata. It is never copied into a vault.
 
 ## playbooks/resident-workers/resident-workers-playbook.md
 
+### 1.0.3 · 2026-10-21
+
+- What to weigh, the bullet on probing a guard: the note on zsh `echo` and JSON is stated as a
+  general rule (send JSON with `printf '%s'`). Nothing in the method changed.
+
 ### 1.0.2 · 2026-10-21
 
-- Example stories were rewritten as generic reasons. Nothing in the method changed.
+- The reasons are written as generic mechanisms. Nothing in the method changed.
 
 ### 1.0.1 · 2026-10-21
 
@@ -146,8 +151,8 @@ This changelog is payload metadata. It is never copied into a vault.
   one, then prove one process holds the port. WhatsApp Live does this with
   `wa_setup.py restart`.
 - Restart steps elsewhere say "restart" instead of naming `kickstart`.
-- Reasons are written as generic failure patterns (what happens, why, how to guard), with
-  no single incident told step by step; the checks and fixes are unchanged.
+- Reasons are written as generic failure patterns (what happens, why, how to guard); the
+  checks and fixes are unchanged.
 
 ### 1.0.0 · 2026-09-14
 
@@ -175,7 +180,7 @@ This changelog is payload metadata. It is never copied into a vault.
 
 ### 1.0.2 · 2026-10-21
 
-- Example stories were rewritten as generic reasons. Nothing in the method changed.
+- The reasons are written as generic mechanisms. Nothing in the method changed.
 
 ### 1.0.1 · 2026-10-21
 

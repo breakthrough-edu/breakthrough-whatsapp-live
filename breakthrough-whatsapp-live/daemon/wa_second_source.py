@@ -20,13 +20,16 @@ Rules (one rule, one function):
 - world_for_chat: second_source.world_by_chat > the whitelist entry's world > second_source.world_keywords in the
   title > other. Only a machine guess on the intake entry; the owner files it.
 - No message from anyone but the owner that day: no prompt, no model call.
-- clean_result: people must be senders who really spoke that day (never the owner); capture quotes must be a substring
-  of a message in that chat (spaces and punctuation ignored); kind, text and quote legality is wa_intake.validate_captures.
+- clean_result: people must be senders who really spoke that day (never the owner); a capture quote must be found in
+  that chat's messages by wa_intake.resolve_quote (the same rule the WhatsApp intake uses: exact, excerpt, stitched or
+  near; a paraphrase is dropped) and the capture keeps the stored text it resolved to; kind, text and quote legality is
+  wa_intake.validate_captures.
 - source_id_index: a person note is found by its source id key (second_source.id_key, default the implementation's
   ID_KEY) only when exactly one note carries that id; an id on two notes is reported in the summary errors and the
   log, and neither note is written. A missing people dir is an error, not an empty index.
 - apply_result: the news line goes through the daemon's append_recent (it owns the recent block); captures go through
-  wa_intake.append_captures two at a time with source=<source>; intake.enabled=false appends nothing.
+  wa_intake.append_captures two at a time with source=<source> and messages= that chat's messages (so the entries carry
+  the same quote marks); intake.enabled=false appends nothing.
 - write_last: <live>/second-source-last.json for the morning digest health line.
 - The prompt is the owner copy <live>/prompts/second-source-prompt.md, else the payload seed with a WARNING.
 
@@ -45,6 +48,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import wa_common as W  # noqa: E402
 import wa_backfill as WBF  # noqa: E402  (prompt_template, state_db_path, owner_label: one function per rule)
+
+VERSION = "1.2.0"
 
 SOURCES = {"lark": "adapters.second_source_lark"}
 NONE = "none"
@@ -433,16 +438,35 @@ def person_line_text(line):
     return s[:LINE_MAX]
 
 
-def _norm_for_match(s):
-    return re.sub(r"[\s\W_]+", "", str(s or "").lower(), flags=re.U)
+def chat_messages(chat):
+    """The adapter's messages of one chat ({at, sender_id, sender_name, is_owner, text}) in wa_intake.resolve_quote's
+    shape: me = is_owner, speaker = sender_id, the time as the adapter gives it."""
+    out = []
+    for i, m in enumerate((chat or {}).get("messages") or []):
+        if not isinstance(m, dict):
+            continue
+        out.append({"pk": m.get("pk") or m.get("message_id") or m.get("id") or "m%d" % i,
+                    "at": str(m.get("at") or m.get("time") or m.get("create_time") or ""),
+                    "me": bool(m.get("is_owner")), "speaker": str(m.get("sender_id") or ""),
+                    "text": str(m.get("text") or ""), "caption": "", "transcript": "", "doc_text": ""})
+    return out
+
+
+def _resolve(quote, chat):
+    """wa_intake.resolve_quote against this chat, or None when wa_intake cannot be imported (never accepted unchecked)."""
+    try:
+        import wa_intake as WI
+        fn = WI.resolve_quote
+    except Exception:
+        return None
+    return fn(quote, chat_messages(chat))
 
 
 def quote_in_chat(quote, chat):
-    """Anti fabrication: the quote without spaces and punctuation must be a substring of one message of that chat."""
-    q = _norm_for_match(quote)
-    if not q:
-        return False
-    return any(q in _norm_for_match(m.get("text")) for m in chat.get("messages") or [])
+    """Anti fabrication, one rule with the WhatsApp intake: wa_intake.resolve_quote finds the quote in that chat's
+    messages (exact, excerpt, stitched or near). False when it does not, or when wa_intake cannot be imported."""
+    r = _resolve(quote, chat)
+    return r is not None and r["how"] != "none"
 
 
 def _as_list(x, key_name):
@@ -522,10 +546,12 @@ def clean_result(result, fetched, cfg=None):
         if not ok:
             dropped.append("captures: kind / text / quote not legal (%s)" % str(cap.get("kind"))[:20])
             continue
-        if not quote_in_chat(ok[0]["quote"], chats[cid]):
+        r = _resolve(ok[0]["quote"], chats[cid])
+        if r is None or r["how"] == "none":
             dropped.append("captures: quote not in the messages of %s (%s)" % (chats[cid]["title"], ok[0]["quote"][:30]))
             continue
         c2 = dict(ok[0])
+        c2["quote"] = r["text"] or c2["quote"]      # the stored words, never the model's
         sid = _sid(cap)
         c2["chat_id"] = cid
         c2["sender_id"] = sid if (sid in speakers or sid in owner) else None
@@ -678,6 +704,7 @@ def apply_result(cfg, fetched, result, append_recent, append_captures, today=Non
         else:
             state_db = str(WBF.state_db_path(cfg))
             extra = {"cfg": cfg} if _accepts_kw(append_captures, "cfg") else {}
+            with_msgs = _accepts_kw(append_captures, "messages")
             groups, order = {}, []
             for cap in res["captures"]:
                 note = idx["by_id"].get(cap.get("sender_id") or "")
@@ -689,18 +716,19 @@ def apply_result(cfg, fetched, result, append_recent, append_captures, today=Non
             for k in order:
                 chat = chats[k[0]]
                 caps = groups[k]
+                kw = dict(extra, messages=chat_messages(chat)) if with_msgs else extra
                 for i in range(0, len(caps), CAPTURES_PER_CALL):
                     chunk = [{kk: vv for kk, vv in c.items() if kk not in ("chat_id", "sender_id")} for c in caps[i:i + CAPTURES_PER_CALL]]
                     try:
                         n_caps += int(append_captures(state_db, buffer, chat["chat_id"], chat["title"], chat.get("world_guess") or world_for_chat(chat, cfg),
-                                                      chunk, source=label, people_note=(Path(k[1]) if k[1] else None), today=today, **extra) or 0)
+                                                      chunk, source=label, people_note=(Path(k[1]) if k[1] else None), today=today, **kw) or 0)
                     except Exception as e:
                         errors.append("append_captures %s: %s" % (chat["title"], str(e)[:120]))
     return {"recent": recent, "captures": n_caps, "captures_skipped": skipped, "no_id": no_id, "dropped": res["dropped"], "errors": errors}
 
 
 def _accepts_kw(fn, name):
-    """Does a callable take this keyword (wa_intake.append_captures takes cfg; a caller's fake may not)."""
+    """Does a callable take this keyword (wa_intake.append_captures takes cfg and messages; a caller's fake may not)."""
     try:
         import inspect
         params = inspect.signature(fn).parameters.values()
@@ -1035,6 +1063,38 @@ def _selftest():
             check(True, "parse_result: no JSON raises ValueError")
         nine = {"people": [], "captures": [{"chat_id": "oc_test_team", "kind": "decision", "text": "t%d" % i, "quote": "Can"} for i in range(9)]}
         check(len(clean_result(nine, f, cfg)["captures"]) == MAX_CAPTURES, "clean_result: at most 6 captures")
+        # 5b · one quote rule with the WhatsApp intake (wa_intake.resolve_quote), invented chat and words
+        check(VERSION == "1.2.0", "VERSION is 1.2.0")
+        rq = {"chat_id": "oc_test_rq", "title": "Rq", "messages": [
+            {"at": "2026-09-13 09:00", "sender_id": M, "sender_name": "Maya Test", "is_owner": False, "text": "the venue deposit"},
+            {"at": "2026-09-13 09:01", "sender_id": M, "sender_name": "Maya Test", "is_owner": False, "text": "is due on the fifth"},
+            {"at": "2026-09-13 09:05", "sender_id": O, "sender_name": "Owner Test", "is_owner": True, "text": "Please send the floor plan before lunch tomorrow"}]}
+        cm = chat_messages(rq)
+        check([(x["me"], x["speaker"], x["at"]) for x in cm] == [(False, M, "2026-09-13 09:00"), (False, M, "2026-09-13 09:01"), (True, O, "2026-09-13 09:05")]
+              and all(x["pk"] for x in cm), "chat_messages: is_owner becomes me, sender_id becomes speaker, the adapter's time kept")
+        trio = [("stitched", "the venue deposit is due on the fifth"), ("near", "please send the flor plan before lunch tomorow"),
+                ("paraphrase", "Maya says the hall money is needed soon")]
+        same = [(quote_in_chat(q, rq), WI.resolve_quote(q, cm)["how"] != "none" if WI else None) for _n, q in trio]
+        check(same == [(True, True), (True, True), (False, False)],
+              "second source uses resolve_quote: a stitched or near quote is accepted the same way in both paths, a paraphrase rejected; got %s" % same)
+        fq = dict(f, chats=f["chats"] + [rq])
+        cq = clean_result({"captures": [{"chat_id": "oc_test_rq", "kind": "money", "text": "deposit due", "quote": trio[0][1]},
+                                        {"chat_id": "oc_test_rq", "kind": "decision", "text": "plan", "quote": trio[1][1]},
+                                        {"chat_id": "oc_test_rq", "kind": "money", "text": "gist", "quote": trio[2][1]}]}, fq, cfg)
+        check([c["quote"] for c in cq["captures"]] == ["the venue deposit ⏎ is due on the fifth", "Please send the floor plan before lunch tomorrow"]
+              and len(cq["dropped"]) == 1, "clean_result keeps the resolved stored text as the quote, drops the paraphrase; got %s" % [c["quote"] for c in cq["captures"]])
+        check(pr["captures"][0]["quote"] == "Hi, my friend’s team wants to join too, same price of 800?",
+              "clean_result: the model's straight apostrophe becomes the stored curly one")
+        saved_wi = sys.modules.get("wa_intake")
+        sys.modules["wa_intake"] = None
+        try:
+            no_wi = (quote_in_chat(trio[0][1], rq), clean_result({"captures": [{"chat_id": "oc_test_rq", "kind": "money", "text": "t", "quote": trio[0][1]}]}, fq, cfg))
+        finally:
+            if saved_wi is not None:
+                sys.modules["wa_intake"] = saved_wi
+            else:
+                sys.modules.pop("wa_intake", None)
+        check(no_wi[0] is False and no_wi[1]["captures"] == [] and no_wi[1]["dropped"], "wa_intake not importable: the quote is never accepted unchecked")
         check(person_line_text('in "Project Maple Team": said the venue is booked') == "said the venue is booked"
               and person_line_text("[lark] 在「群」说: 场地订好了") == "场地订好了", "person_line_text: English and Chinese prefixes removed")
 
@@ -1068,6 +1128,9 @@ def _selftest():
               "apply_result: the speaker's note and the chat's world guess go to append_captures")
         buf = Path(intake_buffer(cfg))
         check(buf.exists() and "Alex 问朋友的团队一起报名是不是也收 800" in buf.read_text(encoding="utf-8"), "apply_result: the capture landed in the intake buffer")
+        check("- 🗣 09-13 11:44「Hi, my friend’s team wants to join too, same price of 800?」" in buf.read_text(encoding="utf-8")
+              and "未核对" not in buf.read_text(encoding="utf-8"),
+              "apply_result passes the chat's messages: second source entries carry the 🗣 mark with the stored text")
         ar2 = apply_result(cfg, f, pr, fake_append_recent, WI.append_captures if WI else (lambda *a, **k: 0), today="2026-09-14")
         check(ar2["captures"] == 0, "apply_result again: intake deduplicates, 0 appended")
         n_calls = len(cap_calls)

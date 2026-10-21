@@ -6,7 +6,7 @@ confirmed_by_owner: false
 references: []
 tags: []
 ---
-<!-- seed: breakthrough-whatsapp-live playbooks/resident-workers/resident-workers-playbook.md v1.0.2 -->
+<!-- seed: breakthrough-whatsapp-live playbooks/resident-workers/resident-workers-playbook.md v1.0.3 -->
 
 # Playbook: Resident Workers (常驻物: 你不在场也在跑、会动手的东西)
 
@@ -79,7 +79,7 @@ tags: []
 - ⛔ 别拿「它拒绝了」当闸有效的证据。模型说「我没有那个工具」, 可能只是在复述你给它的 system prompt; 要拿执行环境自己的说法 (CLI 回报的 `system/init` 工具清单)。「档案没被建出来」证明的也只是这一次没事。
 - ⭐ 设完之后印一次实际生效的清单, 跟你以为的比对, 差一支都算没设对。黑名单再配一道每次执行都跑的侦测: 多出来的工具就大声喊 (log 加当场告诉你)。黑名单挡已知的, 侦测抓未来的。
 - ⛔ 闸自己声明的安装方式要读, 不能推。守卫声明的每一个挂点都要装, 逐一验证。
-- ⛔ 验闸要跑它自己声明的探针, 而且照它写的方式跑。同一份 JSON 输入, zsh 的 `echo` 会把字串里的 `\n` 展开成坏掉的 JSON, 守卫读不懂就放行; 换成 `printf` 就回拦住。一个测出来是坏的结果, 先怀疑测法, 再怀疑被测的东西。
+- ⛔ 验闸要跑它自己声明的探针, 而且照它写的方式跑。zsh 的 `echo` 会展开字串里的 `\n`, 喂给守卫的 JSON 可能因此坏掉而被放行; 送 JSON 用 `printf '%s'`。一个测出来是坏的结果, 先怀疑测法, 再怀疑被测的东西。
 - ⭐ 一个只写在某个产物里的教训, 只对那个产物有效。像这样的坑, 写进 playbook 或 Lessons, 让下一次「给某个东西设权限」时不管是第几支、跑在哪个平台, 都先撞到它。
 
 ### 四 · 排程与 launchd 底下的三个坑

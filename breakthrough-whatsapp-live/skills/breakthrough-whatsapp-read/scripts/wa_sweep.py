@@ -1528,7 +1528,7 @@ def _fake_whatsapp(wa, now):
     cts.executescript("CREATE TABLE ZWAADDRESSBOOKCONTACT (Z_PK INTEGER PRIMARY KEY, ZLID TEXT, ZWHATSAPPID TEXT, ZFULLNAME TEXT, ZPHONENUMBER TEXT);")
     cts.executemany("INSERT INTO ZWAADDRESSBOOKCONTACT VALUES (?,?,?,?,?)", [
         (1, None, "15550100001@s.whatsapp.net", "Aiko Tan", "+1 555 0100 001"),
-        (2, None, "15550100002@s.whatsapp.net", "Ben Lim", "+15550100002"),
+        (2, None, "15550100002@s.whatsapp.net", "Quinn Hale", "+15550100002"),
     ])
     cts.commit()
     cts.close()

@@ -6,7 +6,8 @@ It renders files, checks them and reports. It never judges a message and never s
 
   init --home <dir>     create the working tree (folders 0700), write live/config.json from the example with the
                         tools found on this Mac, copy the prompt and topic map seeds into live/, render
-                        live/claude-settings.json, record every copied seed in live/seeds.json.
+                        live/claude-settings.json, write the two deny canaries (secrets/ and transcripts-cache/),
+                        record every copied seed in live/seeds.json.
                         Never overwrites an existing file: it reports it and moves on.
   doctor                read only prerequisite report: macOS, WhatsApp Desktop database present, fresh and readable,
                         node, python, claude, tailscale, ffmpeg, whisperkit and its model, lark-cli when chosen.
@@ -608,6 +609,7 @@ def do_init(home, rep, config_path=None, payload=None, which=None, models_dir="~
             rep.did("render", settings, "deny rules point at %s" % tilde(live))
 
     ensure_canary(home / "secrets" / "deny-canary.txt", rep)
+    ensure_canary(home / "transcripts-cache" / "deny-canary.txt", rep)
     save_seed_records(live, new_seeds, new_rendered, rep)
     rep.line("init: %d created, %d already there, %d warning(s), %d error(s)"
              % (len(rep.done), len(rep.kept), len(rep.warnings), len(rep.errors)))
@@ -775,6 +777,9 @@ def check_config(raw, cfg, payload=None, user_home=None):
     gps = dget(raw, "brain.gate_probe_seconds")
     if isinstance(gps, (int, float)) and not isinstance(gps, bool) and (gps != int(gps) or gps < 60):
         add("error", "brain.gate_probe_seconds", "should be a whole number of seconds, at least 60, is %r" % (gps,))
+    ewm = dget(raw, "edit_watch.minutes")
+    if isinstance(ewm, (int, float)) and not isinstance(ewm, bool) and (ewm != int(ewm) or not 1 <= ewm <= 1440):
+        add("error", "edit_watch.minutes", "should be a whole number of minutes, 1 to 1440, is %r" % (ewm,))
     for key in TIME_KEYS:
         v = dget(eff, key)
         if not (isinstance(v, str) and re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", v)):
@@ -1768,7 +1773,8 @@ def real_claude(cfg, wrapper, which=None):
 
 
 def ensure_canary(canary, rep):
-    """<home>/secrets/deny-canary.txt (0600, a random marker) for the read_canary deny probe. An existing canary is kept
+    """A deny canary (0600, a random marker) for the read_canary deny probe: <home>/secrets/deny-canary.txt and
+    <home>/transcripts-cache/deny-canary.txt, one per denied folder the probe tries. An existing canary is kept
     as it is (never rotated: it is a decoy, not a secret; a denied read leaves it unseen, and a READ_OK means the deny
     rule is broken, which rotating would not fix). False when something else sits in its place."""
     canary = Path(canary)
@@ -1939,7 +1945,7 @@ def do_render_claude_wrapper(cfg, config_path, rep, which=None, payload=None, us
     else:
         rep.line("  1. wa_setup.py restart --config %s   (the daemon reads bin.claude only at start)" % qc)
     rep.line("  2. echo '{}' > %s   (claude answers from launchd with the token)" % sh_dq(live / "commands" / "probe-claude.json"))
-    rep.line("  3. echo '{\"read_canary\": true}' > %s   (deny probe: the answer must be DENIED)"
+    rep.line("  3. echo '{\"read_canary\": true}' > %s   (deny probe: wa_live.log must say 读取被挡下 for secrets and for transcripts-cache)"
              % sh_dq(live / "commands" / "probe-claude.json"))
     rep.line("  To go back to the Keychain login: set bin.claude to %s in the config, then render-launchd and follow its next: line (install-launchd, or restart when the plist did not change)." % previous)
     return rep
@@ -1976,7 +1982,9 @@ def seed_rows(cfg, payload=None):
         copy_v = read_stamp(copy_path)[1]
         row["copy_version"] = copy_v
         current = sha256_file(copy_path)
-        if rec.get("sha256"):
+        if seed_path is not None and seed_path.is_file() and current == sha256_file(seed_path):
+            edited = False   # byte for byte the current payload seed: an owner who took a seed whole has not edited it
+        elif rec.get("sha256"):
             edited = current != rec["sha256"]
         elif seed_v and copy_v == seed_v:
             edited = current != sha256_file(seed_path)
@@ -2884,6 +2892,10 @@ def selftest():
         canary0_text = canary0.read_text(encoding="utf-8") if canary0.is_file() else ""
         check("init writes secrets/deny-canary.txt 0600 with a random marker",
               mode_of(canary0) == 0o600 and bool(CANARY_RE.match(canary0_text)), canary0_text)
+        canary_t = home / "transcripts-cache" / "deny-canary.txt"
+        canary_t_text = canary_t.read_text(encoding="utf-8") if canary_t.is_file() else ""
+        check("init writes transcripts-cache/deny-canary.txt 0600 with its own random marker",
+              mode_of(canary_t) == 0o600 and bool(CANARY_RE.match(canary_t_text)) and canary_t_text != canary0_text, canary_t_text)
         seeds = load_seeds(live)
         check("seeds.json records four seeds and the rendered settings",
               len(seeds["seeds"]) == 4 and "claude-settings.json" in seeds["rendered"], sorted(seeds["seeds"]))
@@ -3167,7 +3179,12 @@ def selftest():
               rows["prompts/brain-prompt.md"]["status"])
         check("seed-status detects a newer payload seed", rows["prompts/backfill-prompt.md"]["status"] == "seed newer",
               rows["prompts/backfill-prompt.md"]["status"])
-        vault_pb = base / "vault" / "Playbooks" / "person-dossier"
+        shutil.copyfile(str(tdir / "backfill-prompt.md"), str(live / "prompts" / "backfill-prompt.md"))
+        rows = dict((r["key"], r) for r in seed_rows(cfg, payload))
+        check("seed-status: an owner copy that took the newer seed whole (byte for byte) reads unchanged, not edited by owner",
+              rows["prompts/backfill-prompt.md"]["status"] == "unchanged"
+              and rows["prompts/backfill-prompt.md"]["copy_version"] == "1.1.0", rows["prompts/backfill-prompt.md"]["status"])
+        vault_pb =base / "vault" / "Playbooks" / "person-dossier"
         c1 = do_copy_seed(cfg, "playbooks/person-dossier", vault_pb, Report(quiet=True), payload)
         c2 = do_copy_seed(cfg, "playbooks/person-dossier", vault_pb, Report(quiet=True), payload)
         c3 = do_copy_seed(cfg, "../outside", vault_pb, Report(quiet=True), payload)
@@ -3355,6 +3372,36 @@ def selftest():
         rd_on = read_json_file(home / "config.json", {}).get("read_documents")
         check("sync-reader-config carries reader.read_documents into the reader config (false, then true)",
               rd_off is False and rd_on is True, (rd_off, rd_on))
+        say("[config keys: edit_watch.enabled, edit_watch.minutes, intake.verify_quotes]")
+        check("config.example.json and wa_common.DEFAULTS carry edit_watch true for 30 minutes and intake.verify_quotes true",
+              dget(exd, "edit_watch.enabled") is True and dget(exd, "edit_watch.minutes") == 30 and dget(exd, "intake.verify_quotes") is True
+              and dget(WC.DEFAULTS, "edit_watch.enabled") is True and dget(WC.DEFAULTS, "edit_watch.minutes") == 30
+              and dget(WC.DEFAULTS, "intake.verify_quotes") is True)
+        ew_old = copy.deepcopy(raw)
+        ew_old.pop("edit_watch", None)
+        (ew_old.get("intake") or {}).pop("verify_quotes", None)
+        ew_old_cfg = WC.apply_defaults(copy.deepcopy(ew_old), cfg_file)
+        ew_old_err = [i for i in check_config(ew_old, ew_old_cfg, payload, uhome) if i[0] == "error"]
+        check("an older config without the three keys loads with true, 30 and true and check-config finds no error",
+              dget(ew_old_cfg, "edit_watch.enabled") is True and dget(ew_old_cfg, "edit_watch.minutes") == 30
+              and dget(ew_old_cfg, "intake.verify_quotes") is True and not ew_old_err, ew_old_err)
+        ew_errs = {}
+        for label, patch in (("enabled", {"edit_watch": {"enabled": "yes", "minutes": 30}}),
+                             ("zero", {"edit_watch": {"enabled": True, "minutes": 0}}),
+                             ("big", {"edit_watch": {"enabled": True, "minutes": 1441}}),
+                             ("half", {"edit_watch": {"enabled": True, "minutes": 2.5}}),
+                             ("verify", {"intake": dict(raw.get("intake") or {}, verify_quotes="on")}),
+                             ("low", {"edit_watch": {"enabled": False, "minutes": 1}}),
+                             ("high", {"edit_watch": {"enabled": True, "minutes": 1440}, "intake": dict(raw.get("intake") or {}, verify_quotes=False)})):
+            ew = copy.deepcopy(raw)
+            ew.update(copy.deepcopy(patch))
+            ew_errs[label] = [(k, m) for level, k, m in check_config(ew, WC.apply_defaults(copy.deepcopy(ew), cfg_file), payload, uhome)
+                              if level == "error"]
+        check("check-config: edit_watch.enabled \"yes\", minutes 0, 1441 and 2.5, intake.verify_quotes \"on\" are errors; 1 and 1440 pass",
+              any(k == "edit_watch.enabled" and "true or false" in m for k, m in ew_errs["enabled"])
+              and all(any(k == "edit_watch.minutes" and "1 to 1440" in m for k, m in ew_errs[x]) for x in ("zero", "big", "half"))
+              and any(k == "intake.verify_quotes" and "true or false" in m for k, m in ew_errs["verify"])
+              and not ew_errs["low"] and not ew_errs["high"], ew_errs)
         check("init creates doc-text-cache and secrets, both 0700",
               mode_of(home / "doc-text-cache") == 0o700 and mode_of(home / "secrets") == 0o700)
 
@@ -3543,6 +3590,8 @@ def selftest():
         check("the shipped template renders Read deny rules for <home>/secrets/** and <home>/doc-text-cache/** with absolute paths",
               not r_h2.errors and ("Read(/%s/secrets/**)" % h2) in deny2 and ("Read(/%s/doc-text-cache/**)" % h2) in deny2
               and ("Read(//%s/secrets/**)" % str(h2).lstrip("/")) in deny2, (r_h2.errors, deny2[-14:]))
+        check("the shipped template renders the Read deny rule for <home>/transcripts-cache/** (the transcripts reach the brain inside the pack)",
+              ("Read(/%s/transcripts-cache/**)" % h2) in deny2 and "transcript cache" in str(s2.get("_comment") or ""), deny2[-14:])
         old_tmpl = "".join(ln for ln in real_settings.splitlines(True)
                            if "{WA_HOME}/secrets/" not in ln and "{WA_HOME}/doc-text-cache/" not in ln)
         p3 = base / "payload-old-settings"

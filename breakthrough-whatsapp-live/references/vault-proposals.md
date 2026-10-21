@@ -184,7 +184,7 @@ Every optional key and what it means: section 8, the person family.
 
 ```
 ### <YYYY-MM-DD> · [<source>] · <who> · <what to do, one line>
-- 🗣 <MM-DD HH:MM> <the quote, verbatim, up to 200 characters>
+- <quote mark> <MM-DD HH:MM> <the quote, up to 200 characters>
 - <owner_label> <side marker>: <promised, not delivered / due date / to place>
 - <guess marker>: (<world> · <kind>) <suggested place>
 - <dig marker>: `dossier.py prepare --name <note name>`
@@ -205,11 +205,43 @@ Every optional key and what it means: section 8, the person family.
 
 Reading accepts both languages in one file, so switching `board.lang` later breaks nothing. The literal strings live in `wa_intake.MARKS`; if a later version changes them, that table is the source, not this page.
 
+**The quote line** (the second line of every entry) opens with one of five marks. The mark says what the program found when it looked the quote up in the run's own message pack (`intake.verify_quotes`), so the owner can tell a person's real words from the brain's summary of them:
+
+| how / src | zh | en |
+|---|---|---|
+| resolved, src text | `- 🗣 MM-DD HH:MM「stored text」` | `- 🗣 MM-DD HH:MM "stored text"` |
+| resolved, src transcript | `- 🎙 MM-DD HH:MM 语音转字「…」` | `- 🎙 MM-DD HH:MM voice transcript "…"` |
+| resolved, src doc | `- 📄 MM-DD HH:MM 文件内文「…」` | `- 📄 MM-DD HH:MM document text "…"` |
+| none | `- ≈ MM-DD HH:MM 大意, 非逐字「brain's words」` | `- ≈ MM-DD HH:MM gist, not verbatim "brain's words"` |
+| not checked (verify off, or the pack could not be read, or the check raised) | `- ≈ MM-DD HH:MM 未核对「brain's words」` | `- ≈ MM-DD HH:MM not checked "brain's words"` |
+
+With 🗣, 🎙 and 📄 the words between the quote marks are the stored characters of the message, copied by the program, and the time is that message's own time; the brain's spelling never reaches the line. A quote the program found inside one message, as a few pieces of one message in order (joined with ` … `), as two to four messages in a row from the same sender (joined with ` ⏎ `), or as a close match within one message, is marked found. With ≈ the words are the brain's, and the time is the one the brain gave. ⛔ No path writes 🗣 for words the program did not find: a gist stays a gist.
+
+**A correction entry.** When the person edits a message after a run judged it (the edit watch, `edit_watch.*`), the next run reads the new version, and an entry whose words the edit changed is corrected by **appending** a new entry; the older entry is left byte for byte as it was, because what the machine wrote is part of the record and the owner may already have placed it. Two shapes:
+
+```
+### <YYYY-MM-DD> · [wa] · <who> · ✏️ 对方改了讯息 · <what to do, one line>
+- 🗣 <MM-DD HH:MM>「<the new words>」
+- 改之前: 「<the old words>」 (同一封讯息; 照旧版写的条目以这条为准)
+...
+```
+
+That is a capture the brain wrote from the edited message (en: `✏️ they edited the message · ` in the title, and `- before the edit: "<the old words>" (same message; this entry replaces any entry written from the old version)`). When the brain wrote no new capture but an older open or placed entry of the same person quoted words the edit removed, the program writes the correction itself: the title `✏️ 对方改了讯息 · 这行标题是照旧版写的, 以下面的原话为准: <the older title>` (en `✏️ they edited the message · this title was written from the old version, trust the quote below: <the older title>`), a 🗣 line with the message's current words, `- 改之前: 「<the older quote>」 (旧条目还开着)` or `(旧条目状态: <its status>)` (en `- before the edit: "…" (the older entry is still open)` or `(older entry status: …)`), the owner line `旧条目的日期与期限照新原话重看` (en `recheck the older entry's date and deadline against the new words`), and the guess line `(<world> · 更正) 不是新的事, 归位时跟旧条目并成一件` (en `(<world> · correction) not a new item; merge it with the older entry when placing`). Correction entries do not count against the brain's two entries per run.
+
+**The legend line.** The rules at the top of the note are the place to say what the marks mean, once, in the owner's language. For an English buffer:
+
+```
+Marks: 🗣 the person's own words, found in the message · 🎙 found in a voice transcript · 📄 found in a document's text · ≈ gist, not verbatim (or not checked) · ✏️ the person edited the message; this entry replaces the older one.
+```
+
+For a Chinese buffer: `标记: 🗣 讯息里找得到的原话 · 🎙 语音转字里找到的 · 📄 文件内文里找到的 · ≈ 大意, 非逐字 (或未核对) · ✏️ 对方改了讯息, 以这条为准。`
+
 **An invented example** (`board.lang: en`, owner label Sam):
 
 ```
 Things someone asked of me, or I promised, caught from my chats. The daemon only appends above
 "## Placed" and never changes a status. I place entries by saying "intake" in a session.
+Marks: 🗣 the person's own words, found in the message · 🎙 found in a voice transcript · 📄 found in a document's text · ≈ gist, not verbatim (or not checked) · ✏️ the person edited the message; this entry replaces the older one.
 
 ### 2031-03-04 · [wa] · [[Dana-Okafor]] · Send the revised garden quote before Friday
 - 🗣 03-03 17:42 "Can you send the revised quote before Friday? We decide on Monday."
@@ -219,7 +251,7 @@ Things someone asked of me, or I promised, caught from my chats. The daemon only
 - status: open
 
 ### 2031-03-04 · [wa] · Theo Brandvold (no note) · Site visit at the shop, Thursday 10:00
-- 🗣 03-04 09:15 "Thursday 10am at the shop works for me"
+- ≈ 03-04 09:15 gist, not verbatim "Thursday at ten at the shop is fine"
 - Sam side: to place
 - machine guess: (Work · time and place) calendar 03-06 10:00
 - dig deeper: `dossier.py prepare --name Theo Brandvold`
@@ -237,7 +269,7 @@ Things someone asked of me, or I promised, caught from my chats. The daemon only
 
 **Who changes what.** The daemon (and the second source, when connected) only appends, and only while `intake.enabled` is true. Only the intake mode (proposal d, patch 2) moves an entry and rewrites its status line. Compile clears the placed zone. Open entries are never cleared by anything but a placement.
 
-**Proof:** `$PY "$KIT/daemon/wa_intake.py" --config "$LIVE/config.json" --count-open` prints the same number as a manual count of open status lines above the placed heading, and `--list-open` numbers them from 1.
+**Proof:** `$PY "$KIT/daemon/wa_intake.py" --config "$LIVE/config.json" --count-open` prints the same number as a manual count of open status lines above the placed heading, and `--list-open` numbers them from 1, each with its `key:` line; `--list-placed` lists the placed zone with the same keys, so an entry keeps its key when it is placed.
 
 ## d · Three command-base patches
 
@@ -298,7 +330,9 @@ Before patching:
 **`<command base>/references/intake.md`** (the owner's command-base skill folder again), from this outline:
 
 1. **The file.** `<intake.buffer>`, no front matter, open entries above the placed heading; five kinds only (a request with a date, something the owner promised and has not delivered, an appointment, money, a decision the other side stated); the entry shape is proposal c.
-2. **List.** `$PY <KIT>/daemon/wa_intake.py --config <live>/config.json --list-open` prints the open entries numbered from 1. Zero open: say so in one line and stop.
+2. **List.** `$PY <KIT>/daemon/wa_intake.py --config <live>/config.json --list-open` prints the open entries numbered from 1, each followed by a line `    key: <12 hex>`, the entry's key (`--list-open --json` gives full keys; `--list-placed [--json]` lists the placed zone, read only). Zero open: say so in one line and stop.
+   **Read the quote mark of each entry** before proposing anything. 🗣, 🎙 and 📄: the words are the person's own (from the message, its voice transcript, or a document's text), and a date, amount or place in them can be used as written. ≈ `gist, not verbatim` (`大意, 非逐字`): the words are the brain's summary; check a date, amount or place against the chat before it goes into a task or the calendar. ≈ `not checked` (`未核对`): nobody looked the words up; treat them as a gist.
+   **A ✏️ entry is a correction**: the person edited a message after an earlier entry was written from it. The ✏️ entry replaces the older one: place the ✏️ entry, and merge the older entry into the same place or drop it (its `before the edit` line names the old words). When the older entry was already placed, update what it became (a task's date, a calendar event) to the new words, on the owner's yes.
 3. **Propose, one line per entry**, in file order, taking the entry's machine guess as a starting point, never as the answer:
    **task**: a `cb: task` in a project's `Tasks/` folder with every key section 8 requires; when no project fits, propose opening one first.
    **calendar**: only when `calendar.destination` is not `none`, created through the calendar destination with title, date and time (ask for a missing piece rather than guessing). `wa_calendar.create_event(cfg, title, date, time, duration_min, place, note, idempotency_key=<the entry heading>)` returns `ok` and a `url`; for `ics` the file is `<live>/calendar/<key>.ics` and opening it imports the event. The board's calendar button does the same.
@@ -307,7 +341,7 @@ Before patching:
    **just a note**: one dated line in `capture-buffer.md`.
    **drop**: nothing written; say why in a few words.
 4. **Write only on a yes**, entry by entry. A numbered answer ("1 task, 2 drop, 3 calendar Friday 3pm") is a yes for each number.
-5. **Mark placed** right after each write: `wa_intake.py --config <live>/config.json --mark-placed <n> --to "<where it went>"`. Numbers shift after a move, so mark from the highest number down, or list again between marks.
+5. **Mark placed** right after each write, by key: `wa_intake.py --config <live>/config.json --mark-placed-key KEY --to "<where it went>"`, where KEY is a full key or a unique prefix of at least 8 hex. It prints the same confirmation as `--mark-placed` (`placed → <where>` and the moved title). It is the safe way to place several entries in a row: numbers shift after every move and when a correction or a new capture lands while the owner decides, keys do not. Refusals: `key <p> matches <n> entries (run --list-open again)` (use more of the key), `entry <k> is already placed → <where>` (an earlier mark did it: say so and go on), `entry <k> (number <n>) is not open, it cannot be placed`, `no entry with key <k> (run --list-open again)`. `--mark-placed <n>` still works; with numbers, mark from the highest number down, or list again between marks.
 6. **Done.** One line: "placed N, still open M".
 
 Rules that do not bend: never place anything at boot; never edit an entry's text or its machine guess (what the machine thought is part of the record); open entries are never cleared by compile, and a pile of them is information for the owner, not a mess to tidy.

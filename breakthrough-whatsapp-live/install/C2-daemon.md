@@ -19,7 +19,7 @@ Claude Code keeps no shell variables between commands: start each command with t
 One question at a time. Before each question that names a default, read that default in `references/defaults-and-why.md` and give the owner its reason in a sentence or two.
 
 1. **The gate** (default 2). Show the groups from `<home>/measure-3d.json` with their three day inbound counts, busiest first, and ask for each: `all` (every message can wake the brain), `mention` (only when the owner is named or @ mentioned) or `skip`. Groups left off the list follow `unlisted_group_policy`, `skip` by default. One-to-one chats follow `direct_policy`: `all` (the default) or `skip`. Any chat to leave out entirely goes in `ignored_jids`. Say what the ticks cost: roughly, every burst that passes is one run, and quick messages from one chat within the quiet gap become one burst.
-2. **Faster drafts or fewer runs?** (default 4) The defaults: a run starts after 45 quiet seconds, or 180 seconds after the first message at the latest, two runs at a time. `measure` prints no gaps between messages, so explain the trade in default 4 (a longer wait delays every draft and saves only the bursts whose gaps fall between the old and the new limit), then ask.
+2. **Faster drafts or fewer runs?** (default 4) The defaults: a run starts after 45 quiet seconds, or 180 seconds after the first message at the latest, two runs at a time. `measure` prints no gaps between messages, so explain the trade in default 4 (a longer wait delays every draft and saves only the bursts whose gaps fall between the old and the new limit), then ask. With the same window, read default 15: a message that passed the gate is read again for 30 minutes (`edit_watch.minutes`), and an edit that changes it is judged again; ask whether that fits (`edit_watch.enabled`).
 3. **How is Claude paid for on this Mac?** (default 3) Run `claude auth status` together. On a subscription, the dollar figure a run reports is not billed and the board shows tokens only; with API billing every run is real money and `board.show_usd` can show it. Then: may person notes use opus (`dossier.model`), or should a lighter model write them?
 4. **The board's language**: English or Chinese (`board.lang`, `en` or `zh`). The vocabulary labels below go into the field that language shows: `label_en` for `en`, `label` for `zh`.
 5. **Worlds** (default 8): which parts of your life and which businesses should conversations be sorted into? Each world gets a key (lowercase letters), a label in the owner's words, and `business` true or false. Only business worlds carry a stage.
@@ -37,6 +37,7 @@ One ruling per edit, each with the config edit ritual (`install/00-start-here.md
 
 - `direct_policy`, `unlisted_group_policy`, `ignored_jids`
 - `debounce.quiet_seconds`, `debounce.max_wait_seconds`, `debounce.global_concurrency`, when changed
+- `edit_watch.enabled`, `edit_watch.minutes`, when changed (question 2)
 - `board.lang`, `board.show_usd`, `dossier.model`, when changed
 - `vocab.worlds`, the labels in `vocab.stages` and `vocab.priorities`, `vocab.business_context`, `stage_rules.parked_after_days`
 
@@ -76,7 +77,7 @@ Edit `live/topic-map.json`, the owner copy, with the Edit tool. Its example rule
 
 ### 4 · The cage
 
-`init` rendered `live/claude-settings.json`: every tool but Read, Glob and Grep denied, all hooks off, and 26 absolute Read deny rules for the push token, the config, the state database, other runs, the reader's working copies, the document text cache, the `secrets/` folder, WhatsApp's own databases, SSH keys, the keychain and credential files (the full list: `references/privacy.md`, "The Read deny rules, and why"). Check it with the Verify rows below. The proof that a deny rule really blocks on this Mac is the canary in `references/pitfalls.md`, pit 10 (one model call, run in the terminal on this Mac, never over ssh); offer it. Once the daemon runs (after step 8), `echo '{"read_canary": true}' > "$LIVE/commands/probe-claude.json"` proves the same from launchd for the `secrets/` folder, using the marker `init` wrote (one tiny model call; K333).
+`init` rendered `live/claude-settings.json`: every tool but Read, Glob and Grep denied, all hooks off, and 27 absolute Read deny rules for the push token, the config, the state database, other runs, the reader's working copies, the document text cache, the voice transcript cache, the `secrets/` folder, WhatsApp's own databases, SSH keys, the keychain and credential files (the full list: `references/privacy.md`, "The Read deny rules, and why"). Check it with the Verify rows below. The proof that a deny rule really blocks on this Mac is the canary in `references/pitfalls.md`, pit 10 (one model call, run in the terminal on this Mac, never over ssh); offer it. Once the daemon runs (after step 8), `echo '{"read_canary": true}' > "$LIVE/commands/probe-claude.json"` proves the same from launchd for the `secrets/` folder and the `transcripts-cache/` folder, using the two markers `init` wrote (one tiny model call per folder; K333, K351).
 
 ### 5 · The registry entry, before the install
 
@@ -189,7 +190,7 @@ Only after step 11 and Verify checks 1 to 12 pass. Optional, and the default is 
 - The owner runs the proof command `render-claude-wrapper` printed, in their own terminal: `env -i HOME="$(mktemp -d)" PATH=/usr/bin:/bin "<home>/bin/claude-bot" auth status --json`. Pass: the answer holds `"authMethod": "oauth_token"` (a login from the Keychain cannot be seen from that empty home, so only the token can pass). (K332)
 - `"$PY" "$KIT/daemon/wa_setup.py" doctor --config "$LIVE/config.json"`. Pass: `authentication: setup token through <home>/bin/claude-bot (token file present, 0600, last changed <date>)` and no blocker. (K332)
 - The plain probe, read as check 9 below. Pass: `"is_error":false` in the newest `runs/probe-*` folder.
-- The deny probe. Pass: `probe-claude read_canary: 读取被挡下 (secrets 夹的 deny 规则有效; runs.denials 记了 <n> 笔, 脑回 DENIED)` (the read was blocked) in `$LIVE/wa_live.log`, and the newest `probe` row's `denials` names `deny-canary.txt`: `sqlite3 -readonly "$LIVE/state.sqlite" "select id, ok, denials from runs where kind = 'probe' order by id desc limit 1"`. `没挡住` fails it, with a push: run `init` again and check `live/claude-settings.json`. (K333)
+- The deny probe. Pass: one line per folder in `$LIVE/wa_live.log`, `probe-claude read_canary [secrets]: 读取被挡下 (secrets 夹的 deny 规则有效; runs.denials 记了 <n> 笔, 脑回 DENIED)` and the same with `[transcripts-cache]` (the read was blocked), and the two newest `probe` rows' `denials` each name a `deny-canary.txt`: `sqlite3 -readonly "$LIVE/state.sqlite" "select id, ok, denials from runs where kind = 'probe' order by id desc limit 2"`. `没挡住` fails it, with a push naming the folder: run `init` again and check `live/claude-settings.json`. A line `脑回 DENIED, 但 runs.denials 没有读 deny-canary 的那笔` means the brain answered without trying the read: it proves nothing, so drop the command file again. (K333, K351)
 - The token appears nowhere it should not: `grep -c "sk-ant-" "$HOME_DIR/bin/claude-bot" "$LIVE/wa_live.log"` prints `0` for both. (K334)
 
 **Record.** Under `### C2 daemon`: the answer; on a yes, the previous `bin.claude` value the command printed, the date the token was made and its renewal date (about a year later), the proof's `authMethod`, the doctor line, the deny probe's line and its run id. The renewal date also goes into the daemon's registry entry as its `expires` cell (`references/vault-proposals.md`, proposal f). ⛔ Never the token, not even its first characters.
@@ -212,7 +213,7 @@ Run each probe with the station's opening block in front of it, at the point its
    ```sh
    "$PY" -c 'import json,sys,pathlib; tm=json.load(open(sys.argv[1])); print([f for r in tm["rules"] for f in r["files"] if not (pathlib.Path(sys.argv[2])/f).exists()])' "$LIVE/topic-map.json" "<vault>"
    ```
-4. **The deny rules were rendered** (step 4). Pass: two equal numbers (`26 26` in this version: the template's `Read(/{...})` rules, then the rendered `Read(//...)` rules, counted in the JSON so the file's comment is not counted), then `0`.
+4. **The deny rules were rendered** (step 4). Pass: two equal numbers (`27 27` in this version: the template's `Read(/{...})` rules, then the rendered `Read(//...)` rules, counted in the JSON so the file's comment is not counted), then `0`.
    ```sh
    "$PY" -c 'import json,sys; n=lambda p, pre: sum(1 for r in json.load(open(p))["permissions"]["deny"] if r.startswith(pre)); print(n(sys.argv[1], "Read(/"), n(sys.argv[2], "Read(//"))' "$KIT/daemon/templates/claude-settings.json" "$LIVE/claude-settings.json"
    grep -cE '[{](LIVE_DIR|WA_HOME|HOME)[}]' "$LIVE/claude-settings.json"

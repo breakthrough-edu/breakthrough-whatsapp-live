@@ -120,6 +120,7 @@ DEFAULTS = {
     "unlisted_group_policy": "skip",
     "ignored_jids": [],
     "debounce": {"quiet_seconds": 45, "max_wait_seconds": 180, "global_concurrency": 2},
+    "edit_watch": {"enabled": True, "minutes": 30},
     "doorbell": {"enabled": True, "wal_path": "<auto>", "poll_seconds": 2, "stale_alert_hours": 6,
                  "full_rescan_seconds": 60, "lookback": 300, "max_message_age_hours": 48},
     "brain": {"model": "claude-sonnet-5", "cwd": "<home>/brain-cwd", "context_days": 7, "group_context_days": 3,
@@ -150,7 +151,8 @@ DEFAULTS = {
     "calendar": {"destination": "none", "lark": {"calendar_id": ""}},
     "backup": {"enabled": False, "dest": "", "require_process": "", "at": "03:30", "keep": 7},
     "digest": {"enabled": True, "at": "08:00", "push": True},
-    "intake": {"enabled": False, "buffer": "", "evening_push": False, "evening_at": "20:00", "rules_file": ""},
+    "intake": {"enabled": False, "buffer": "", "evening_push": False, "evening_at": "20:00", "rules_file": "",
+               "verify_quotes": True},
     "voice": {"enabled": True, "examples": 12, "pairs": "<live>/voice-pairs.jsonl"},
     "backfill": {"days": 30, "min_msgs": 10, "batch_size": 10, "respect_gate": True, "max_turns": 20, "max_images": 4},
     "launchd": {"label": "local.whatsapp-live", "intake_label": "local.whatsapp-live.intake"},
@@ -1367,6 +1369,8 @@ def _selftest():
         cfg = load_config(live / "config.json")
         check(cfg["debounce"]["quiet_seconds"] == 45 and cfg["brain"]["model"] == "claude-sonnet-5",
               "defaults: debounce and brain filled")
+        check(cfg["edit_watch"] == {"enabled": True, "minutes": 30} and cfg["intake"]["verify_quotes"] is True,
+              "defaults: edit_watch on for 30 minutes, intake.verify_quotes on")
         check(cfg["paths"]["home"] == str(tmp / "home") and cfg["paths"]["live_dir"] == str(live),
               "defaults: home is the parent of live/, live_dir is the config folder")
         check(cfg["state_db"] == str(live / "state.sqlite") and cfg["live_dir"] == str(live), "derived: state_db and live_dir")

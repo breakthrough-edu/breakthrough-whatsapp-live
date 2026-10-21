@@ -25,12 +25,15 @@ wa_live.py · 私人 WhatsApp 实时逐封分诊 daemon (住一台常驻 Mac, la
 命令档 (丢进 live/commands/ 给跑着的 daemon 下指令; headless claude 只在 launchd 那条路底下拿得到登入与权限):
   test-run.<jid>.json          拿那个对话最近 3 封 inbound 当 burst 立刻跑一次
   probe-claude.json            用脑的笼子参数叫一次最小 claude, 90 秒没回就抓堆叠;
-                               带 {"read_canary": true} 改成拒读探测: 叫脑读 <home>/secrets/deny-canary.txt, log 说挡没挡住
+                               带 {"read_canary": true} 改成拒读探测: 叫脑读 <home>/secrets/deny-canary.txt 与
+                               <home>/transcripts-cache/deny-canary.txt (各一次), log 每个夹各说一行挡没挡住
   notify-test.json             经推播出口推一句
   prewarm-<天>.json            把 N 天窗的语音先转进快取
   facts-now.json · second-source-now.json · backup-now.json · digest-now.json
                                手动叫排班, 都认 {"dry_run": true}; digest-now 另认 {"for": "YYYY-MM-DD", "send": false}
   backfill-summaries.json      摘要回填, 可带 {"limit": N, "dry_run": true}
+  edit-check.<pk>.json         {"old_text": "…"}: 把那封 inbound 当成门铃当时看到的是 old_text 放进改讯息观察名单
+                               (验收与修补用; 下一拍就跟库里现在的字比, 不一样就照改讯息处理)
 """
 
 import argparse
@@ -58,7 +61,7 @@ import uuid
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 HOME = Path.home()
 DAEMON_DIR = Path(__file__).resolve().parent
 PAYLOAD = DAEMON_DIR.parent                     # 安装包根 (daemon/ 的上一层)
@@ -730,6 +733,8 @@ class State(object):
           decision TEXT, policy TEXT);
         CREATE TABLE IF NOT EXISTS brain_outages(
           id INTEGER PRIMARY KEY, kind TEXT, started_at TEXT, ended_at TEXT, detail TEXT);
+        CREATE TABLE IF NOT EXISTS edit_watch(
+          pk INTEGER PRIMARY KEY, jid TEXT, name TEXT, kind TEXT, added REAL, text TEXT, item TEXT);
         """)
         self.conn.commit()
         # 旧库用 ALTER 补栏, 不重建 (新库一样走这里, 升级路径只有一条)
@@ -830,6 +835,67 @@ class State(object):
             else:
                 self.conn.execute("DELETE FROM pending WHERE jid=?", (jid,))
             self.conn.commit()
+
+    def incr_meta(self, key, by=1):
+        """meta 里的计数器 +by (日报读的改讯息计数 edits_seen / edits_requeued / edits_reread:<日期> 走这里)。"""
+        with self.lock:
+            r = self.conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+            try:
+                n = int(r["value"]) if r else 0
+            except (TypeError, ValueError):
+                n = 0
+            self.conn.execute("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                              (key, str(n + int(by))))
+            self.conn.commit()
+            return n + int(by)
+
+    # ---- 改讯息观察名单: 过闸的讯息在 edit_watch.minutes 内留一份字, Daemon.edit_tick 拿库里现在的字比
+    def watch_add(self, pk, jid, name, kind, text, item):
+        """放进 (或重放进) 观察名单; item 是那封的 burst 项 (dict 或 JSON 字串), 要重新排队时照它的样子排。"""
+        if isinstance(item, dict):
+            item = json.dumps(item, ensure_ascii=False)
+        with self.lock:
+            self.conn.execute("INSERT OR REPLACE INTO edit_watch(pk,jid,name,kind,added,text,item) VALUES(?,?,?,?,?,?,?)",
+                              (int(pk), jid, name, kind, time.time(), text or "", item or "{}"))
+            self.conn.commit()
+
+    def watch_list(self):
+        with self.lock:
+            return [dict(r) for r in self.conn.execute("SELECT * FROM edit_watch ORDER BY added").fetchall()]
+
+    def watch_set_text(self, pk, text):
+        with self.lock:
+            self.conn.execute("UPDATE edit_watch SET text=? WHERE pk=?", (text or "", int(pk)))
+            self.conn.commit()
+
+    def watch_purge(self, before):
+        """放进名单早于 before (epoch 秒) 的行拿掉, 回拿掉几行。"""
+        with self.lock:
+            n = self.conn.execute("DELETE FROM edit_watch WHERE added < ?", (float(before),)).rowcount
+            self.conn.commit()
+            return n
+
+    def watch_count(self):
+        with self.lock:
+            return self.conn.execute("SELECT COUNT(*) FROM edit_watch").fetchone()[0]
+
+    def patch_pending_text(self, jid, pk, text):
+        """还没起跑的 burst 里那封换成新版的字, last_at 重设 (静默计时从头算)。找到那封回 True。"""
+        with self.lock:
+            r = self.conn.execute("SELECT items FROM pending WHERE jid=?", (jid,)).fetchone()
+            if not r:
+                return False
+            items = json.loads(r["items"])
+            hit = False
+            for it in items:
+                if it.get("pk") == pk:
+                    it["text"] = (text or "")[:600]
+                    hit = True
+            if not hit:
+                return False
+            self.conn.execute("UPDATE pending SET items=?, last_at=? WHERE jid=?", (json.dumps(items, ensure_ascii=False), time.time(), jid))
+            self.conn.commit()
+            return True
 
     def mark_replied(self, jid, name, kind, pk, msg_at):
         """主人回了: tag 进 replied, needs_me 清掉, priority 自动最不急那格; world / stage 不动。
@@ -1133,7 +1199,8 @@ class State(object):
         conn = _ro(wa_root() / "ChatStorage.sqlite")
         try:
             if around is None:
-                rows = list(reversed(conn.execute(sel + " ORDER BY m.Z_PK DESC LIMIT ?", (jid, n)).fetchall()))
+                # 最近 n 封照讯息时间取 (手机晚同步进来的旧讯息编号反而大, 不能当最新的), 回传照时间排
+                rows = list(reversed(conn.execute(sel + " ORDER BY COALESCE(m.ZMESSAGEDATE,0) DESC, m.Z_PK DESC LIMIT ?", (jid, n)).fetchall()))
             else:
                 # 前后照讯息时间取, 不照 Z_PK (手机晚同步进来的旧讯息编号反而大); 时间一样才比编号
                 after_n = int(n) // 2
@@ -1339,7 +1406,14 @@ class State(object):
             e["cost_usd"] = round(e["cost_usd"] + float(r["usd"] or 0), 4)
             n_all += r["n"]; tot["input"] += r["ti"]; tot["output"] += r["to_"]; tot["cache_read"] += r["tcr"]; tot["cache_create"] += r["tcc"]
             tot["cost_usd"] = round(tot["cost_usd"] + float(r["usd"] or 0), 4)     # 板子只在 ui.show_usd 时显示 (订阅跑的美元是虚的)
-        return {"last_pk": self.get_meta("last_pk"), "runs_today": n_all, "pending": pending, "tokens_today": tot, "runs_by_kind": by_kind}
+        ew = self.cfg.get("edit_watch") if isinstance(self.cfg.get("edit_watch"), dict) else {}
+        try:
+            ew_min = int(ew.get("minutes", 30))
+        except (TypeError, ValueError):
+            ew_min = 30
+        edit_watch = {"enabled": bool(ew.get("enabled", True)), "watching": self.watch_count(), "minutes": ew_min}   # 只给数字, 不给字
+        return {"last_pk": self.get_meta("last_pk"), "runs_today": n_all, "pending": pending, "tokens_today": tot, "runs_by_kind": by_kind,
+                "edit_watch": edit_watch}
 
     def recent_runs(self, n=10):
         with self.lock:
@@ -1472,6 +1546,20 @@ def speaker_name(jid, pushname=""):
     return name
 
 
+def edit_watch_enabled(cfg):
+    """edit_watch.enabled (默认值住 wa_common.DEFAULTS; 这里的退路只为它还没载入时)。"""
+    ew = (cfg or {}).get("edit_watch")
+    return bool((ew if isinstance(ew, dict) else {}).get("enabled", True))
+
+
+def edit_watch_minutes(cfg):
+    ew = (cfg or {}).get("edit_watch")
+    try:
+        return max(1, min(1440, int((ew if isinstance(ew, dict) else {}).get("minutes", 30))))
+    except (TypeError, ValueError):
+        return 30
+
+
 class Doorbell(object):
     LOOKBACK = 300   # 每次扫描往回看几个 Z_PK 找「晚写进库」的讯息 (doorbell.lookback 可调)
 
@@ -1506,6 +1594,7 @@ class Doorbell(object):
         self._my_lid = None
         self._my_lid_at = 0.0
         self._policy_warned = set()
+        self.edit_watch_on = edit_watch_enabled(cfg)
 
     def signature(self):
         parts = []
@@ -1747,7 +1836,44 @@ class Doorbell(object):
                 "speaker_jid": speaker_jid}
         self.state.add_pending(jid, name, kind, item)
         log.info("过闸 %s [%s] %s", kind, CT[mtype], name)
+        if self.edit_watch_on and text.strip():
+            # 改讯息观察名单: 留库里这一刻的全文 (不是 burst 项那 600 字), edit_tick 拿库里之后的字比
+            self.state.watch_add(pk, jid, name, kind, text, item)
         return 1
+
+    def current_texts(self, pks):
+        """库里这几封现在的字 {pk: text} (只读, 一次最多 500 封)。查不到的 pk 不在回传里。"""
+        pks = [int(x) for x in list(pks or [])[:500]]
+        if not pks:
+            return {}
+        conn = self.connect()
+        try:
+            rows = conn.execute("SELECT Z_PK pk, ZTEXT text FROM ZWAMESSAGE WHERE Z_PK IN (%s)" % ",".join("?" * len(pks)), pks).fetchall()
+        finally:
+            conn.close()
+        return dict((r["pk"], r["text"] or "") for r in rows)
+
+    def item_for_pk(self, pk):
+        """一封 inbound 内容讯息 → (jid, name, kind, burst 项), 形状跟 consider 排的一样; 不是 inbound 内容讯息回 None。"""
+        CT = content_types()
+        conn = self.connect()
+        try:
+            r = conn.execute("""SELECT m.Z_PK pk, m.ZISFROMME fromme, m.ZMESSAGETYPE mtype, m.ZTEXT text, m.ZMESSAGEDATE d, m.ZPUSHNAME pushname,
+                    s.ZCONTACTJID jid, s.ZPARTNERNAME name, s.ZSESSIONTYPE stype, g.ZMEMBERJID memberjid, m.ZFROMJID fromjid
+                FROM ZWAMESSAGE m JOIN ZWACHATSESSION s ON s.Z_PK=m.ZCHATSESSION
+                LEFT JOIN ZWAGROUPMEMBER g ON g.Z_PK = m.ZGROUPMEMBER WHERE m.Z_PK=?""", (int(pk),)).fetchone()
+        finally:
+            conn.close()
+        if r is None or r["fromme"] or r["mtype"] not in CT or r["stype"] not in (0, 1):
+            return None
+        jid = r["jid"] or ""
+        if jid.endswith("@status") or jid.endswith("@broadcast"):
+            return None
+        kind = "group" if jid.endswith("@g.us") else "direct"
+        sj = speaker_jid_of(jid, r["memberjid"], r["fromjid"])
+        item = {"pk": r["pk"], "at": core_to_iso(r["d"]), "type": CT[r["mtype"]], "text": (r["text"] or "")[:600],
+                "speaker": speaker_name(sj, r["pushname"] or "") if sj else _clean_pushname(r["pushname"]), "speaker_jid": sj}
+        return jid, r["name"] or jid, kind, item
 
     def burst_for_test(self, jid, n=3):
         CT = content_types()
@@ -1902,6 +2028,37 @@ def reader_config_from(cfg):
 
 
 _PLACEHOLDER_RE = re.compile(r"\{([A-Z][A-Z0-9_]{1,40})\}")
+
+
+def pack_messages(sweep_json, jid):
+    """这个 run 自己的对话包 (sweep.json, 脑看到的那一份) → 那条对话的讯息, 照 wa_intake.resolve_quote 要的形状:
+    {pk, at, me, speaker, text, caption, transcript, doc_text}。读取器 --only-jid 可能把电话形 jid 找成 LID 形的对话:
+    对不上 jid 时包里只有一条对话就用那一条。读不了就丢例外 (呼叫端记警告, 当「未核对」)。"""
+    doc = json.loads(Path(sweep_json).read_text(encoding="utf-8"))
+    chats = [c for c in (doc.get("chats") or []) if isinstance(c, dict)]
+    pick = [c for c in chats if c.get("jid") == jid]
+    if not pick and len(chats) == 1:
+        pick = chats
+    out = []
+    for c in pick:
+        for m in c.get("messages") or []:
+            if not isinstance(m, dict):
+                continue
+            md = m.get("media") if isinstance(m.get("media"), dict) else {}
+            out.append({"pk": m.get("pk"), "at": m.get("t") or "", "me": m.get("dir") == "out", "speaker": m.get("speaker") or "",
+                        "text": m.get("text") or "", "caption": md.get("title") or "", "transcript": md.get("transcript") or "",
+                        "doc_text": md.get("doc_text") or ""})
+    return out
+
+
+def burst_line(it):
+    """提示第 1 节里一封 burst 讯息的那一行; 对方发出后改过的 (item 带 edited) 行尾接旧版, 让脑知道上次判的是哪个版本。"""
+    who = (" " + it["speaker"]) if it.get("speaker") else ""
+    line = "- [%s]%s (%s) %s" % (it.get("at"), who, it.get("type"), it.get("text") or "(无文字, 看对话包里同一时间的媒体路径)")
+    ed = it.get("edited")
+    if isinstance(ed, dict):
+        line += "  ✏️ 对方发出后编辑过这封, 上面是现在的版本; 你上一次判断时读到的旧版是: 「%s」" % str(ed.get("old") or "")[:600]
+    return line
 
 
 class Brain(object):
@@ -2314,8 +2471,7 @@ class Brain(object):
                  "今天: %s (星期%s), 时区 %s (burst 里的「明天」「下礼拜二」照那句话发出的日期推, 这一行给你对星期几)" % (today.date().isoformat(), "一二三四五六日"[today.weekday()], tz),
                  "", "## 1 · 这个 burst (新进来的, 要判断的) · 对话: %s (%s)" % (p["name"], p["kind"]), ""]
         for it in items:
-            who = (" " + it["speaker"]) if it.get("speaker") else ""
-            lines.append("- [%s]%s (%s) %s" % (it["at"], who, it["type"], it["text"] or "(无文字, 看对话包里同一时间的媒体路径)"))
+            lines.append(burst_line(it))
         lines += ["", "## 2 · 这条对话上一次的判断 (含 summary = 你的记忆, 对话包没涵盖的日子靠它)", ""]
         # 只有回填摘要、还没被判过的行 (没 world 没 tag) 也要把 summary 给脑, 否则按「有记忆」只拉两天, 记忆却没进 prompt
         if prev and (prev.get("world") or prev.get("tag") or (prev.get("summary") or "").strip()):
@@ -2587,14 +2743,25 @@ class Brain(object):
                             log.info("run #%d 群发言人近况 +%d 份档 (%s)", run_id, k, name)
                     except Exception as e:
                         log.warning("run #%d 群发言人近况失败 (继续): %s", run_id, e)
-            # intake buffer: 脑抓到的「要主人做的事」追加进 vault 的进料口 (去重, 只 append); 群的也收 (脑只认对主人讲的)
+            # intake buffer: 脑抓到的「要主人做的事」追加进 vault 的进料口 (去重, 只 append); 群的也收 (脑只认对主人讲的)。
+            # 原话由程式拿这个 run 自己的对话包核 (intake.verify_quotes); burst 里对方改过的讯息 (item 带 edited) 交给 intake 写更正, 没有 captures 也照写。
             it_cfg = cfg.get("intake") or {}
             buffer = intake_buffer_path(cfg)
-            if WI is not None and j.get("captures") and it_cfg.get("enabled") and buffer is not None:
+            edits = [{"pk": it.get("pk"), "old": str((it.get("edited") or {}).get("old") or ""), "new": it.get("text") or "", "at": it.get("at") or ""}
+                     for it in items if isinstance(it.get("edited"), dict)]
+            if WI is not None and (j.get("captures") or edits) and it_cfg.get("enabled") and buffer is not None:
                 try:
+                    messages = None
+                    if it_cfg.get("verify_quotes", True):
+                        try:
+                            messages = pack_messages(sweep_json, jid)
+                        except Exception as e:
+                            log.warning("run #%d intake: 对话包读不了, 这次的原话记成未核对: %s", run_id, str(e)[:200])
+                            messages = None
                     note = self.dossier.note_for_speaker(jid) if (self.dossier is not None and kind == "direct") else None
-                    n_added = call_opt(WI.append_captures, str(state_db_path(cfg)), str(buffer), jid, name, j.get("world"), j["captures"],
-                                       source="wa", people_note=(note.stem if note is not None else None), cfg=cfg)
+                    n_added = call_opt(WI.append_captures, str(state_db_path(cfg)), str(buffer), jid, name, j.get("world"), j.get("captures") or [],
+                                       source="wa", people_note=(note.stem if note is not None else None), cfg=cfg,
+                                       messages=messages, edits=(edits or None))
                     if n_added:
                         log.info("run #%d intake +%d (%s)", run_id, n_added, name)
                 except Exception as e:
@@ -2603,6 +2770,9 @@ class Brain(object):
                                   num_turns=res["num_turns"], cage_breach=res["breach"], denials=res["denials"],
                                   input_tokens=res.get("input_tokens"), output_tokens=res.get("output_tokens"),
                                   cache_read_tokens=res.get("cache_read_tokens"), cache_create_tokens=res.get("cache_create_tokens"))
+            if any(isinstance(it.get("edited"), dict) for it in items):
+                self.state.incr_meta("edits_reread:%s" % dt.date.today().isoformat())     # 日报: 改过的讯息重读了几次
+                log.info("run #%d 重读了对方改过的讯息 (%s)", run_id, name)
             # 板子与 log 只报 token 与秒: 订阅跑的 claude -p 回报的美元是「走 API 会多少钱」, 不是真的扣款。
             log.info("run #%d 完成 %s: %s/%s/%s needs_me=%s 读 %s / 写 %s tokens %sms", run_id, name, j["world"], j["stage"], j["priority"], j["needs_me"],
                      (res.get("input_tokens") or 0) + (res.get("cache_read_tokens") or 0) + (res.get("cache_create_tokens") or 0),
@@ -3953,6 +4123,7 @@ def make_board_handler(daemon):
                     self._send(200, json.dumps({"ok": False, "error": "这条对话没有 inbound 讯息"}, ensure_ascii=False)); return
                 if body.get("full"):
                     p["ground"] = True   # 板上「全量重判」: 不信 summary, 用全窗原文重写记忆
+                daemon.watch_burst(p)
                 daemon.dispatch(p, source="board-full" if body.get("full") else "board")
                 log.info("板子: 手动跑 %s%s%s", p["name"], " (全量重判)" if body.get("full") else "", " (闸外, 主人确认)" if not ok_gate else "")
                 self._send(200, json.dumps({"ok": True}))
@@ -4013,6 +4184,12 @@ class Daemon(object):
         self.commands_dir = live_dir(cfg) / "commands"
         self.commands_dir.mkdir(parents=True, exist_ok=True)
         self._mem = {}
+        # 改讯息观察 (edit_tick): 库的签章没变而且不到一分钟就不查; 正在跑的对话改了字, 下一拍强制再查
+        self.edit_watch_on = edit_watch_enabled(cfg)
+        self._edit_sig = None
+        self._edit_last = 0.0
+        self._edit_force = False
+        self._edit_waiting = set()       # 正在跑而等下一拍的编号: 那行 log 每封只写一次, 不是每两秒一次
         # 夜里排班: 名字 · 几点 · 做什么 · 开没开。启动时已经过了点就把今天记成跑过, 不补跑 (要现在跑就丢 commands/<名>-now.json)。
         f = cfg.get("facts") or {}; ss = cfg.get("second_source") or {}; bk = cfg.get("backup") or {}; dg = cfg.get("digest") or {}
         self.daily = [("facts", f.get("at", "03:00"), self.job_facts, bool(f.get("enabled", False)) and WF is not None),
@@ -4288,6 +4465,83 @@ class Daemon(object):
                 self.backfill_busy = False
         threading.Thread(target=_go, daemon=True).start()
 
+    def watch_burst(self, p):
+        """手动送去判的 burst (test-run 指令档、板上「现在判断」) 也进改讯息观察名单; 留库里现在的全文。回放进几封。"""
+        if not self.edit_watch_on or not p:
+            return 0
+        try:
+            items = json.loads(p["items"]) if isinstance(p.get("items"), str) else list(p.get("items") or [])
+            cur = self.bell.current_texts([it.get("pk") for it in items if it.get("pk") is not None])
+        except Exception as e:
+            log.warning("改讯息观察: 手动 burst 没放进名单 (%s)", str(e)[:200])
+            return 0
+        n = 0
+        for it in items:
+            text = cur.get(it.get("pk"))
+            if text and text.strip():
+                self.state.watch_add(it["pk"], p["jid"], p.get("name"), p.get("kind"), text, it)
+                n += 1
+        return n
+
+    def edit_tick(self, force=False):
+        """改讯息观察: 名单上每封跟库里现在的字比, 变了 (不是空白) 就照情况处理, 回处理了几封。
+        还没起跑 → burst 里换成新版; 已经判过 → 新版重新排队 (item 带 edited 旧版); 那条对话正在跑 → 这一拍跳过、下一拍强制再查。
+        库的签章没变又不到一分钟就不查; 超过 edit_watch.minutes 的行拿掉。⛔ log 只写编号与对话名, 不写讯息的字。
+        dry-run 照样换 pending 的字 (只动状态), 不记日报计数。"""
+        if not self.edit_watch_on:
+            return 0
+        if self.state.watch_count() == 0:
+            return 0
+        now = time.time()
+        sig = self.bell.signature()
+        if not (force or self._edit_force) and sig == self._edit_sig and now - self._edit_last < 60:
+            return 0
+        self._edit_force = False
+        self._edit_sig = sig
+        self._edit_last = now
+        purged = self.state.watch_purge(now - edit_watch_minutes(self.cfg) * 60)
+        if purged:
+            log.info("改讯息观察: %d 封过了 %d 分钟, 移出名单", purged, edit_watch_minutes(self.cfg))
+        rows = self.state.watch_list()
+        if not rows:
+            return 0
+        cur = self.bell.current_texts([r["pk"] for r in rows])
+        today = dt.date.today().isoformat()
+        n = 0
+        for r in rows:
+            new = cur.get(r["pk"])
+            if new is None or not new.strip() or new == (r["text"] or ""):
+                continue
+            jid = r["jid"]
+            if jid in self.running:
+                self._edit_force = True
+                if r["pk"] not in self._edit_waiting:
+                    self._edit_waiting.add(r["pk"])
+                    log.info("改讯息 pk=%s (%s): 那条对话正在跑, 下一拍再处理", r["pk"], r["name"] or jid)
+                continue
+            self._edit_waiting.discard(r["pk"])
+            if not self.dry_run:
+                self.state.incr_meta("edits_seen:%s" % today)
+            if self.state.patch_pending_text(jid, r["pk"], new):
+                log.info("改讯息 pk=%s (%s): 还没起跑, burst 换成新版", r["pk"], r["name"] or jid)
+            else:
+                try:
+                    item = json.loads(r["item"] or "{}")
+                except Exception:
+                    item = {}
+                if not isinstance(item, dict):
+                    item = {}
+                item["pk"] = r["pk"]
+                item["text"] = new[:600]
+                item["edited"] = {"old": r["text"] or "", "seen_at": now_iso()}
+                self.state.add_pending(jid, r["name"] or jid, r["kind"] or ("group" if (jid or "").endswith("@g.us") else "direct"), item)
+                if not self.dry_run:
+                    self.state.incr_meta("edits_requeued:%s" % today)
+                log.info("改讯息 pk=%s (%s): 旧版已经判过, 重新排队", r["pk"], r["name"] or jid)
+            self.state.watch_set_text(r["pk"], new)
+            n += 1
+        return n
+
     def due(self, p, now):
         d = self.cfg.get("debounce") or {}
         return (now - p["last_at"] >= float(d.get("quiet_seconds", 45))) or (now - p["first_at"] >= float(d.get("max_wait_seconds", 180)))
@@ -4376,39 +4630,55 @@ class Daemon(object):
     CANARY_APPEND_SYSTEM = ("你在 headless 模式跑, 没有人可以问。这是一次权限探测: 照使用者的指示用 Read 读那一个档, "
                             "然后只回一个词, 不要别的字。")
 
+    # 拒读探测的探测档: (板子 / log 用的名字, <home> 底下的夹)。两个都由 wa_setup.py init 写。
+    CANARY_TARGETS = (("secrets", "secrets"), ("transcripts", "transcripts-cache"))
+
     def probe_read_canary(self):
-        """拒读探测 (commands/probe-claude.json 带 {"read_canary": true}): 用脑的笼子叫脑读 <home>/secrets/deny-canary.txt,
-        只准回 DENIED 或 READ_OK。记成 kind probe 的 run, 挡下的读取落 runs.denials; log 讲挡没挡住。⛔ 永远不碰 token 档本身。
-        回 {"blocked": bool, "run_dir": 路径} (dry-run 或探测起不来回 None)。"""
+        """拒读探测 (commands/probe-claude.json 带 {"read_canary": true}): 用脑的笼子叫脑读 <home>/secrets/deny-canary.txt
+        与 <home>/transcripts-cache/deny-canary.txt, 一个档一次 run, 只准回 DENIED 或 READ_OK。每次记成 kind probe 的 run,
+        挡下的读取落 runs.denials; log 每个夹各一行讲挡没挡住, 没挡住的推一则 (讲是哪个夹)。⛔ 永远不碰 token 档本身。
+        回 {"blocked": 全部挡住, "targets": {"secrets": bool, "transcripts": bool}, "run_dirs": [...]} (dry-run 回 None)。
+        探测档不在、或探测没跑完, 那个夹记 False (证明不了挡住)。"""
         if self.dry_run:
             log.info("probe-claude read_canary: dry-run 不叫 claude"); return None
-        canary = home_dir(self.cfg) / "secrets" / "deny-canary.txt"
-        if not canary.is_file():
-            log.error("probe-claude read_canary: %s 不在, 重跑 wa_setup.py init (它写这个探测档)", canary)
-            return None
-        run_dir = self.brain.runs_dir / ("probe-canary-%s" % dt.datetime.now().strftime("%Y%m%d-%H%M%S"))
-        run_dir.mkdir(parents=True, exist_ok=True)
-        prompt = ("用 Read 工具读这个档: %s\n读得到内容就只回 READ_OK; 被拒绝或读不到就只回 DENIED。只回那一个词。" % canary)
-        (run_dir / "prompt.md").write_text(prompt, encoding="utf-8")
-        log.info("probe-claude read_canary 开始 (%s)", run_dir.name)
-        try:
-            res = self.brain.call_claude_recorded(prompt, run_dir, "probe", name="probe-claude read_canary", timeout=180, max_turns=3,
-                                                  append_system=self.CANARY_APPEND_SYSTEM)
-        except Exception as e:
-            log.error("probe-claude read_canary: 探测没跑完, 挡没挡住不知道: %s", str(e)[:300])
-            return None
-        text = str(res.get("text") or "").strip().upper()
-        denied = [str(x) for x in (res.get("denials") or [])]
-        hit = any("deny-canary" in x for x in denied)
-        blocked = hit or ("DENIED" in text and "READ_OK" not in text)
-        if blocked:
-            log.info("probe-claude read_canary: 读取被挡下 (secrets 夹的 deny 规则有效; runs.denials 记了 %d 笔, 脑回 %s)", len(denied), text[:20] or "空")
-        else:
-            log.error("probe-claude read_canary: 没挡住, 脑读到了 secrets 夹里的探测档 (脑回 %s)。重跑 wa_setup.py init 并检查 claude-settings.json 的 Read deny",
-                      text[:20] or "空")
-            self.notifier.send("🚨 [WA live] 拒读探测没挡住: 脑读得到 secrets 夹。重跑 wa_setup.py init, 再丢一次 probe-claude.json {\"read_canary\": true}",
-                               key="canary_read", min_gap=3600, kind="error")
-        return {"blocked": bool(blocked), "run_dir": str(run_dir)}
+        targets = {}
+        run_dirs = []
+        for key, folder in self.CANARY_TARGETS:
+            targets[key] = False
+            canary = home_dir(self.cfg) / folder / "deny-canary.txt"
+            if not canary.is_file():
+                log.error("probe-claude read_canary [%s]: %s 不在, 重跑 wa_setup.py init (它写这个探测档)", folder, canary)
+                continue
+            run_dir = self.brain.runs_dir / ("probe-canary-%s-%s" % (key, dt.datetime.now().strftime("%Y%m%d-%H%M%S")))
+            run_dir.mkdir(parents=True, exist_ok=True)
+            run_dirs.append(str(run_dir))
+            prompt = ("用 Read 工具读这个档: %s\n读得到内容就只回 READ_OK; 被拒绝或读不到就只回 DENIED。只回那一个词。" % canary)
+            (run_dir / "prompt.md").write_text(prompt, encoding="utf-8")
+            log.info("probe-claude read_canary [%s] 开始 (%s)", folder, run_dir.name)
+            try:
+                res = self.brain.call_claude_recorded(prompt, run_dir, "probe", name="probe-claude read_canary %s" % folder, timeout=180, max_turns=3,
+                                                      append_system=self.CANARY_APPEND_SYSTEM)
+            except Exception as e:
+                log.error("probe-claude read_canary [%s]: 探测没跑完, 挡没挡住不知道: %s", folder, str(e)[:300])
+                continue
+            text = str(res.get("text") or "").strip().upper()
+            denied = [str(x) for x in (res.get("denials") or [])]
+            hit = any("deny-canary" in x for x in denied)
+            blocked = bool(hit)                  # 只认 runs.denials 里真的有那一笔; 脑光回 DENIED 而没去读, 证明不了规则有效
+            targets[key] = blocked
+            if not blocked and "READ_OK" not in text:
+                log.warning("probe-claude read_canary [%s]: 脑回 %s, 但 runs.denials 没有读 deny-canary 的那笔 (它没去读), 挡没挡住不知道, 再丢一次 probe-claude.json",
+                            folder, text[:20] or "空")
+                continue
+            if blocked:
+                log.info("probe-claude read_canary [%s]: 读取被挡下 (%s 夹的 deny 规则有效; runs.denials 记了 %d 笔, 脑回 %s)",
+                         folder, folder, len(denied), text[:20] or "空")
+            else:
+                log.error("probe-claude read_canary [%s]: 没挡住, 脑读到了 %s 夹里的探测档 (脑回 %s)。重跑 wa_setup.py init 并检查 claude-settings.json 的 Read deny",
+                          folder, folder, text[:20] or "空")
+                self.notifier.send("🚨 [WA live] 拒读探测没挡住: 脑读得到 %s 夹。重跑 wa_setup.py init, 再丢一次 probe-claude.json {\"read_canary\": true}" % folder,
+                                   key="canary_read:" + key, min_gap=3600, kind="error")
+        return {"blocked": all(targets.values()), "targets": targets, "run_dirs": run_dirs}
 
     def _take(self, pattern):
         """认得的命令档: 读参数 (坏 JSON 当 {}), 马上删掉, 回 [(档名, spec)]。"""
@@ -4455,7 +4725,36 @@ class Daemon(object):
             if self.breaker.down():
                 log.warning("test-run: %s, 这次不跑 %s", self.breaker.why(), p["name"]); continue
             log.info("test-run 指令: %s", p["name"])
+            self.watch_burst(p)
             self.dispatch(p, source="test-run")
+        for fname, spec in self._take("edit-check.*.json"):
+            self.edit_check(fname[len("edit-check."):-len(".json")], spec)
+
+    def edit_check(self, pk_s, spec):
+        """commands/edit-check.<pk>.json {"old_text": "…"}: 把那封 inbound 放进改讯息观察名单, 当作门铃当时看到的是 old_text;
+        下一拍 edit_tick 就拿库里现在的字比 (验收与修补用)。不是 inbound 内容讯息、或没给 old_text, 记警告略过。回放进去没。"""
+        if not self.edit_watch_on:
+            log.warning("edit-check: edit_watch.enabled 关着, 略过 pk=%s", pk_s)
+            return False
+        old = (spec or {}).get("old_text")
+        if not isinstance(old, str) or not old.strip():
+            log.warning("edit-check: pk=%s 没给 old_text, 略过", pk_s)
+            return False
+        try:
+            got = self.bell.item_for_pk(int(pk_s))
+        except (TypeError, ValueError):
+            got = None
+        except Exception as e:
+            log.warning("edit-check: pk=%s 查不了库 (%s), 略过", pk_s, str(e)[:200])
+            return False
+        if got is None:
+            log.warning("edit-check: pk=%s 不是 inbound 内容讯息, 略过", pk_s)
+            return False
+        jid, name, kind, item = got
+        self.state.watch_add(int(pk_s), jid, name, kind, old, item)
+        self._edit_force = True
+        log.info("edit-check: pk=%s (%s) 放进改讯息观察名单, 下一拍跟库里现在的字比", pk_s, name)
+        return True
 
     def stale_check(self):
         age = self.bell.wal_age()
@@ -4538,6 +4837,11 @@ class Daemon(object):
                     log.info("门铃: 新行 %d, 过闸 %d, 水位 %s", n, passed, self.state.get_meta("last_pk"))
                 self.schedule()
                 self.commands()
+                # 改讯息观察: 自己一个 try, 出事只记一行, 门铃照跑
+                try:
+                    self.edit_tick()
+                except Exception as e:
+                    log.warning("改讯息观察失败 (继续): %s", str(e)[:300])
                 self.dossier.tick()
                 # 断路器的探测: 每圈都看到期没 (只比一次时间, 探测本身在背景线程), 到点后几秒内就探, 不等每分钟那一拍
                 self.breaker.maybe_probe()
@@ -5591,10 +5895,13 @@ def selftest():
         ar = d.state.thread(D3, 4, around=305)
         s, h, raw = req("GET", "/api/thread?jid=%s&n=6&around=305" % urllib.parse.quote(D3))
         ar_api = [m["pk"] for m in json.loads(raw.decode("utf-8")).get("messages", [])] if s == 200 else []
-        plain = [m["pk"] for m in d.state.thread(D3, 3)]
-        check("对话区 around: 命中那封前后两边照讯息时间取、照时间排 (编号大但时间旧的落在它的时间位置); 不带 around 照旧是最近 n 封",
+        plain = d.state.thread(D3, 3)
+        check("对话区 around: 命中那封前后两边照讯息时间取、照时间排 (编号大但时间旧的落在它的时间位置)",
               [m["pk"] for m in ar] == [311, 305, 306, 307] and [m["at"] for m in ar] == sorted(m["at"] for m in ar)
-              and ar_api == [304, 311, 305, 306, 307, 308] and plain == [309, 310, 311], ([m["pk"] for m in ar], ar_api, plain))
+              and ar_api == [304, 311, 305, 306, 307, 308], ([m["pk"] for m in ar], ar_api))
+        check("对话区最近 n 封照讯息时间取: 晚同步进来、编号大的旧讯息不算最新, 回传照时间排",
+              [m["pk"] for m in plain] == [308, 309, 310] and [m["at"] for m in plain] == sorted(m["at"] for m in plain),
+              [m["pk"] for m in plain])
 
         # ---- 16 · 文件转字快取: 工作夹有指到 <home>/doc-text-cache 的捷径; 读取器设定带 read_documents
         wk = d.brain.sweep_workdir("doc-probe")
@@ -5607,11 +5914,14 @@ def selftest():
         check("reader_config_from 带 read_documents (默认 true, 照 reader.read_documents)",
               rc_on.get("read_documents") is True and rc_off.get("read_documents") is False, (rc_on.get("read_documents"), rc_off.get("read_documents")))
 
-        # ---- 17 · 拒读探测: 假 claude (不起真的), 提示叫它读探测档, 记成 kind probe 的 run, 挡下的读取进 runs.denials
+        # ---- 17 · 拒读探测: 假 claude (不起真的), 两个探测档 (secrets 与 transcripts-cache) 各一个 run, 记成 kind probe, 挡下的读取进 runs.denials
         (home / "secrets").mkdir(parents=True, exist_ok=True)
         canary = home / "secrets" / "deny-canary.txt"
         canary.write_text("canary-marker", encoding="utf-8")
+        tcanary = home / "transcripts-cache" / "deny-canary.txt"
+        tcanary.write_text("canary-marker", encoding="utf-8")
         seen_args = []
+        leak = {"folder": None}
 
         class _Done(object):
             returncode = 0
@@ -5619,30 +5929,61 @@ def selftest():
 
         def fake_claude_run(args, **kw):
             seen_args.append(list(args))
+            m_ = re.search(r"读这个档: (\S+)", args[-1])
+            path_ = m_.group(1) if m_ else ""
             r_ = _Done()
-            r_.stdout = "\n".join(json.dumps(x) for x in [
-                {"type": "system", "subtype": "init", "tools": ["Read", "Glob", "Grep"]},
-                {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": str(canary)}}]}},
-                {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "is_error": True,
-                                                          "content": "File is in a directory that is denied by your permission settings."}]}},
-                {"type": "result", "subtype": "success", "is_error": False, "result": "DENIED", "permission_denials": [],
-                 "usage": {"input_tokens": 1, "output_tokens": 1}}])
+            if leak.get("lazy"):
+                ev = [{"type": "system", "subtype": "init", "tools": ["Read", "Glob", "Grep"]},
+                      {"type": "result", "subtype": "success", "is_error": False, "result": "DENIED", "permission_denials": [],
+                       "usage": {"input_tokens": 1, "output_tokens": 1}}]
+            elif leak["folder"] and ("/%s/" % leak["folder"]) in path_:
+                ev = [{"type": "system", "subtype": "init", "tools": ["Read", "Glob", "Grep"]},
+                      {"type": "result", "subtype": "success", "is_error": False, "result": "READ_OK", "permission_denials": [],
+                       "usage": {"input_tokens": 1, "output_tokens": 1}}]
+            else:
+                ev = [{"type": "system", "subtype": "init", "tools": ["Read", "Glob", "Grep"]},
+                      {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": path_}}]}},
+                      {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "is_error": True,
+                                                                "content": "File is in a directory that is denied by your permission settings."}]}},
+                      {"type": "result", "subtype": "success", "is_error": False, "result": "DENIED", "permission_denials": [],
+                       "usage": {"input_tokens": 1, "output_tokens": 1}}]
+            r_.stdout = "\n".join(json.dumps(x) for x in ev)
             return r_
         subprocess.run = fake_claude_run
         try:
             pr = d.probe_claude({"read_canary": True})
+            n_args_ok = len(seen_args)
+            leak["folder"] = "transcripts-cache"
+            s_leak = len(fake_wc.sent)
+            pr_leak = d.probe_claude({"read_canary": True})
+            leak_sent = list(fake_wc.sent[s_leak:])
+            leak["folder"] = None
+            leak["lazy"] = True
+            s_lazy = len(fake_wc.sent)
+            pr_lazy = d.probe_claude({"read_canary": True})
+            lazy_sent = list(fake_wc.sent[s_lazy:])
         finally:
             subprocess.run = saved_run
         with d.state.lock:
-            prow = d.state.conn.execute("SELECT kind, ok, denials FROM runs WHERE kind='probe' ORDER BY id DESC LIMIT 1").fetchone()
-        prompt_ = seen_args[-1][-1] if seen_args else ""
+            prows = d.state.conn.execute("SELECT kind, ok, denials, name FROM runs WHERE kind='probe' ORDER BY id").fetchall()
+        prompt_ = seen_args[0][-1] if seen_args else ""
+        prompt_t = seen_args[1][-1] if len(seen_args) > 1 else ""
         logtext = (live / "wa_live.log").read_text(encoding="utf-8")
         check("拒读探测: 提示叫脑读 secrets/deny-canary.txt (不碰 token 档), 只准回 DENIED 或 READ_OK, 用脑的笼子旗标",
               str(canary) in prompt_ and "DENIED" in prompt_ and "READ_OK" in prompt_ and "claude-bot.env" not in prompt_
-              and "--settings" in (seen_args[-1] if seen_args else []) and "--disallowedTools" in (seen_args[-1] if seen_args else []), prompt_[:200])
-        check("拒读探测: 记成 kind probe 的 run, runs.denials 有那次读取, log 说挡下了",
-              pr and pr.get("blocked") is True and prow is not None and prow["ok"] == 1 and "deny-canary" in (prow["denials"] or "")
-              and "read_canary: 读取被挡下" in logtext, (pr, prow and dict(prow)))
+              and "--settings" in (seen_args[0] if seen_args else []) and "--disallowedTools" in (seen_args[0] if seen_args else []), prompt_[:200])
+        check("拒读探测: 每个探测档记成一个 kind probe 的 run, runs.denials 有那次读取, log 每个夹各说一行挡下了",
+              pr and pr.get("blocked") is True and len(prows) >= 2 and all(r_["ok"] == 1 and "deny-canary" in (r_["denials"] or "") for r_ in prows[:2])
+              and "read_canary [secrets]: 读取被挡下" in logtext and "read_canary [transcripts-cache]: 读取被挡下" in logtext
+              and len(pr.get("run_dirs") or []) == 2, (pr, [dict(r_) for r_ in prows]))
+        check("拒读探测 · transcripts-cache: 第二个探测档也读一次; 都挡住时 targets 两个都 true, 那个夹没挡住时 blocked false 且推一则讲 transcripts-cache",
+              n_args_ok == 2 and str(tcanary) in prompt_t and pr.get("targets") == {"secrets": True, "transcripts": True}
+              and pr_leak and pr_leak.get("blocked") is False and pr_leak.get("targets") == {"secrets": True, "transcripts": False}
+              and len(leak_sent) == 1 and "transcripts-cache" in leak_sent[0] and "read_canary [transcripts-cache]: 没挡住" in
+              (live / "wa_live.log").read_text(encoding="utf-8"), (n_args_ok, pr, pr_leak, leak_sent))
+        check("拒读探测: 脑光回 DENIED 而 runs.denials 没有那笔 (它没去读) 不算挡下, 也不推, log 说挡没挡住不知道",
+              pr_lazy and pr_lazy.get("blocked") is False and pr_lazy.get("targets") == {"secrets": False, "transcripts": False}
+              and not lazy_sent and "没有读 deny-canary 的那笔" in (live / "wa_live.log").read_text(encoding="utf-8"), (pr_lazy, lazy_sent))
 
         # ---- 18 · 断路器开着时 run 自己的失败不另推: 走真的 Brain.run (retries 1), 假 claude 两次都回登入失效
         claude_reply = {"result": AUTH_MSG, "is_error": True}
@@ -5684,6 +6025,230 @@ def selftest():
         lsrc = inspect.getsource(Daemon.loop)
         check("断路器 · 主循环每圈都看探测到期没 (不等每分钟那一拍)",
               "self.breaker.maybe_probe()" in lsrc and "self.breaker.maybe_probe()" not in inspect.getsource(Daemon.minute_tick))
+
+        # ---- 19 · 改讯息观察: 过闸进名单 · 还没起跑换字 · 判过的重新排队带 edited · 正在跑跳过下一拍再查 · 过了窗口移出 · log 不写字 · edit-check · 计数
+        d.bell.scan(force=True)                                  # 前面几节直接插进假库的讯息先扫掉, 下面只看这一节的
+        with d.state.lock:
+            d.state.conn.execute("DELETE FROM edit_watch")
+            d.state.conn.execute("DELETE FROM pending")
+            d.state.conn.commit()
+        d.running.clear()
+        today_ = dt.date.today().isoformat()
+
+        def set_text(pk, text):
+            cs.execute("UPDATE ZWAMESSAGE SET ZTEXT=? WHERE Z_PK=?", (text, pk))
+            cs.commit()
+
+        def pend_item(jid, pk):
+            for p_ in d.state.pending_all():
+                if p_["jid"] == jid:
+                    for it in json.loads(p_["items"]):
+                        if it.get("pk") == pk:
+                            return it, p_
+            return None, None
+        add_msg(401, 1, "周六上午十点上课可以吗", minutes_ago=0)
+        d.bell.scan(force=True)
+        watched = [r_["pk"] for r_ in d.state.watch_list()]
+        it0, p0 = pend_item(D1, 401)
+        set_text(401, "周日上午十点上课可以吗")
+        last_before = p0["last_at"] if p0 else None
+        time.sleep(0.02)
+        n_swap = d.edit_tick(force=True)
+        it1, p1 = pend_item(D1, 401)
+        check("改讯息观察 · 过闸的讯息进名单; 还没起跑的 burst 换成新版的字, 不带 edited, 静默计时重算",
+              watched == [401] and it0 is not None and n_swap == 1 and it1 is not None and it1["text"] == "周日上午十点上课可以吗"
+              and "edited" not in it1 and p1["last_at"] > last_before and len(json.loads(p1["items"])) == 1, (watched, it1, n_swap))
+        d.state.consume_pending(D1, [401])                       # 当作 run 判完收尾了
+        set_text(401, "周日上午十一点上课可以吗")
+        n_req = d.edit_tick(force=True)
+        it2, _ = pend_item(D1, 401)
+        check("改讯息观察 · 判过的讯息改了: 新版重新排队, item 带 edited 旧版 (上一次判的那版), 计数 seen 与 requeued",
+              n_req == 1 and it2 is not None and it2["text"] == "周日上午十一点上课可以吗" and (it2.get("edited") or {}).get("old") == "周日上午十点上课可以吗"
+              and (it2.get("edited") or {}).get("seen_at") and d.state.get_meta("edits_seen:" + today_) == "2"
+              and d.state.get_meta("edits_requeued:" + today_) == "1", (it2, d.state.get_meta("edits_seen:" + today_)))
+        d.state.consume_pending(D1, [401])
+        set_text(401, "周一上午十一点上课可以吗")
+        d.running.add(D1)
+        n_run = d.edit_tick(force=True)
+        skipped = pend_item(D1, 401)[0] is None and d._edit_force is True
+        d.edit_tick(); d.edit_tick()                             # 跑着的这段时间每拍都会再查一次
+        waits = [x for x in (live / "wa_live.log").read_text(encoding="utf-8").splitlines() if "pk=401" in x and "那条对话正在跑" in x]
+        check("改讯息观察 · 那条对话正在跑的那行 log 每封只写一次", len(waits) == 1, waits)
+        d.running.discard(D1)
+        n_after = d.edit_tick()                                  # 没有 force: 上一拍跳过时自己记了下一拍要查
+        it3, _ = pend_item(D1, 401)
+        check("改讯息观察 · 那条对话正在跑: 这一拍跳过, 下一拍 (不用等签章变) 再处理",
+              n_run == 0 and skipped and n_after == 1 and it3 is not None and (it3.get("edited") or {}).get("old") == "周日上午十一点上课可以吗",
+              (n_run, skipped, n_after, it3))
+        d.state.consume_pending(D1, [401])
+        with d.state.lock:
+            d.state.conn.execute("UPDATE edit_watch SET added=? WHERE pk=401", (time.time() - 31 * 60,))
+            d.state.conn.commit()
+        set_text(401, "周二上午十一点上课可以吗")
+        n_old = d.edit_tick(force=True)
+        check("改讯息观察 · 过了 edit_watch.minutes (默认 30) 的移出名单, 之后再改也不排",
+              n_old == 0 and d.state.watch_count() == 0 and pend_item(D1, 401)[0] is None, (n_old, d.state.watch_count()))
+        logtext = (live / "wa_live.log").read_text(encoding="utf-8")
+        check("改讯息观察 · log 有「还没起跑, burst 换成新版」与「旧版已经判过, 重新排队」, 一个字的讯息内容都不写",
+              "还没起跑, burst 换成新版" in logtext and "旧版已经判过, 重新排队" in logtext and "上课可以吗" not in logtext,
+              [x for x in logtext.splitlines() if "改讯息" in x][-4:])
+        s, h, raw = req("GET", "/api/board")
+        ewst = (json.loads(raw.decode("utf-8")).get("status") or {}).get("edit_watch") if s == 200 else None
+        check("板子 payload 的 status.edit_watch = {enabled, watching, minutes}, 没有字", ewst == {"enabled": True, "watching": 0, "minutes": 30}, ewst)
+        # edit-check 指令档: 一封判过的 inbound 当作门铃当时看到旧字; 主人自己发的与没给 old_text 的记警告略过
+        add_msg(402, 1, "这堂课的价钱是 RM 80", minutes_ago=0)
+        d.bell.scan(force=True)
+        d.state.consume_pending(D1, [402])
+        with d.state.lock:
+            d.state.conn.execute("DELETE FROM edit_watch")
+            d.state.conn.commit()
+        (d.commands_dir / "edit-check.402.json").write_text(json.dumps({"old_text": "这堂课的价钱是 RM 60"}), encoding="utf-8")
+        (d.commands_dir / "edit-check.17.json").write_text(json.dumps({"old_text": "x"}), encoding="utf-8")
+        (d.commands_dir / "edit-check.401.json").write_text("{}", encoding="utf-8")
+        d.commands()
+        n_chk = d.edit_tick()
+        it4, _ = pend_item(D1, 402)
+        logtext = (live / "wa_live.log").read_text(encoding="utf-8")
+        check("edit-check.<pk>.json: 那封进名单当作旧字是 old_text, 下一拍重新排队带 edited; 不是 inbound 的与没给 old_text 的记警告略过",
+              n_chk == 1 and it4 is not None and it4["text"] == "这堂课的价钱是 RM 80" and (it4.get("edited") or {}).get("old") == "这堂课的价钱是 RM 60"
+              and "edit-check: pk=17 不是 inbound 内容讯息, 略过" in logtext and "edit-check: pk=401 没给 old_text, 略过" in logtext
+              and not list(d.commands_dir.glob("edit-check.*.json")) and "RM 80" not in logtext, (n_chk, it4))
+        # 手动送的 burst (板上「现在判断」) 也进名单
+        with d.state.lock:
+            d.state.conn.execute("DELETE FROM edit_watch")
+            d.state.conn.commit()
+        dispatched[:] = []
+        d.dispatch = lambda p, source="live": dispatched.append((p["jid"], source))
+        req("POST", "/api/run", {"jid": D1, "confirm": True})
+        check("板上「现在判断」送的 burst 也进改讯息观察名单 (库里现在的全文)",
+              dispatched and 402 in [r_["pk"] for r_ in d.state.watch_list()]
+              and [r_["text"] for r_ in d.state.watch_list() if r_["pk"] == 402] == ["这堂课的价钱是 RM 80"], (dispatched, d.state.watch_list()[:3]))
+        d.state.consume_pending(D1, [401, 402])
+
+        # ---- 20 · burst_line 与提示: 改过的讯息行尾接旧版
+        ed_item = {"pk": 402, "at": "2026-10-01T10:00:00", "type": "文字", "text": "这堂课的价钱是 RM 80", "speaker": "",
+                   "edited": {"old": "这堂课的价钱是 RM 60", "seen_at": "2026-10-01T10:05:00"}}
+        bl = burst_line(ed_item)
+        bl_plain = burst_line(dict(ed_item, edited=None))
+        pr_ = d.brain.build_prompt({"jid": D1, "name": "Casey Sample", "kind": "direct"}, [ed_item], "# 假对话包", "(假)", None)
+        check("burst_line: 改过的讯息行尾接「✏️ 对方发出后编辑过这封 … 旧版是: 「old」」, 没改过的不接; build_prompt 用它",
+              bl.startswith("- [2026-10-01T10:00:00] (文字) 这堂课的价钱是 RM 80")
+              and bl.endswith("  ✏️ 对方发出后编辑过这封, 上面是现在的版本; 你上一次判断时读到的旧版是: 「这堂课的价钱是 RM 60」")
+              and "✏️" not in bl_plain and bl in pr_, (bl, bl_plain))
+
+        # ---- 21 · pack_messages: run 自己的 sweep.json → resolve 的形状
+        sw = tmp / "pack-probe.json"
+        sweep_doc = {"chats": [{"jid": D1, "kind": "direct", "messages": [
+            {"pk": 501, "t": "2026-10-01T09:00:00", "dir": "in", "speaker": "Casey Sample", "type": 0, "kind": "文字", "text": "周六十点见"},
+            {"pk": 502, "t": "2026-10-01T09:01:00", "dir": "out", "speaker": "Kit Owner", "type": 0, "kind": "文字", "text": "好的"},
+            {"pk": 503, "t": "2026-10-01T09:02:00", "dir": "in", "speaker": "Casey Sample", "type": 3, "kind": "语音", "text": None,
+             "media": {"kind": "语音", "transcript": "我会带两个朋友"}},
+            {"pk": 504, "t": "2026-10-01T09:03:00", "dir": "in", "speaker": "Casey Sample", "type": 1, "kind": "图片", "text": None,
+             "media": {"kind": "图片", "title": "这是上次的面包"}},
+            {"pk": 505, "t": "2026-10-01T09:04:00", "dir": "in", "speaker": "Casey Sample", "type": 8, "kind": "文件", "text": None,
+             "media": {"kind": "文件", "title": "menu.pdf", "doc_text": "Lemon tart | 12.5"}}]}]}
+        sw.write_text(json.dumps(sweep_doc, ensure_ascii=False), encoding="utf-8")
+        pm = pack_messages(sw, D1)
+        lid_doc = dict(sweep_doc, chats=[dict(sweep_doc["chats"][0], jid="999000@lid")])
+        sw2 = tmp / "pack-probe-lid.json"
+        sw2.write_text(json.dumps(lid_doc, ensure_ascii=False), encoding="utf-8")
+        two_doc = {"chats": [dict(sweep_doc["chats"][0], jid="1@lid"), dict(sweep_doc["chats"][0], jid="2@lid")]}
+        sw3 = tmp / "pack-probe-two.json"
+        sw3.write_text(json.dumps(two_doc), encoding="utf-8")
+        check("pack_messages: pk · at=t · me=(dir out) · speaker · text · caption=media.title · transcript · doc_text; 只有一条对话时 jid 对不上也用它",
+              [m["pk"] for m in pm] == [501, 502, 503, 504, 505]
+              and pm[0] == {"pk": 501, "at": "2026-10-01T09:00:00", "me": False, "speaker": "Casey Sample", "text": "周六十点见", "caption": "",
+                            "transcript": "", "doc_text": ""}
+              and pm[1]["me"] is True and pm[2]["transcript"] == "我会带两个朋友" and pm[3]["caption"] == "这是上次的面包"
+              and pm[4]["doc_text"] == "Lemon tart | 12.5" and len(pack_messages(sw2, D1)) == 5 and pack_messages(sw3, D1) == [], pm[:2])
+
+        # ---- 22 · intake 接线: verify_quotes 开时带 run 自己的包, 关时 messages=None; edits 来自带 edited 的 item; 没 captures 也写更正; 包读不了当未核对; dry-run 不写
+        ic = []
+
+        def fake_append(state_db, buffer_path, jid, name, world, captures, source="wa", people_note=None, today=None, cfg=None, messages=None, edits=None):
+            ic.append({"captures": list(captures or []), "messages": messages, "edits": edits, "jid": jid})
+            return len(captures or []) + len(edits or [])
+        WI = types.SimpleNamespace(append_captures=fake_append, validate_captures=lambda c: list(c or []) if isinstance(c, list) else [])
+        sweep_mode = {"bad": False}
+
+        def fake_sweep_json(args, timeout, label="wa_sweep", key="shared"):
+            out = Path(args[args.index("--out") + 1])
+            out.with_suffix(".md").write_text("# 假对话包\n", encoding="utf-8")
+            out.write_text("{not json" if sweep_mode["bad"] else json.dumps(sweep_doc, ensure_ascii=False), encoding="utf-8")
+            return tmp
+        judged = {"captures": [{"what": "回覆周六上课的时间", "quote": "周六十点见", "quote_at": "10-01 09:00"}]}
+
+        def fake_claude_judge(args, **kw):
+            r_ = _Done()
+            j_ = dict({"world": "work", "stage": "talking", "priority": "now", "needs_me": True, "draft": "好的", "reason": "r", "confidence": 0.8}, **judged)
+            r_.stdout = "\n".join(json.dumps(x) for x in [
+                {"type": "system", "subtype": "init", "tools": ["Read", "Glob", "Grep"]},
+                {"type": "result", "subtype": "success", "is_error": False, "result": json.dumps(j_, ensure_ascii=False), "permission_denials": [],
+                 "usage": {"input_tokens": 1, "output_tokens": 1}}])
+            return r_
+        intake_saved = dict(d.cfg.get("intake") or {})
+        sweep_saved = d.brain.sweep
+        d.cfg["intake"] = {"enabled": True, "buffer": str(tmp / "intake-buffer.md"), "verify_quotes": True}
+        d.brain.sweep = fake_sweep_json
+        plain_item = {"pk": 501, "at": "2026-10-01T09:00:00", "type": "文字", "text": "周六十点见", "speaker": ""}
+        ed2 = dict(ed_item, pk=505)
+
+        def burst(items_):
+            return {"jid": D1, "name": "Casey Sample", "kind": "direct", "items": json.dumps(items_, ensure_ascii=False)}
+        reread0 = int(d.state.get_meta("edits_reread:" + today_) or 0)
+        subprocess.run = fake_claude_judge
+        try:
+            d.brain.run(burst([plain_item, ed2]), set(), "selftest")
+            c_on = list(ic); ic[:] = []
+            reread1 = int(d.state.get_meta("edits_reread:" + today_) or 0)
+            d.cfg["intake"]["verify_quotes"] = False
+            d.brain.run(burst([plain_item]), set(), "selftest")
+            c_off = list(ic); ic[:] = []
+            d.cfg["intake"]["verify_quotes"] = True
+            judged["captures"] = []
+            d.brain.run(burst([ed2]), set(), "selftest")
+            c_edit_only = list(ic); ic[:] = []
+            d.brain.run(burst([plain_item]), set(), "selftest")
+            c_none = list(ic); ic[:] = []
+            judged["captures"] = [{"what": "x", "quote": "周六十点见"}]
+            sweep_mode["bad"] = True
+            d.brain.run(burst([plain_item]), set(), "selftest")
+            c_bad = list(ic); ic[:] = []
+            sweep_mode["bad"] = False
+            d.brain.dry_run = True
+            d.brain.run(burst([plain_item, ed2]), set(), "selftest")
+            c_dry = list(ic); ic[:] = []
+        finally:
+            d.brain.dry_run = False
+            subprocess.run = saved_run
+            d.cfg["intake"] = intake_saved
+            d.brain.sweep = sweep_saved
+            WI = None
+        logtext = (live / "wa_live.log").read_text(encoding="utf-8")
+        check("intake 接线 · verify_quotes 开: messages 是这个 run 自己的 sweep.json 那条对话 (pack_messages 的形状)",
+              len(c_on) == 1 and c_on[0]["messages"] == pm and c_on[0]["captures"] and c_on[0]["captures"][0]["quote"] == "周六十点见", c_on)
+        check("intake 接线 · burst 里带 edited 的 item 变成 edits [{pk, old, new, at}]",
+              len(c_on) == 1 and c_on[0]["edits"] == [{"pk": 505, "old": "这堂课的价钱是 RM 60", "new": "这堂课的价钱是 RM 80", "at": "2026-10-01T10:00:00"}],
+              c_on and c_on[0]["edits"])
+        check("intake 接线 · verify_quotes 关: messages=None (写成未核对)", len(c_off) == 1 and c_off[0]["messages"] is None and c_off[0]["edits"] is None, c_off)
+        check("intake 接线 · 没 captures 只有 edits 也叫 intake (只写更正); 两样都没有不叫",
+              len(c_edit_only) == 1 and c_edit_only[0]["captures"] == [] and c_edit_only[0]["edits"] and not c_none, (c_edit_only, c_none))
+        check("intake 接线 · 对话包读不了: 记警告, messages=None (未核对), 照样写",
+              len(c_bad) == 1 and c_bad[0]["messages"] is None and "对话包读不了, 这次的原话记成未核对" in logtext, c_bad)
+        check("intake 接线 · dry-run 不叫 intake (有 edits 也不写)", c_dry == [], c_dry)
+        check("改讯息计数 · 带 edited 的 burst 跑完记 edits_reread:<今天> (一个 run 一次)", reread1 == reread0 + 1, (reread0, reread1))
+        lsrc = inspect.getsource(Daemon.loop)
+        check("改讯息观察 · 主循环每圈叫 edit_tick (包在自己的 try 里), 不在每分钟那一拍",
+              "self.edit_tick()" in lsrc and "改讯息观察失败 (继续)" in lsrc and "edit_tick" not in inspect.getsource(Daemon.minute_tick))
+        dd2 = Daemon(dict(cfg, state_db=str(live / "dry-edit.sqlite")), dry_run=True)
+        dd2.state.add_pending(D1, "Casey Sample", "direct", {"pk": 402, "at": now_iso(), "type": "文字", "text": "旧字"})
+        dd2.state.watch_add(402, D1, "Casey Sample", "direct", "旧字", {"pk": 402})
+        nd = dd2.edit_tick(force=True)
+        dit = json.loads(dd2.state.pending_all()[0]["items"])[0] if dd2.state.pending_all() else {}
+        with dd2.state.lock:
+            dmeta = dd2.state.conn.execute("SELECT COUNT(*) FROM meta WHERE key LIKE 'edits_%'").fetchone()[0]
+        check("改讯息观察 · dry-run 照样换 pending 的字 (只动状态), 不记日报计数",
+              nd == 1 and dit.get("text") == "这堂课的价钱是 RM 80" and dmeta == 0, (nd, dit, dmeta))
     except Exception:
         import traceback
         traceback.print_exc()

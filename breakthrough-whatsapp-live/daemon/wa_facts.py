@@ -665,9 +665,9 @@ def _selftest():
             {"table": "Signups", "kind": "lead", "record_id": "l-4", "name": "Ivan Koh", "phone": "+44 7700 900001", "date": "2026-09-06"},
         ]
         payments = [
-            {"table": "Payments", "record_id": "t1", "date": "2026-07-31", "amount": "2,788", "method": "Bank Transfer", "participants": 4,
+            {"table": "Payments", "record_id": "t1", "date": "2026-07-28", "amount": "1,460", "method": "Bank Transfer", "participants": 3,
              "product": "Workshop August", "person_record": "r-a1", "phone": "+60120000001"},
-            {"table": "Payments", "record_id": "t2", "date": "2026-09-01", "amount": "1,988.00", "method": "Card", "participants": 1,
+            {"table": "Payments", "record_id": "t2", "date": "2026-09-01", "amount": "1,250.00", "method": "Card", "participants": 1,
              "product": "Workshop September", "person_record": "r-a2"},
             {"table": "Payments", "record_id": "t3", "date": "2026-09-11", "amount": "3188", "method": "Card", "person_record": "r-f"},
             {"table": "Payments", "record_id": "t4", "date": "2026-09-12", "amount": "800", "method": "Card", "person_record": None,
@@ -684,7 +684,7 @@ def _selftest():
               "keys: chat jid when there is a chat (LID or phone spelling), else phone:<digits>")
         a = P["100000000000001@lid"]
         check(a["names"] == ["Alex Rivera"] and a["phone"] == "60120000001" and a["how"] == "lid-chat", "Alex: names merged, LID chat found")
-        check([x["date"] for x in a["paid_items"]] == ["2026-07-31", "2026-09-01"] and a["paid_items"][1]["amount"] == 1988
+        check([x["date"] for x in a["paid_items"]] == ["2026-07-28", "2026-09-01"] and a["paid_items"][1]["amount"] == 1250
               and a["paid_items"][0]["assigned_by"] == "link", "all payments kept in date order, amounts cleaned, assigned by link")
         check([x["date"] for x in a["records"]] == ["2026-07-18", "2026-08-03", "2026-09-02", "2026-09-03"] and a["attended"] is True,
               "records from two tables in date order; attended")
@@ -709,7 +709,7 @@ def _selftest():
               "person_for: other jid spelling, bare digits, groups")
 
         ls = facts_lines(f, "60120000001@s.whatsapp.net")
-        check(ls[0] == "付款: 2026-07-31 Bank Transfer MYR 2,788 (4 人, Workshop August) · 2026-09-01 Card MYR 1,988 (1 人, Workshop September)",
+        check(ls[0] == "付款: 2026-07-28 Bank Transfer MYR 1,460 (3 人, Workshop August) · 2026-09-01 Card MYR 1,250 (1 人, Workshop September)",
               "line 1: payments")
         check(ls[1] == "Roster: 2026-07-18 Workshop August Member, Day 1 ✓ Day 2 ✓ · 2026-09-02 Workshop September Member", "line 2: roster table")
         check(ls[2] == "Signups: 2026-08-03 (first contact), joined group 未填 came ✗ bought ✓ · 2026-09-03 (referral), joined group ✓ came ✓ bought ✗",
@@ -729,7 +729,7 @@ def _selftest():
         check(sec.startswith("## 系统记录 (Sales sheet, 自动)\n" + FACTS_BEGIN + "\n") and sec.rstrip().endswith(FACTS_END),
               "section: title uses the source label, markers in place")
         check(len(body) == 7 and body[0] == "- 👁 2026-07-18 · Roster: Workshop August Member, Day 1 ✓ Day 2 ✓"
-              and body[1].startswith("- 👁 2026-07-31 · 付款: Bank Transfer MYR 2,788")
+              and body[1].startswith("- 👁 2026-07-28 · 付款: Bank Transfer MYR 1,460")
               and body[-1] == "- 👁 来源: Sales sheet (Payments · Roster · Signups), 事实 worker 2026-09-15 拉", "section: dated items and source line")
         check(chr(0x2014) not in sec and " -- " not in sec and "Lark" not in sec, "section: no em dash, no double hyphen, no hardcoded source name")
         check(facts_section(f, "120000000000000001@g.us") == "" and facts_section(f, "nobody@lid") == "", "section empty for groups and unknown")

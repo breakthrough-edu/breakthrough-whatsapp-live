@@ -49,7 +49,9 @@ When `ls -L` answers `No such file or directory` for a companion, it was never l
 
 Read only. One line per owner copy, with its status and `copy v<x>, payload v<y>`; the last line counts the copies that need a merge. An update that changed playbook seeds shows each of them as `seed newer`; the playbook seeds this release changed are listed in `playbooks/CHANGELOG.md`. Playbooks appear here only when they were copied into the vault (station C1, step 5); when none were, the changelog is where to read what changed in case the owner wants a copy now (step 5).
 
-This release (1.1.0), coming from 1.0.1: `prompts/brain-prompt.md` moved (1.0.0 to 1.1.0, one sentence on document text), and of the playbooks, when they are in the vault, `whatsapp-live-triage-playbook.md` (1.0.1 to 1.1.0, one new weigh and example stories rewritten), `resident-workers-playbook.md` and `person-dossier-playbook.md` (1.0.1 to 1.0.2, example stories rewritten as generic reasons, no method change). Expect `seed newer` on each of those the owner has, so between `1 need a merge` (no playbooks in the vault) and `4 need a merge` (all three folders copied); and `claude-settings.json` shows `template newer`, because the template gained two Read deny rules (step 6).
+This release (1.2.0), coming from 1.1.0: `prompts/brain-prompt.md` moved (1.1.0 to 1.2.0: the rule for a message the person edited, under input 1; the two quote rules under `captures`, with the one exception to "fewer is better"; the `stake` ending now 「怎么开口: …」), and `claude-settings.json` shows `template newer`, because the template gained one Read deny rule (`transcripts-cache/**`, step 6). One playbook seed changed, by one sentence: `resident-workers-playbook.md` 1.0.3 (the note on probing a guard with JSON is stated as a general rule; nothing in the method changed); it shows as `seed newer` only when the owner copied the resident-workers folder into the vault. Expect `seed newer` on the brain prompt and `template newer` on the settings, so `2 need a merge` (3 with the resident-workers copy). From this release on, a copy the owner merged by taking every section of the new seed as it was (byte for byte the payload seed) reads `unchanged` afterwards, not `edited by owner`.
+
+For the brain prompt, step 4 walks three sections, each with the owner's yes: (a) the new sentences under input 1 of 你手上有什么 (a burst line ending ✏️ is an edited message, the current version wins, `reason` opens with 「对方改了讯息: …」); (b) under `captures`, the `quote` rule's "same message" words, the new ⛔ line saying a quote is copied from one message as one unbroken span because the program checks it against the pack, and the sentence after "已经交付 / 已经过期的不写" with the one exception for an edited message; (c) the `stake` ending in the first draft rule. A copy without (a) and (b) still runs, but edited messages are judged without their rule and quotes the brain joins or shortens land as ≈ entries; without (c) the board shows the old ending. The maintainer notes at the top of the seed (items 6 and 7) never reach the model and merge like any other section.
 
 | Status | What to do |
 |---|---|
@@ -96,9 +98,22 @@ mv "$LIVE/claude-settings.json" "$LIVE/claude-settings.json.old-$(date +%Y%m%d)"
 diff "$LIVE/claude-settings.json.old-$(date +%Y%m%d)" "$LIVE/claude-settings.json"
 ```
 
-`init` renders the file again and records its new hash; every other file is kept, and any folder of the working tree a release added is created (0700; this release, 1.1.0: `<home>/secrets/` and `<home>/doc-text-cache/`). Lines only in the old file are rules the owner added: carry each one over with the Edit tool on their yes, then `chmod 600` the file. Lines only in the new file are the release's new rules (this release: `secrets/**` and `doc-text-cache/**`).
+`init` renders the file again and records its new hash; every other file is kept, and any folder of the working tree a release added is created (0700), and any deny probe marker a release added is written (this release, 1.2.0: `<home>/transcripts-cache/deny-canary.txt`, 0600, in a folder every install already has). Lines only in the old file are rules the owner added: carry each one over with the Edit tool on their yes, then `chmod 600` the file. Lines only in the new file are the release's new rules (this release: `transcripts-cache/**`, and the `_comment` line, which now names the transcript cache).
 
-When `seed-status` showed no `template newer`, still run `"$PY" "$KIT/daemon/wa_setup.py" init --config "$LIVE/config.json"` once: it creates a folder a release added and keeps everything that exists.
+When `seed-status` showed no `template newer`, still run `"$PY" "$KIT/daemon/wa_setup.py" init --config "$LIVE/config.json"` once: it creates a folder or a probe marker a release added and keeps everything that exists.
+
+## 6b · The command-base patches changed
+
+A release can change the outline of a command-base patch (`references/vault-proposals.md`, proposal d). The owner's command-base skill is their file, written in their words, so an update never touches it: the session shows what changed and applies it only on the owner's yes.
+
+This release (1.2.0) changed Patch 2, the outline of `<command base>/references/intake.md`: step 2 now reads each entry's quote mark (🗣, 🎙 and 📄 are the person's words; ≈ is a gist, checked against the chat before a date or an amount is used) and treats a ✏️ entry as a correction that replaces the older one (place the ✏️ entry, merge or drop the older); step 5 marks placed by key (`wa_intake.py --config <live>/config.json --mark-placed-key KEY --to "<where it went>"`, KEY a full key or a unique prefix of at least 8 hex from `--list-open`), because numbers shift after every placement and when a correction lands while the owner decides, and keys do not. When O7 never ran, there is no such file: skip this step.
+
+1. Read the owner's `<command base>/references/intake.md` whole, and the new Patch 2 outline in `references/vault-proposals.md`.
+2. Show the owner the difference, step by step of the outline: what their file says now, what the new outline says, and why (the changelog line above). Their own wording stays theirs; only the meaning of steps 2 and 5 is offered.
+3. Apply it with the Edit tool only on a yes, one step at a time, with this install's absolute paths. A no keeps their file as it is: `--mark-placed <n>` still works, and the marks still show in the buffer.
+4. Log it under `## Updates`: offered, and applied or declined, per step.
+
+Also offer the legend line for the buffer's rules at the top (`references/vault-proposals.md`, proposal c, "The legend line"), on a yes, with the Edit tool; nothing reads it but the owner.
 
 ## 7 · Config
 
@@ -107,7 +122,7 @@ When `seed-status` showed no `template newer`, still run `"$PY" "$KIT/daemon/wa_
 "$PY" "$KIT/daemon/wa_setup.py" sync-reader-config --config "$LIVE/config.json"
 ```
 
-New keys fill themselves with their defaults when the config loads; `references/config-reference.md` lists each key with its station, and the wizard reads any new one to the owner. `check-config` must show no new errors. This release (1.1.0) adds two, both working at their defaults with nothing to write: `brain.gate_probe_seconds` (900: while Claude cannot be called, how often the daemon checks again) and `reader.read_documents` (true: document attachments reach the reading pack as text). The sync above carries `read_documents` into the reader config.
+New keys fill themselves with their defaults when the config loads; `references/config-reference.md` lists each key with its station, and the wizard reads any new one to the owner. `check-config` must show no new errors. This release (1.2.0) adds three, all working at their defaults with nothing to write: `edit_watch.enabled` (true: a message that passed the gate is read again while its window lasts, so an edit is judged again), `edit_watch.minutes` (30: that window, 1 to 1440) and `intake.verify_quotes` (true: every intake quote is looked up in the run's own pack and marked 🗣 when found, ≈ when not). Read default 15 (`references/defaults-and-why.md`) to the owner; a ruling lands as one decision note. None of them reaches the reader config (`sync-reader-config` may still report a per-run copy changed; that is the refresh, not a new key).
 
 ## 8 · The LaunchAgents
 
@@ -121,7 +136,7 @@ Read the `next:` line. `next: nothing to reinstall, the installed LaunchAgent al
 "$PY" "$KIT/daemon/wa_setup.py" install-launchd --config "$LIVE/config.json"
 ```
 
-When the evening intake job is installed, run `render-launchd` again with `--intake`, and `install-launchd --intake` only when its `next:` line names it. A release that changes only a script (`run.mjs` or `intake-evening.mjs`) prints `update <path>` for it and still `next: nothing to reinstall, ...`: the next start, or the next evening run, uses the new script. This release (1.1.0) changed neither the scripts nor the plist templates, so both runs keep every file and print `next: nothing to reinstall, the installed LaunchAgent already matches this plist`, unless a tool path in the config moved since the last render.
+When the evening intake job is installed, run `render-launchd` again with `--intake`, and `install-launchd --intake` only when its `next:` line names it. A release that changes only a script (`run.mjs` or `intake-evening.mjs`) prints `update <path>` for it and still `next: nothing to reinstall, ...`: the next start, or the next evening run, uses the new script. This release (1.2.0) changed neither the scripts nor the plist templates, so both runs keep every file and print `next: nothing to reinstall, the installed LaunchAgent already matches this plist`, unless a tool path in the config moved since the last render.
 
 ## 9 · Restart, and the fingerprint
 
@@ -142,7 +157,7 @@ shasum -a 256 "$KIT/daemon/wa_live.py"
 grep -m1 '^VERSION' "$KIT/daemon/wa_live.py"
 ```
 
-**Something new to offer.** A release can bring an optional step an existing install never saw. After the restart, name it to the owner once, with its cost, and run it only on their yes; never assume it. This release (1.1.0): the daemon can run on its own setup token, so that a login that expires on the desk does not stop it (`install/C2-daemon.md`, step 12; after `render-claude-wrapper`, follow the `next:` line it prints, normally `render-launchd` then `install-launchd`). Board search and document text in the packs need nothing: they work once the new code runs.
+**Something new to offer.** A release can bring an optional step an existing install never saw. After the restart, name it to the owner once, with its cost, and run it only on their yes; never assume it. This release (1.2.0) brings no optional step: the edit watch, the quote marks and the entry keys work once the new code runs, and the Patch 2 change was offered in step 6b. When the install never took the optional setup token of 1.1.0 (`install/C2-daemon.md`, step 12) and the owner was never asked, it can be offered now, once.
 
 ## 10 · Verify
 
@@ -172,11 +187,20 @@ grep -m1 '^VERSION' "$KIT/daemon/wa_live.py"
    ```sh
    shasum -a 256 "$KIT/daemon/wa_live.py"
    ```
-8. **The new cage rules reached the rendered settings** (when step 6 ran). Pass: the template's count and the rendered count are equal, as in station C2's check 4.
+8. **The new cage rules reached the rendered settings** (when step 6 ran). Pass: the template's count and the rendered count are equal, as in station C2's check 4 (`27 27` in this release, more when the owner carried rules of their own over).
    ```sh
    "$PY" -c 'import json,sys; n=lambda p, pre: sum(1 for r in json.load(open(p))["permissions"]["deny"] if r.startswith(pre)); print(n(sys.argv[1], "Read(/"), n(sys.argv[2], "Read(//"))' "$KIT/daemon/templates/claude-settings.json" "$LIVE/claude-settings.json"
    ```
+9. **The transcript cache is denied, on this Mac, from launchd** (after the restart; one tiny model call per folder). Drop `echo '{"read_canary": true}' > "$LIVE/commands/probe-claude.json"`, wait a minute. Pass: `probe-claude read_canary [secrets]: 读取被挡下 (secrets 夹的 deny 规则有效; ...)` and `probe-claude read_canary [transcripts-cache]: 读取被挡下 (transcripts-cache 夹的 deny 规则有效; ...)` among the newest `read_canary` lines; `没挡住` on either fails it (feature checklist K351).
+   ```sh
+   grep -F "read_canary [" "$LIVE/wa_live.log" | grep -v " 开始 (" | tail -2
+   ```
+10. **The new config keys load.** Pass: `True 30 True`.
+   ```sh
+   "$PY" -c 'import sys; sys.path.insert(0, sys.argv[1] + "/daemon"); import wa_common as W; c = W.load_config(sys.argv[2]); print(c["edit_watch"]["enabled"], c["edit_watch"]["minutes"], c["intake"]["verify_quotes"])' "$KIT" "$LIVE/config.json"
+   ```
+11. **Quotes are marked** (when O7 ran). Run the hand-built replay in `references/feature-checklist.md` (K344 to K346; temp files under `$HOME_DIR/acceptance/replay/`, no model call). Pass: the lines that section names, and `first entry unchanged True`. After the first real run with a capture, the new entry's second line opens with 🗣, 🎙, 📄 or ≈.
 
 ## 11 · Record
 
-Under `## Updates` in `<home>/INSTALL-PROGRESS.md`: the date, the version before and after, each seed merged or declined section by section, whether the LaunchAgent was reinstalled or restarted, the new fingerprint written into the registry, each Verify check with the value it printed, and the owner's answer to anything new that was offered.
+Under `## Updates` in `<home>/INSTALL-PROGRESS.md`: the date, the version before and after, each seed merged or declined section by section, each command-base patch change offered and applied or declined (step 6b), whether the LaunchAgent was reinstalled or restarted, the new fingerprint written into the registry, each Verify check with the value it printed, and the owner's answer to anything new that was offered.

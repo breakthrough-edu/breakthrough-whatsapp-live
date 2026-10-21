@@ -82,6 +82,18 @@ sqlite3 -readonly "$LIVE/state.sqlite" "select pk, msg_at, decision, policy from
 
 A push `⚠️ [WA live] 水位 <old> 比 WhatsApp 库最大编号 <max> 还大 ...` means WhatsApp's database was rebuilt or linked again: the watermark was reset to the newest message, older rows moved to `inbound_log_archive`, and messages from before the reset are not judged by themselves. Judge the ones that matter from the board.
 
+**The person edited the message.** The inbound log keeps one row per message, so an edit adds no row: the board and the intake buffer still show what the brain read before the edit, until the edit watch sees it. While `edit_watch.enabled` is true, a message that passed the gate is compared with WhatsApp Desktop's copy for `edit_watch.minutes` (30): an edit before the run swaps the waiting text (`改讯息 pk=<pk> (<name>): 还没起跑, burst 换成新版`), an edit after it queues the chat again with both versions (`改讯息 pk=<pk> (<name>): 旧版已经判过, 重新排队`, then `run #<id> 重读了对方改过的讯息 (<name>)`), an edit while that chat's run is going waits one pass (`改讯息 pk=<pk> (<name>): 那条对话正在跑, 下一拍再处理`), and an intake entry the edit changed gets a ✏️ correction entry beside the older one. No such line for that pk:
+
+```sh
+grep -F "pk=<pk>" "$LIVE/wa_live.log" | tail -3
+curl -s "http://127.0.0.1:$PORT/api/board" | "$PY" -c 'import json, sys; print(json.load(sys.stdin)["status"].get("edit_watch"))'
+```
+
+- `'enabled': False`: the watch is off (`edit_watch.enabled`); turn it on and restart, or press Judge now on the board.
+- The edit came after the window: the message had left the list (`改讯息观察: <n> 封过了 <m> 分钟, 移出名单`). Press Judge now, or raise `edit_watch.minutes` and restart.
+- The message did not pass the gate, or had no text (a photo without a caption): it was never watched. Judge now on the board.
+- To replay one by hand: `echo '{"old_text": "<the words before the edit>"}' > "$LIVE/commands/edit-check.<pk>.json"` puts that message on the list as if the old words had been seen; the next pass compares and requeues (one run).
+
 ## Runs are stuck with zero output
 
 A `run #<id> 开始` with no `完成` for many minutes, failures that say nothing was produced, or messages that pass the gate and wait without a run.

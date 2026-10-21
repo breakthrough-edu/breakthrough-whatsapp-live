@@ -91,7 +91,7 @@ case "$HOME_DIR $LABEL $PORT" in *"<"*|"~"*) echo "fill in HOME_DIR, LABEL and P
 
 Show the owner the dry run's plan (its first line names the home: it must be the header's), then run it. `init` never overwrites a file that exists: it reports it as kept and moves on. Writes:
 
-- folders, 0700: `runs-work/`, `prewarm/`, `transcripts-cache/`, `doc-text-cache/` (text of documents people sent, converted on this Mac), `secrets/` (holds `deny-canary.txt`, a random marker for the deny probe, and later the optional setup token if the owner chooses it at C2, step 12), `brain-cwd/`, `launchd/`, `live/`, `live/prompts/`, `live/digest/`, `live/runs/`, `live/commands/`, `live/dossier-backups/`, `live/variants/`
+- folders, 0700: `runs-work/`, `prewarm/`, `transcripts-cache/` (voice transcripts, and a second `deny-canary.txt` for the deny probe), `doc-text-cache/` (text of documents people sent, converted on this Mac), `secrets/` (holds `deny-canary.txt`, a random marker for the deny probe, and later the optional setup token if the owner chooses it at C2, step 12), `brain-cwd/`, `launchd/`, `live/`, `live/prompts/`, `live/digest/`, `live/runs/`, `live/commands/`, `live/dossier-backups/`, `live/variants/`
 - `live/config.json` (0600): from `daemon/templates/config.example.json`, with the tools found on this Mac and the whisper model folder filled in
 - the owner copies `live/prompts/brain-prompt.md`, `live/prompts/second-source-prompt.md`, `live/prompts/backfill-prompt.md` and `live/topic-map.json`, each keeping its seed stamp
 - `live/claude-settings.json` (0600): the settings every headless run uses, with absolute Read deny rules for the secrets (C2 checks them)

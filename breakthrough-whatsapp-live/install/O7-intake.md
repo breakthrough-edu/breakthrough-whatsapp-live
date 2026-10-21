@@ -1,6 +1,6 @@
 # Station O7 · Intake
 
-**Should the things people ask of you, and the things you promised, be caught into one intake buffer note in your vault, and placed only when you say "intake"?** What it costs: no extra model call during the day, because captures ride on each judgment run. Each run may append at most two entries, of five kinds only (a request with a date, something you promised and have not delivered, an appointment, money, a decision the other side stated), each with a verbatim quote of up to 200 characters, into one note in your vault (plus the second source's captures when O2 runs). Your command-base skill gains two patches: the "intake" mode and a line in the morning start. The optional evening push adds a second resident job (its own LaunchAgent) and, on evenings when entries are open, one model call on `brain.model` (read only tools, 4 turns, 300 seconds) that suggests a place for each entry, then pushes the open list, with names and quotes, through your outlet. Nothing is ever placed without your yes, and the daemon only appends.
+**Should the things people ask of you, and the things you promised, be caught into one intake buffer note in your vault, and placed only when you say "intake"?** What it costs: no extra model call during the day, because captures ride on each judgment run. Each run may append at most two entries, of five kinds only (a request with a date, something you promised and have not delivered, an appointment, money, a decision the other side stated), each with a quote of up to 200 characters (marked 🗣 when the program found it word for word in the message, ≈ when it is the brain's gist), into one note in your vault (plus the second source's captures when O2 runs). Your command-base skill gains two patches: the "intake" mode and a line in the morning start. The optional evening push adds a second resident job (its own LaunchAgent) and, on evenings when entries are open, one model call on `brain.model` (read only tools, 4 turns, 300 seconds) that suggests a place for each entry, then pushes the open list, with names and quotes, through your outlet. Nothing is ever placed without your yes, and the daemon only appends.
 
 The buffer's shape and the three command-base patches: `references/vault-proposals.md`, proposals c and d. The registry entries: proposal f. Why a buffer and a mode instead of writing straight into tasks: `references/defaults-and-why.md`, "12 · The intake buffer is a command-base mode". Turning the evening push on also re-rules "6 · Pushes only for errors, plus the morning digest". What the quotes mean for privacy: `references/privacy.md`, "Quotes in your vault, and switching each writer off".
 
@@ -30,7 +30,13 @@ One question at a time. Read default 12 before question 1.
 
 ### 1 · The buffer note
 
-On the owner's yes, write the note with the Write tool at the path from question 2: a few lines of rules in the owner's language (optional; nothing reads them), then the placed heading alone on its line (`## Placed` for `board.lang: en`, `## 已归` for `zh`). No front matter. Log one line in the owner's filing log, as their doctrine asks for any new file.
+On the owner's yes, write the note with the Write tool at the path from question 2: a few lines of rules in the owner's language (optional; nothing reads them), with the legend line for the quote marks among them, then the placed heading alone on its line (`## Placed` for `board.lang: en`, `## 已归` for `zh`). The legend line, for `board.lang: en`:
+
+```
+Marks: 🗣 the person's own words, found in the message · 🎙 found in a voice transcript · 📄 found in a document's text · ≈ gist, not verbatim (or not checked) · ✏️ the person edited the message; this entry replaces the older one.
+```
+
+For `zh`: `标记: 🗣 讯息里找得到的原话 · 🎙 语音转字里找到的 · 📄 文件内文里找到的 · ≈ 大意, 非逐字 (或未核对) · ✏️ 对方改了讯息, 以这条为准。` (`references/vault-proposals.md`, proposal c, has the five marks in both languages.) No front matter. Log one line in the owner's filing log, as their doctrine asks for any new file.
 
 ### 2 · Config and restart
 
@@ -96,13 +102,13 @@ Run each probe with the station's opening block in front of it. Every check must
    "$PY" "$KIT/daemon/wa_setup.py" check-config --config "$LIVE/config.json"
    "$PY" "$KIT/daemon/wa_intake.py" --config "$LIVE/config.json" --count-open
    ```
-3. **A capture landed once, in the right shape** (after the first run with a capture; ask a friend for a message with a date in it). Pass: a `run #<id> intake +<n> (<name>)` line; the entry heading `### <date> · [wa] · <who> · <what to do>` above the placed heading, with its open status line; `--count-open` one or two higher; the `intake_seen` table holds the quote's hash. (K275, K276)
+3. **A capture landed once, in the right shape** (after the first run with a capture; ask a friend for a message with a date in it). Pass: a `run #<id> intake +<n> (<name>)` line; the entry heading `### <date> · [wa] · <who> · <what to do>` above the placed heading, with its open status line; the entry's first mark, on the line under its heading, is 🗣 when the program found the quote in the message (🎙 in a voice transcript, 📄 in a document's text) and ≈ otherwise (`gist, not verbatim`, or `not checked` while `intake.verify_quotes` is false); `--count-open` one or two higher (plus one for each ✏️ correction the program appends, which does not count against the brain's two per run); the `intake_seen` table has the `key_kind` and `entry_key` columns and holds the quote's hashes. (K275, K276, K344)
    ```sh
    grep "intake +" "$LIVE/wa_live.log" | tail -1
-   grep -n -e "^### " -e "^## " -e "status: " -e "状态: " "$BUF"
+   grep -n -e "^### " -e "^## " -e "^- [🗣🎙📄≈]" -e "status: " -e "状态: " "$BUF"
    sqlite3 -readonly "$LIVE/state.sqlite" ".schema intake_seen"
    ```
-4. **Placing works, on a copy first.** Pass: `1. <heading>` from the list, then `placed → drop` and the heading, and one fewer open entry in the copy; the real buffer untouched. The copy is a `.txt` file (`--buffer` does not care about the extension), and the block takes the buffer's path from config instead of the `BUF` line: a command holding `cp` and any `.md` path is refused by the frontmatter guard. Run it with its own first lines, not the opening block. (K277)
+4. **Placing works, on a copy first.** Pass: `1. <heading>` from the list with a `    key: <12 hex>` line under the entry, then `placed → drop` and the heading, and one fewer open entry in the copy; the real buffer untouched. The intake mode places by key: `--mark-placed-key KEY --to "<where>"` (KEY a full key or a unique prefix of at least 8 hex, as `--list-open` prints it; `--list-open --json` gives full keys, `--list-placed [--json]` the placed zone) prints the same confirmation, and is the safe way to place several entries in a row, because numbers shift and keys do not. A prefix matching two entries answers `key <p> matches <n> entries (run --list-open again)`; an entry placed already, `entry <k> is already placed → <where>`. The number form below is the same placement (K277, K343). The copy is a `.txt` file (`--buffer` does not care about the extension), and the block takes the buffer's path from config instead of the `BUF` line: a command holding `cp` and any `.md` path is refused by the frontmatter guard. Run it with its own first lines, not the opening block. (K277)
    ```sh
    KIT=~/.claude/skills/breakthrough-whatsapp-live; PY=/usr/bin/python3
    HOME_DIR="<paths.home from the progress file header>"; LIVE="$HOME_DIR/live"

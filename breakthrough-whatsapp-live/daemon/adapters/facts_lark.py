@@ -265,7 +265,7 @@ def selftest():
                  [[{"text": "Blake "}, {"text": "Chen"}], "0120000002", "2026-07-19T00:00:00.000+08:00", ["Workshop August"], None, [{"id": "recA1"}], True, False, None, None, "null", None]]
     roster_p2 = [["Casey Ng", "", None, None, None, None, None, None, False, [], None, None]]
     pay_fields = ["Paid At", "Amount", "Method", "Seats", "Payer", "Payer Phone", "Cohort"]
-    pay_rows = [["2026-07-31T00:00:00.000+08:00", "2,788", ["Bank Transfer"], 4, [{"id": "recA1"}], "+60120000001", ["August"]],
+    pay_rows = [["2026-07-28T00:00:00.000+08:00", "1,460", ["Bank Transfer"], 3, [{"id": "recA1"}], "+60120000001", ["August"]],
                 [1788192000000, "800", ["Card"], None, None, "+65 9000 0001", None]]
     calls = []
 
@@ -297,7 +297,7 @@ def selftest():
           "rich text name, via link, empty_is_false flag, string null tag")
     check(c["phone"] is None and c["attended"] is None, "empty phone and empty attendance stay empty")
     p1, p2 = got["payments"]
-    check(p1["amount"] == 2788 and p1["person_record"] == "recA1" and p1["method"] == "Bank Transfer" and p1["participants"] == 4
+    check(p1["amount"] == 1460 and p1["person_record"] == "recA1" and p1["method"] == "Bank Transfer" and p1["participants"] == 3
           and p1["currency"] == "SGD", "payment mapped, table currency wins over facts.currency")
     check(p2["person_record"] is None and p2["phone"] == "+65 9000 0001" and p2["date"] is not None, "payment without link keeps the phone fallback")
     check(any("shoe_size" in w for w in got["warnings"]) and got["config"]["people_tables"][0]["table"] == "tblFAKEroster",

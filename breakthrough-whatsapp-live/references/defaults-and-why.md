@@ -51,6 +51,7 @@ When you later change a ruled value, the new note names the old one in `supersed
 | 12 | The intake buffer is a command-base mode | O7 |
 | 13 | A second message source is pulled nightly | C5, O2 |
 | 14 | Skills point; rulings live in your Decisions | O11 |
+| 15 | An edited message is read again for 30 minutes | C2 |
 
 ## 1 · Read only the local database, and never send
 
@@ -202,7 +203,9 @@ A person's own payment outranks a payment someone else made for them. A payment 
 
 **Why** What a model catches from messages includes mistakes and duplicates. Written straight into tasks or a calendar, it would dirty your command base, and nobody goes back to delete those later. The buffer splits catching from placing: the machine makes sure nothing is lost, and you put each item where it belongs. Fewer is better, and in groups only things said to you count. Placing is a mode of your command-base skill rather than a skill of its own because a second skill would compete with the command base for the same trigger words. The daemon only ever appends; only the intake mode changes an entry's status.
 
-**Change it here** `intake.enabled` (false until O7; false also stops the second source's captures and the evening push), `intake.buffer` (the same file as `paths.intake_buffer`; set one of them), `intake.evening_push` (false), `intake.evening_at` (20:00), `intake.rules_file` (optional placement rules the evening job reads). The evening job: `daemon/templates/intake-evening.mjs` with `intake-evening.plist`, installed only when the push is on. The buffer's format and the command-base patches: `references/vault-proposals.md`, proposals c and d.
+Every quote is looked up in the run's own message pack before the entry is written: what the program finds is marked 🗣 (🎙 for a voice transcript, 📄 for a document's text) and copied from the stored message, and what it cannot find is marked ≈ as a gist, in the brain's words. A machine never promotes a paraphrase to a quote, because the buffer is placed later by someone who was not reading the chat: a date or an amount on a line marked as the person's words is used as written, and a paraphrase that looks like a quote turns a model's slip into something the person seems to have said. The mark keeps the two apart, so a gist is checked against the chat before it goes into a task or the calendar, and a quote is not.
+
+**Change it here** `intake.enabled` (false until O7; false also stops the second source's captures and the evening push), `intake.buffer` (the same file as `paths.intake_buffer`; set one of them), `intake.evening_push` (false), `intake.evening_at` (20:00), `intake.rules_file` (optional placement rules the evening job reads), `intake.verify_quotes` (true; false writes every quote as ≈ not checked). The evening job: `daemon/templates/intake-evening.mjs` with `intake-evening.plist`, installed only when the push is on. The buffer's format and the command-base patches: `references/vault-proposals.md`, proposals c and d.
 
 **Re-rule it** Station O7 reads this default and asks whether you want the open list pushed in the evening. Saying yes also re-rules default 6, so the note says both. One note.
 
@@ -227,3 +230,13 @@ The model's output is checked against the source: a person id must really appear
 **Change it here** The kit's own `SKILL.md` stays a pointer table. Rulings: `paths.decisions_dir`. Seeds versus your copies (`live/prompts/`, `live/topic-map.json`, the three playbook folders): `wa_setup.py seed-status` and `install/update.md`.
 
 **Re-rule it** Station O11 checks with you that every default ruled during the install is a note in your Decisions room and that none is written into a skill. If your vault has no Decisions room, the wizard stops and proposes a home before going on.
+
+## 15 · An edited message is read again for 30 minutes
+
+**We default to** keeping each message that passed the gate on a watch list for 30 minutes and reading it again while it is there. When the person edited it, a burst still waiting for its run gets the new text; a burst already judged is queued again with the old and the new version side by side, so the brain corrects every field it wrote from the old one. An intake entry the edit changed is corrected by appending a new entry with the words before and after; the older entry is never rewritten.
+
+**Why** WhatsApp lets a sender edit a message for about a quarter of an hour after sending it, and an edit is usually a correction that matters: a different date, another amount, the right address. A judgment and a draft made from the old words then answer something the person no longer says, and the intake entry carries a date that is no longer true. The window is longer than the edit allowance because a run may still be in flight when the edit lands, and the next pass has to see it after that run ends. Rereading costs one query on the local database per pass while anything is on the list, and a model run only when the text really changed. The older intake entry stays as it was because the owner may already have placed it, and what the machine wrote is part of the record; the correction names what it replaces instead.
+
+**Change it here** `edit_watch.enabled` (true), `edit_watch.minutes` (30, 1 to 1440). Both need a daemon restart. The watch list sits in `<live>/state.sqlite` (`references/privacy.md`, "Quotes in your vault").
+
+**Re-rule it** Station C2 reads this default with the debounce window. One note.

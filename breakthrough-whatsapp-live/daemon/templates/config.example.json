@@ -13,6 +13,10 @@
     "max_wait_seconds": 180,
     "global_concurrency": 2
   },
+  "edit_watch": {
+    "enabled": true,
+    "minutes": 30
+  },
   "doorbell": {
     "enabled": true,
     "wal_path": "<auto>",
@@ -253,7 +257,8 @@
     "buffer": "",
     "evening_push": false,
     "evening_at": "20:00",
-    "rules_file": ""
+    "rules_file": "",
+    "verify_quotes": true
   },
   "voice": {
     "enabled": true,
@@ -325,6 +330,8 @@
     "debounce.quiet_seconds": "A burst starts after this many seconds without a new message in that chat.",
     "debounce.max_wait_seconds": "A burst starts at the latest this many seconds after its first message, even if messages keep coming.",
     "debounce.global_concurrency": "How many brain runs may run at the same time.",
+    "edit_watch.enabled": "true: a message that passed the gate is read again while edit_watch.minutes lasts; when the person edited it, a burst still waiting gets the new text, and a burst already judged is queued again with the old and the new version. Changes need a daemon restart.",
+    "edit_watch.minutes": "How long a message stays on the watch list after it passed the gate, 1 to 1440. WhatsApp allows edits for about a quarter hour after sending, and a run may still be in flight then. Changes need a daemon restart.",
     "doorbell.enabled": "false: the daemon keeps scanning and logging (skip:doorbell_off) and marking your replies, but starts no automatic runs; commands and the board still work.",
     "doorbell.wal_path": "WhatsApp Desktop write ahead log that the doorbell watches. <auto> is ChatStorage.sqlite-wal in the WhatsApp group container.",
     "doorbell.poll_seconds": "How often the doorbell checks whether the database file changed.",
@@ -427,6 +434,7 @@
     "intake.buffer": "Intake buffer note path. Same file as paths.intake_buffer; set one of them.",
     "intake.evening_push": "Install the evening job that pushes the open intake entries with a suggested place each.",
     "intake.evening_at": "Local time of the evening intake push.",
+    "intake.verify_quotes": "true: every WhatsApp quote in an intake entry is looked up in the run's own message pack before it is written; found is marked as verbatim, not found as a gist. false writes every quote as not checked. Changes need a daemon restart.",
     "intake.rules_file": "Optional note that says where each kind of intake entry usually belongs; the evening push reads it to suggest a place. Empty uses default places.",
     "voice.enabled": "Learn your voice from drafts you edited before sending.",
     "voice.examples": "How many draft and sent pairs are shown to the brain as examples.",

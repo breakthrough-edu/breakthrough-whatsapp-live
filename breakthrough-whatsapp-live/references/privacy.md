@@ -22,16 +22,16 @@ WhatsApp Live reads private messages that other people sent you. This page says,
 |---|---|
 | `~/Library/Group Containers/group.net.whatsapp.WhatsApp.shared/` | WhatsApp Desktop's own database and media: every message and file the app has synced. The kit opens it read only and never writes to it. |
 | `<home>/runs-work/<key>/`, `<home>/prewarm/` | The reader's working copies: snapshots of the database files taken for a read, plus the reading packs built from them. Full chat history, one copy per working folder. The kit does not delete these (`references/troubleshooting.md`). |
-| `<home>/transcripts-cache/` | Text of every transcribed voice note. |
+| `<home>/transcripts-cache/` | Text of every transcribed voice note, and a second `deny-canary.txt` written by `init` for the deny probe. |
 | `<home>/doc-text-cache/` | Text of the documents people sent (Word, Excel, PowerPoint, RTF, ODT, Pages), converted on this Mac for the reading packs ("The document text cache", below). |
-| `<home>/secrets/` | `deny-canary.txt`, a random marker with no secret in it, written by `init` for the deny probe; and only when you chose the optional setup token, `claude-bot.env`, the token itself (0600) ("The setup token file", below). |
+| `<home>/secrets/` | `deny-canary.txt`, a random marker with no secret in it, written by `init` for the deny probe (a second one sits in `<home>/transcripts-cache/`); and only when you chose the optional setup token, `claude-bot.env`, the token itself (0600) ("The setup token file", below). |
 | `<home>/bin/claude-bot` | Only with the setup token: a short wrapper that loads the token file and runs `claude`. It holds the file's path, never the token. |
 | `<home>/config.json` | The reader's config: your phone, your names, ignored chats, whisper settings. |
 | `<home>/brain-cwd/` | Empty on purpose: the working folder of every headless run. |
 | `<home>/INSTALL-PROGRESS.md`, `<home>/INSTALLED.md` | Your answers during install and, when your vault keeps no registry, the six-cell entries. Can name tools you chose and groups you ticked. |
 | `<live>/config.json` (0600) | Your phone and names, group names with their policies, your vocabulary and business paragraph, paths. |
 | `<live>/telegram.json` (0600) | The push bot's token and chat id. |
-| `<live>/state.sqlite` | Per conversation: name, world, stage, priority, latest draft, the brain's situation line and timeline, rolling summary, calendar hint. Per run: the brain's full output, token counts, errors. Pending bursts with their message text. One row per inbound message with sender name and gate decision (no message text). |
+| `<live>/state.sqlite` | Per conversation: name, world, stage, priority, latest draft, the brain's situation line and timeline, rolling summary, calendar hint. Per run: the brain's full output, token counts, errors. Pending bursts with their message text. One row per inbound message with sender name and gate decision (no message text). The edit watch list: the words of each message that passed the gate, kept for at most `edit_watch.minutes` ("Quotes in your vault", below). |
 | `<live>/summaries.md` | One line per conversation, written by the brain. |
 | `<live>/facts.json` | Names, phones, payments and attendance from your facts source. |
 | `<live>/voice-pairs.jsonl` | The brain's drafts next to what you actually sent. Nothing the other side wrote, no names. |
@@ -48,7 +48,7 @@ The daemon sets `umask 077` when it starts, so every file it and the programs it
 | Where | What lands |
 |---|---|
 | Person notes (`paths.people_dir`) | What the model wrote about each person from their messages (who they are, what they want, where things stand, how to talk to them), the person's own words quoted where the person-dossier playbook asks for them, a recent block of short lines, and front matter with their WhatsApp id and phone. |
-| Intake buffer (`intake.buffer`) | Each entry names the person, one line of what to do, one verbatim quote of up to 200 characters, and the machine's guess at where it belongs. |
+| Intake buffer (`intake.buffer`) | Each entry names the person, one line of what to do, one quote of up to 200 characters (marked 🗣 when the program found it word for word in the message, ≈ when it is the brain's gist), and the machine's guess at where it belongs. A correction entry (✏️) also holds the words a message had before the person edited it. |
 | Filing log (`paths.filing_log`) | One line per placed note, naming the note. |
 | Decisions (`paths.decisions_dir`) | Your rulings on the defaults. No conversation content. |
 | Playbook folders | Method text, and a table of outputs listed by address. |
@@ -87,7 +87,7 @@ Two things to know about that table:
 - **The reader's working copies, the run folders and the logs.** Never backed up or uploaded by the kit. A whole-disk or home folder backup you run yourself (Time Machine, a cloud backup app) will copy them, like everything else in your home folder.
 - **The push token.** `telegram.json` is never backed up, and the brain is denied reading it.
 - **The setup token**, when you use one. Only the wrapper's shell reads it; no run, no backup and no log ever holds it.
-- **The document text cache.** Only the text of documents in a run's own pack travels, inside that run.
+- **The document text cache and the voice transcript cache.** Only the text of documents and voice notes in a run's own pack travels, inside that run.
 - **Your WhatsApp account.** The kit opens no connection to WhatsApp at all.
 
 ## What else leaves, and to whom
@@ -120,12 +120,13 @@ The brain's tools are Read, Glob and Grep, and those tools can look anywhere the
 | `<home>/config.json` | The reader config: your phone and names. |
 | `<home>/secrets/**` | The optional setup token (`claude-bot.env`): with it, anyone can use your Claude account. Also the deny probe's marker, which proves this rule holds. |
 | `<home>/doc-text-cache/**` | Text of documents people sent in every chat: a run needs only its own chat's, which its pack already holds. |
+| `<home>/transcripts-cache/**` | Text of the voice notes of every chat: a run needs only its own chat's, and those transcripts already reach it inside its pack. Also the second deny probe marker, which proves this rule holds. |
 | `~/Library/Group Containers/group.net.whatsapp.WhatsApp.shared/*.sqlite*` | WhatsApp Desktop's own databases: every message on the Mac. The brain reads its chat through the pack instead. |
 | `~/.ssh/**`, `~/Library/Keychains/**`, `~/.config/**/credentials*`, `~/.aws/**`, `~/.netrc`, `~/.npmrc`, `~/.gnupg/**`, `~/.docker/config.json`, `~/.claude/.credentials.json` | Keys and credentials that open other machines and accounts. Nothing the brain does needs them. |
 
-Each rule is written as `Read(//<absolute path without its leading slash>)`, 26 in all (`daemon/templates/claude-settings.json` is the list). This form blocks the Read tool under `claude -p --settings`; the canary probe in `references/pitfalls.md`, pit 10, confirms it on your own Mac.
+Each rule is written as `Read(//<absolute path without its leading slash>)`, 27 in all (`daemon/templates/claude-settings.json` is the list). This form blocks the Read tool under `claude -p --settings`; the canary probe in `references/pitfalls.md`, pit 10, confirms it on your own Mac.
 
-What the rules leave readable, on purpose: your vault (the brain opens the notes the topic map and its lookup point at), WhatsApp's media under `Message/Media/` (the images and files a pack lists), the transcript cache in `<home>/transcripts-cache/`, and the rest of `live/` (`summaries.md`, the prompts, the topic map, `seeds.json`, `commands/`, `calendar/`). A rule you add to `live/claude-settings.json` counts as an owner edit (`seed-status` reports it, `install/update.md` carries it over); afterwards run one test judgment to confirm it still completes.
+What the rules leave readable, on purpose: your vault (the brain opens the notes the topic map and its lookup point at), WhatsApp's media under `Message/Media/` (the images and files a pack lists), and the rest of `live/` (`summaries.md`, the prompts, the topic map, `seeds.json`, `commands/`, `calendar/`). A rule you add to `live/claude-settings.json` counts as an owner edit (`seed-status` reports it, `install/update.md` carries it over); afterwards run one test judgment to confirm it still completes.
 
 ## The setup token file
 
@@ -149,7 +150,7 @@ Only when the owner chose the optional setup token at station C2 (`install/C2-da
 
 | Writer | What lands | Where | Switch it off |
 |---|---|---|---|
-| Intake capture from a triage run | One verbatim quote (up to 200 characters), who said it, what to do, the machine's guess | Intake buffer | `intake.enabled: false` |
+| Intake capture from a triage run | One quote (up to 200 characters, marked 🗣 when found word for word, ≈ when a gist), who said it, what to do, the machine's guess; a correction entry also holds the words before an edit | Intake buffer | `intake.enabled: false` |
 | Intake capture from the second source | The same, tagged with that source | Intake buffer | `intake.enabled: false` (it stops every intake writer and the evening push), or `second_source.enabled: false` |
 | Recent line from a one-to-one run | One line the brain wrote about where things stand, not a quote | The recent block of an existing person note | See below |
 | Recent line from a group speaker | The speaker's own words, up to 90 characters, with the group's name | The recent block of that speaker's existing note | See below |
@@ -157,6 +158,10 @@ Only when the owner chose the optional setup token at station C2 (`install/C2-da
 | Person note body | The model's account of the person, with their own words quoted where the playbook asks; quotes are checked against the pack | The note | `dossier.enabled: false` |
 
 **Recent lines.** Every recent line goes through one writer, `Dossier.append_recent`, which only adds to notes that already exist and already carry the recent block (between `<!-- wa-live:begin` and `<!-- wa-live:end -->`); it never creates a note, and it writes nothing while `dossier.enabled` is false or the daemon runs with `--dry-run`. A switch is only as good as every writer honoring it, so prove it on your own install before relying on it: take `md5 -q <that person's note>`, let one of that person's chats run, and compare. Stopping the daemon always stops them.
+
+**What 🗣 promises, and what ≈ means.** Before an intake entry is written, the program looks its quote up in the run's own message pack (`intake.verify_quotes`, on by default). 🗣 (🎙 for a voice transcript, 📄 for a document's text) means the words on the line are the stored characters of that message, copied by the program, never retyped by the brain: what the line says the person wrote, they wrote. ≈ `gist, not verbatim` means the program did not find those words: the line is the brain's summary and may be wrong in a detail, so a date, amount or place in it is checked against the chat before it is used. ≈ `not checked` means nobody looked (the switch is off, or the pack could not be read). A machine never promotes a gist to a quote, because a person's paraphrased words in a vault that syncs read as something they said.
+
+**The edit watch.** WhatsApp lets a person edit a message after sending it, so a message judged a minute ago may now say something else. While `edit_watch.enabled` is true, the daemon keeps the words of each message that passed the gate in the `edit_watch` table of `<live>/state.sqlite`, for at most `edit_watch.minutes` (30) after it passed, and compares them with what WhatsApp Desktop holds now; the row is purged when the window ends. The log names the conversation and never the words. `state.sqlite` is in the nightly backup, so words still on the watch list at backup time are in that night's copy, for as long as the backup folder keeps it (`backup.keep`). An edit that changed an intake entry's words is written as a new correction entry (✏️) holding the old and the new words; the older entry stays as it was. Turning it off: `edit_watch.enabled: false` and a restart; edits are then no longer seen, and the table empties within the window.
 
 **Removing a quote that already landed.** Edit the note or the buffer entry by hand. Earlier versions still sit in `<live>/dossier-backups/<note>/` (three) and in every nightly backup folder (seven days), and in your vault's own sync history; clean those too if the words must be gone everywhere.
 
