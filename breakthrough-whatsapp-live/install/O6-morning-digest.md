@@ -1,6 +1,6 @@
 # Station O6 · Morning digest
 
-**When should yesterday's summary arrive, and should it reach your phone, or should the digest be switched off?** It is already on: 08:00, written to `live/digest/`, shown in the board's "Yesterday" card, and pushed once an outlet exists. What it costs: no model call. At `digest.at` the daemon reads the state database and the result files in `live/` and writes `live/digest/<yesterday>.md` (0600, in the nightly backup): how many messages passed the gate and how many runs they cost, who still waits on you (names and a situation line each), stage moves, person note jobs, facts mismatches (names), and a health block for every connected part. The pushed short form carries the same names through the outlet. It is the only scheduled push, and on a quiet day it still arrives, which is what makes silence trustworthy.
+**When should yesterday's summary arrive, and should it reach your phone, or should the digest be switched off?** It is already on: 08:00, written to `live/digest/`, shown in the board's "Yesterday" card, and pushed once an outlet exists. What it costs: no model call. At `digest.at` the daemon reads the state database and the result files in `live/` and writes `live/digest/<yesterday>.md` (0600, in the nightly backup): how many messages passed the gate and how many runs they cost, who still waits on you (names and a situation line each), stage moves, person note jobs, facts mismatches (names), a health block for every connected part, and, on a day the board's Today brief was built (station O7), one line of counts about it, right after the health line. The pushed short form carries the same names through the outlet. It is the only scheduled push, and on a quiet day it still arrives, which is what makes silence trustworthy.
 
 Why one digest and errors only: `references/defaults-and-why.md`, "6 · Pushes only for errors, plus the morning digest". The outlet it pushes through: `references/interfaces.md`, "4 · Push outlet", set at station O4.
 
@@ -10,7 +10,7 @@ HOME_DIR="<paths.home from the progress file header>"
 LIVE="$HOME_DIR/live"
 PY=/usr/bin/python3
 LABEL="<launchd.label from the progress file header>"
-ILABEL="$LABEL.intake"
+ILABEL="<launchd.intake_label from the progress file header>"
 PORT="<board.port from the progress file header>"
 ```
 
@@ -49,7 +49,7 @@ HOME_DIR="<paths.home from the progress file header>"; LIVE="$HOME_DIR/live"
 "$PY" "$KIT/daemon/wa_digest.py" --config "$LIVE/config.json"
 ```
 
-The default is a dry run: it prints the text, `---- <n> lines, empty=<True or False> ----` and the data behind it, and writes and pushes nothing. `--for YYYY-MM-DD` builds another day. Read it with the owner: the names in "still waiting on you" should be the people they really owe a reply.
+The default is a dry run: it prints the text, `---- <n> lines, empty=<True or False> ----` and the data behind it, and writes and pushes nothing. `--for YYYY-MM-DD` builds another day; `--for` today's date builds a partial digest that says `today` (`今天`) wherever it names the day. Read it with the owner: the names in "still waiting on you" should be the people they really owe a reply.
 
 ### 3 · Written by the daemon, then pushed
 
@@ -93,6 +93,11 @@ Run each probe with the station's opening block in front of it. Every check must
 6. **Every kind of run is counted.** Pass: one row per kind that ran yesterday (`direct`, `group`, `dossier`, `second_source`, `backfill`), matching the digest's first block. (K264)
    ```sh
    sqlite3 -readonly "$LIVE/state.sqlite" "select kind, count(*) from runs where started_at >= date('now', 'localtime', '-1 day') and started_at < date('now', 'localtime') group by kind"
+   ```
+
+7. **The brief line** (only once the Today brief is on, station O7; come back to this check after O7). Pass: on a day the brief was built, `Brief: rebuilt <n> times · <n> cards (OK <n> · No <n> · retired <n>)` (in Chinese `简报: 重算 <n> 次 · 卡 <n> 张 (好 <n> · 不用 <n> · 收起 <n>)`), and `brief <n>/<n>` (`简报 <n>/<n>`, builds and cards) in the short form on the phone; no such line on a day without a build, or while the brief is off. (K373)
+   ```sh
+   "$PY" "$KIT/daemon/wa_digest.py" --config "$LIVE/config.json" --for <a day the brief was built> | grep -i -e "brief" -e "简报"
    ```
 
 The next morning: the digest arrives at the ruled time without a command file, and its health block has a part for every station connected so far (K269).

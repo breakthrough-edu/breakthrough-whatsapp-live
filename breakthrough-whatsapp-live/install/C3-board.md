@@ -8,7 +8,7 @@ HOME_DIR="<paths.home from the progress file header>"
 LIVE="$HOME_DIR/live"
 PY=/usr/bin/python3
 LABEL="<launchd.label from the progress file header>"
-ILABEL="$LABEL.intake"
+ILABEL="<launchd.intake_label from the progress file header>"
 PORT="<board.port from the progress file header>"
 ```
 
@@ -73,7 +73,8 @@ With the owner, on the phone first, then on the Mac. The labels below are the En
 **Left column**
 - Search, on top of the list (the `/` key on the Mac): every word typed must appear in a message or a file name, in any chat WhatsApp Desktop keeps on this Mac. Results show the chat, the time, the speaker in a group and an excerpt with the words marked; with a conversation open, a chip limits them to it. A click opens the context view, the conversation around that message with it marked, and "‹ Results" goes back. Search only reads.
 - Buckets with counts: Open, Reply, Waiting, FYI, Ignore, Replied / done, All.
-- Rows: name, how long ago, one situation line, small chips, and a colored dot on the ones waiting for the owner.
+- The sort toggle in the list header: priority order (the default), or newest message first. The choice is remembered on that device.
+- Rows: an initials avatar (a group glyph for groups), name, how long ago, one situation line clamped to two lines with "more" to open that row only, small chips, and a colored dot on the ones waiting for the owner.
 - Other chats: every chat active in the last `board.others_days` days that was never judged, up to `board.others_limit`. Opening one offers "Judge now"; a chat the gate does not pass asks for confirmation first, because a judgment spends usage.
 - Footer: today's runs and tokens, the watermark, and how many hours ago WhatsApp last wrote its database.
 - A banner on top, only while the daemon cannot call Claude (a login or a usage limit): since when, what to do, when it checks next, and that pending messages stay queued (`references/operating.md`, "When the brain cannot be called"). Nothing to see on a healthy install.
@@ -95,7 +96,9 @@ With the owner, on the phone first, then on the Mac. The labels below are the En
 - Mac: hover a row and press ✓, or select it and press D. Inside the draft box D is just a letter.
 - Phone: swipe the row left.
 
-**Layout**: three columns on a wide screen, two on a medium one, one on the phone with "‹ List" to go back.
+**Layout**: three columns on a wide screen, two on a medium one, one on the phone with "‹ List" to go back. On a wide screen the grips between the columns resize them (double-click a grip to reset); the widths are remembered on that device. The action row under a conversation wraps instead of cutting a button off.
+
+**Today** (only once station O7 turns the brief on): a Today button in the rail opens the board's brief, per project of yours, with cards to answer OK or No and a refresh button that builds now and follows the build until it lands. On the phone it is a full page with a way back. Nothing on it writes into the vault: placing happens in the intake mode (`install/O7-intake.md`, question 5).
 
 ## Verify
 

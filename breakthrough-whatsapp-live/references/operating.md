@@ -12,7 +12,7 @@ HOME_DIR="<paths.home from the progress file header>"
 LIVE="$HOME_DIR/live"
 PY=/usr/bin/python3
 LABEL="<launchd.label from the progress file header>"
-ILABEL="$LABEL.intake"
+ILABEL="<launchd.intake_label from the progress file header>"
 PORT="<board.port from the progress file header>"
 case "$HOME_DIR $LABEL $PORT" in *"<"*|"~"*) echo "fill in HOME_DIR, LABEL and PORT first (HOME_DIR as an absolute path)" >&2; exit 1;; esac
 ```
@@ -49,7 +49,7 @@ A healthy daemon shows a start line `wa_live <version> 起跑 · model=<model> �
 |---|---|---|---|
 | `~/Library/LaunchAgents/<label>.plist` | The daemon's LaunchAgent; node runs `run.mjs`, which runs python | 0644 | no |
 | `<home>/launchd/run.mjs`, `<home>/launchd/<label>.plist` | The rendered copies `install-launchd` installs | 0644 | no |
-| `<home>/launchd/intake-evening.mjs`, `<home>/launchd/<intake_label>.plist` | The evening intake job, when installed | 0644 | no |
+| `<home>/launchd/intake-evening.mjs`, `<home>/launchd/<intake_label>.plist` | Only an evening intake job an earlier release installed and the owner kept (retired; `install/update.md` removes it on a yes) | 0644 | no |
 | `<home>/config.json` | The reader config, generated from `live/config.json` by `sync-reader-config` and at every daemon start | 0600 | no |
 | `<home>/transcripts-cache/` | Voice transcripts, one JSON file per voice note, shared by the reader, the daemon and the board | 0700 | no |
 | `<home>/doc-text-cache/` | Text of Word, Excel, PowerPoint, RTF, ODT and Pages attachments, one JSON file per document, shared by every read (`reader.read_documents`) | 0700 | no |
@@ -61,10 +61,10 @@ A healthy daemon shows a start line `wa_live <version> 起跑 · model=<model> �
 | `<home>/sweeps/`, `<home>/last-sweep.json` | Packs from manual reads through the reader skill | 0600 | no |
 | `<home>/INSTALL-PROGRESS.md` | The install's progress file and log | 0600 | no |
 | `<live>/config.json` | The config; `config.json.bak-<time>` copies before each change | 0600 | yes, secrets redacted (the dated copies no) |
-| `<live>/state.sqlite` | Conversations, runs, pending bursts, the inbound log, person note jobs, intake dedupe, the edit watch list (words kept at most `edit_watch.minutes`), `meta` | 0600 | yes |
+| `<live>/state.sqlite` | Conversations, runs, pending bursts, the inbound log, person note jobs, intake dedupe, the edit watch list (words kept at most `edit_watch.minutes`), the Today brief's tables (`today_brief`, `today_proposals`, `today_assign`), `meta` | 0600 | yes |
 | `<live>/wa_live.log` (`.1` to `.3`) | The daemon's log, rotated at 5 MB, three old copies | 0600 | no |
 | `<live>/stderr.log` | `run.mjs` lines (`start: node`, `received SIGTERM, forwarding to python pid`, `python exited code=`) and anything python prints before its log opens | 0600 (launchd creates it; the daemon sets 0600 at every start) | no |
-| `<live>/intake-evening.log` | The evening intake job's lines | 0600 (launchd creates it; the job sets 0600 each time it runs) | no |
+| `<live>/intake-evening.log` | A kept evening intake job's lines | 0600 (launchd creates it; the job sets 0600 each time it runs) | no |
 | `<live>/claude-settings.json` | The rendered cage: tool denies, hooks off, Read deny rules | 0600 | no (init renders it) |
 | `<live>/summaries.md` | One summary line per conversation, what the brain reads instead of other chats | 0600 | yes |
 | `<live>/prompts/` | Owner copies of `brain-prompt.md`, `second-source-prompt.md`, `backfill-prompt.md` | 0600 | yes |
@@ -74,6 +74,7 @@ A healthy daemon shows a start line `wa_live <version> 起跑 · model=<model> �
 | `<live>/commands/` | Drop command files here (below) | 0700 | no |
 | `<live>/runs/` | One folder per run (below); never cleaned by the kit | 0700 | no |
 | `<live>/digest/<date>.md` | Morning digests | 0600 | yes |
+| `<live>/today/<date>.json`, `<live>/today/stats.json` | The latest Today brief of each day, and the counts `today-stats.json` writes | 0600 | yes (the folder) |
 | `<live>/facts.json` | The facts job's result (O1) | 0600 | yes |
 | `<live>/second-source-whitelist.json`, `<live>/second-source-last.json` | The chats the second source pulls, and the last pull's result (O2) | 0600 | the whitelist only |
 | `<live>/backup-last.json` | The last backup's result (O5) | 0600 | no |
@@ -138,6 +139,7 @@ Every model call leaves a folder under `live/runs/`, named by time:
 | `dossier-<time>-<jid>/` | A person note run: `sweep.json`, `sweep.md`, `prompt.md`, `claude.stdout.jsonl`, `note.md` |
 | `second-source-<time>/` | A second source pull: `prompt.md` and `result.txt` when the model was called |
 | `backfill-<time>-b<n>/` | One backfill batch: `sweep-<jid>.json` and `.md`, `prompt.md`, `result.txt` |
+| `<YYYYmmdd-HHMMSS>-today/` | A Today brief build: `prompt.md`, the model's output stream, and `today_brief.json` when the build succeeded. Only this folder holds the words of your replies the brief read |
 | `probe-<time>[-<label>]/` | A `probe-claude.json`: `cmd.txt`, `stdout.jsonl`, `stderr.txt`, `sample.txt` when it hung |
 | `prewarm-<time>-<days>d.json` | A prewarm's summary (a file, not a folder) |
 
@@ -154,9 +156,10 @@ sqlite3 -readonly "$LIVE/state.sqlite" "select name, world, stage, priority, tag
 sqlite3 -readonly "$LIVE/state.sqlite" "select id, name, reason, ok, error from dossier_jobs order by id desc limit 5"
 sqlite3 -readonly "$LIVE/state.sqlite" "select key, value from meta where key like 'daily_%' or key = 'dossier_nightly_last' or key like 'seed_fallback:%'"
 sqlite3 -readonly "$LIVE/state.sqlite" "select id, kind, started_at, ended_at, substr(detail, 1, 80) from brain_outages order by id desc limit 5"
+sqlite3 -readonly "$LIVE/state.sqlite" "select substr(id, 1, 8), date, rev, project, kind, task, status from today_proposals order by updated_at desc limit 10"
 ```
 
-`runs.kind` is `direct` or `group` for judgments, `dossier`, `second_source`, `backfill` or `probe` (the deny probe) for the rest. `brain_outages` holds one row per time the circuit breaker opened: `kind` `auth` or `limit`, `ended_at` empty while it is still open. `inbound_log.decision` is one of `pass:all`, `pass:mention`, `skip:no_mention`, `skip:policy`, `skip:ignored`, `skip:status_or_broadcast`, `skip:system`, `skip:too_old`, `skip:before_install`, `skip:doorbell_off`, `outbound:replied`, `outbound:replied:burst_cancelled`.
+`runs.kind` is `direct` or `group` for judgments, `dossier`, `second_source`, `backfill` or `probe` (the deny probe) for the rest. `today_proposals` holds the Today brief's cards: `status` is `pending`, `ok`, `no`, `superseded` (retired: placed, settled or closed after a reply; `retired_json` says which) or `expired` (pending for 7 days). The brief's builds are in `today_brief`, never in `runs`. `brain_outages` holds one row per time the circuit breaker opened: `kind` `auth` or `limit`, `ended_at` empty while it is still open. `inbound_log.decision` is one of `pass:all`, `pass:mention`, `skip:no_mention`, `skip:policy`, `skip:ignored`, `skip:status_or_broadcast`, `skip:system`, `skip:too_old`, `skip:before_install`, `skip:doorbell_off`, `outbound:replied`, `outbound:replied:burst_cancelled`.
 
 ## Command files
 
@@ -174,6 +177,8 @@ Drop a JSON file into `live/commands/`. Within a few seconds the running daemon 
 | `second-source-now.json` | `{"dry_run": true}`, `{"day": "YYYY-MM-DD"}` | The second source pull now, for yesterday or that day | `second source <source>: pulled <n> chats ...` |
 | `backup-now.json` | `{"dry_run": true}`, `{"dest": "<folder>"}` | The backup now, or into another folder once | `backup: <dest> · <n> 档 · <MB> MB` |
 | `digest-now.json` | `{"dry_run": true}`, `{"for": "YYYY-MM-DD"}`, `{"send": false}` | The digest now: built only, for another day, or written without a push | `digest <date>: 已推 (<n> 行)` |
+| `today-now.json` | none | A Today brief build now, the same as the board's refresh button (one model call when it starts): it answers `started`, `already` (built within `today.manual_min_gap_seconds`), `queued` (triage runs are using every slot; it goes first at the next minute), `skipped` (with the reason), `brain_down` or `disabled` | One log line with the answer, then the build's own line with counts, tokens and the run folder name |
+| `today-stats.json` | none | Writes `live/today/stats.json`: builds and read tokens per day for the last 10 days, cards by status. Counts only, no names, no text | One log line naming the file |
 | `backfill-summaries.json` | `{"limit": <n>}`, `{"dry_run": true}` | Summary backfill (station O9); only one at a time | `backfill 完成 (<s>s): 候选 <c> · <b> 批 · 写 <w> 条 · 失败 <f> 条` |
 
 Examples:
@@ -195,7 +200,7 @@ A daemon started with `--dry-run` calls no model, pushes nothing and writes no r
 | Stop (pause, also across reboots) | `"$PY" "$KIT/daemon/wa_setup.py" uninstall-launchd --config "$LIVE/config.json"` | Boots the job out, then stops any python of this install still running (SIGTERM, then SIGKILL after `ExitTimeOut` if it is frozen), disables the label, removes the plist from `~/Library/LaunchAgents/`; it prints `kept:` for the rendered copy and `live/`: state, logs and config stay |
 | Resume | `"$PY" "$KIT/daemon/wa_setup.py" install-launchd --config "$LIVE/config.json"` | Installs the rendered plist again and starts it; it continues from the watermark it had |
 | Restart after a code or template update | `render-launchd`, then `install-launchd` | `install/update.md` walks through it |
-| The evening intake job | the same `uninstall-launchd` and `install-launchd` with `--intake`; `launchctl kickstart -k gui/$(id -u)/$ILABEL` runs it once now | It never fires at load; it reads config at every run |
+| Remove an evening intake job kept from an earlier release | `"$PY" "$KIT/daemon/wa_setup.py" uninstall-launchd --intake --config "$LIVE/config.json"` | Boots it out and removes its plist from `~/Library/LaunchAgents/`, the rendered plist and the installed script under `<home>/launchd/`, and prints `removed: <paths>`. The job is retired: `render-launchd --intake` and `install-launchd --intake` refuse, so it cannot be put back |
 
 Every `--dry-run` form prints the plan without doing it. Stop the daemon with `uninstall-launchd`, never a raw `launchctl bootout`: that stops only the node parent, so a frozen python can be orphaned and keep the board port (`references/pitfalls.md`, pit 15), and the plist it leaves in `~/Library/LaunchAgents/` starts the daemon again at the next login.
 
@@ -218,8 +223,8 @@ With the config edit ritual from `install/00-start-here.md` (backup, edit, `chmo
 | The facts job | `facts.enabled` `false` | restart | The last `facts.json` stays and is still read |
 | The second source pull | `second_source.enabled` `false` | restart | Everything else |
 | The backup | `backup.enabled` `false` | restart | Everything else; the digest reports the last result as old |
-| Intake captures and the evening push | `intake.enabled` `false` | restart | Everything else; the evening job exits by itself |
-| The evening push only | `intake.evening_push` `false` | none (read at each run) | Captures |
+| Intake captures | `intake.enabled` `false` | restart | Everything else; the Today brief works from judgments alone; a kept evening job exits by itself |
+| The Today brief | `today.enabled` `false` | restart | Everything else; the board hides the Today page, and the cards stay in the state database |
 | The voice loop | `voice.enabled` `false` | restart | Everything else |
 | Voice transcription | `brain.transcribe` `false` | restart, `sync-reader-config` | Cached transcripts still show |
 | The calendar button | `calendar.destination` `none` | restart | Everything else |
@@ -259,16 +264,21 @@ On this Mac `http://127.0.0.1:<port>/`; on the phone, the tailnet address `tails
 | Start note (a person with no note), Rewrite note | `POST /api/dossier` | `dossier: 排队 <name> (板上要求开档)` for Start note, `dossier: 排队 <name> (板上要求重写)` for Rewrite note |
 | Add to calendar | `POST /api/calendar` | `板子: 加进日历 <name> <date> <time> → <result>`; the same appointment pressed again answers `"already": true` with the first link and logs `→ already`, with or without a hint on the chat |
 | Take to Claude Code | `GET /api/packet` | `板子: 交棒包 <jid>` |
+| Today: refresh | `POST /api/today/refresh` | The answer (`started`, `already`, `queued`, `skipped`, `brain_down`, `disabled`) and, when it ran, the build's line |
+| Today: OK, No, a note, taking a press back | `POST /api/today/decide` with `{id, rev, action, note}`; a card that changed since the page loaded is refused (`reason: rev`, said in the board's language) and redrawn | The action and the card's id prefix only |
+| Today: not this project | `POST /api/today/unassign` | The id prefix only |
 | The green WhatsApp button, Copy draft | nothing: it opens WhatsApp prefilled, or copies | none; nothing is ever sent by the kit |
 
+- **Today.** With `today.enabled` true, a Today button in the rail (with the count of live cards) opens the brief (its first tail line, the cards waiting for you, is counted again on every read): a short line, one line per project, and per project block its state, what today's conversations mean, what happened (tap one to open that conversation) and the cards. A card proposes a task update, a new task, a project seed or a drop, with its evidence folded under it; answer it with OK or No and an optional note, or take a source away with "not this project". The refresh button builds now and the page follows the build until it lands. OK and No change only the daemon's state; placing happens in your own session, through the intake mode (`references/vault-proposals.md`, Patch 2). On a phone the page opens full screen with a way back.
+- **The list's controls.** A sort toggle in the list header (priority order, or newest message first; remembered on that device), an initials avatar on each row, long summaries clamped to two lines with "more", and on a wide screen grips between the three columns to resize them (double-click resets; remembered on that device).
 - **Search.** The search box on top of the list (or the `/` key) finds messages in every chat WhatsApp Desktop keeps on this Mac, by message text or file name: every word typed must match, case does not matter, newest first, status and broadcast chats never. Each result shows the chat, the time, the speaker in a group, and an excerpt with the words marked; with a conversation open, the results can be limited to it. A click opens the context view, the conversation around that message with the hit marked, and a way back to the results. Search only reads: it changes nothing, and its log line `板子: 搜寻 <n> 个词, <n> 笔` never carries the words searched.
 - **The banner.** While the brain cannot be called, a banner on top says why and what to do ("When the brain cannot be called", above).
 - **The footer.** Today's runs and tokens (read, cached, written), the watermark, and how long ago WhatsApp's database changed. Dollars show only with `board.show_usd` `true`.
-- **Other endpoints.** `/health` (`GET` and `HEAD`: `200` with `ok (last scan <n>s ago)` while the main loop's heartbeat is younger than three times `doorbell.full_rescan_seconds`, at least 30 seconds; `503` with `stalled <n> (last scan <n>s ago, limit <n>s)` after that; a monitor checks that the body starts with `ok`, or uses `curl -sf`), `/api/board`, `/api/thread?jid=<jid>&n=<n>` (with `&around=<pk>`, the messages before and after that one, in time order, for the context view), `/api/search?q=<words>&jid=<optional jid>&n=<5 to 200, default 60>` (`{"q", "hits", "more"}`, read only), `/api/runs` (the last 30 runs), `/api/digest`, `/media?pk=<pk>`, `/calendar/<key>.ics`, and `/v/` listing the variants in `live/variants/`.
+- **Other endpoints.** `/health` (`GET` and `HEAD`: `200` with `ok (last scan <n>s ago)` while the main loop's heartbeat is younger than three times `doorbell.full_rescan_seconds`, at least 30 seconds; `503` with `stalled <n> (last scan <n>s ago, limit <n>s)` after that; a monitor checks that the body starts with `ok`, or uses `curl -sf`), `/api/board`, `/api/thread?jid=<jid>&n=<n>` (with `&around=<pk>`, the messages before and after that one, in time order, for the context view), `/api/search?q=<words>&jid=<optional jid>&n=<5 to 200, default 60>` (`{"q", "hits", "more"}`, read only), `/api/runs` (the last 30 runs), `/api/digest`, `/api/today` (the latest brief of today, else yesterday's marked `stale`, with a `status` block), `POST /api/today/refresh`, `POST /api/today/decide`, `POST /api/today/unassign`, `POST /api/today/settle` (`{id, rev, to}`, what `wa_intake.py --settle-card` calls; every `POST /api/today/...` answers `{"ok": false, "reason": "disabled"}` while `today.enabled` is false, and every `/api/today` route answers `503` when the brief part could not start), `/media?pk=<pk>`, `/calendar/<key>.ics`, and `/v/` listing the variants in `live/variants/`.
 
 ## The morning digest
 
-At `digest.at` (08:00) the daemon writes `live/digest/<yesterday>.md` and pushes its short form when `digest.push` is true and an outlet exists. On the board it is the "Yesterday" card. Its blocks, at most twelve lines: yesterday's volume (messages through the gate, runs by kind, and bursts saved because you replied before their run started), who still waits on you, stage moves, person note jobs, facts mismatches, and health (the WhatsApp database's age, the facts source, the backup, the second source pull, open intake entries, `brain was down <n> minutes (<auth|limit>)` on a day the breaker was open, and a warning when an owner copy is missing). A quiet day still gets a digest. During the observation week a `🧪` question may follow (station O11).
+At `digest.at` (08:00) the daemon writes `live/digest/<yesterday>.md` and pushes its short form when `digest.push` is true and an outlet exists. On the board it is the "Yesterday" card. Its blocks, at most twelve lines: yesterday's volume (messages through the gate, runs by kind, and bursts saved because you replied before their run started), who still waits on you, stage moves, person note jobs, facts mismatches, and health (the WhatsApp database's age, the facts source, the backup, the second source pull, open intake entries, `brain was down <n> minutes (<auth|limit>)` on a day the breaker was open, and a warning when an owner copy is missing). On a day the Today brief was built, its own line right after the health line: `Brief: rebuilt <n> times · <n> cards (OK <n> · No <n> · retired <n>)`, and `brief <n>/<n>` (builds and cards) in the short form. A quiet day still gets a digest. During the observation week a `🧪` question may follow (station O11).
 
 To send it now: `digest-now.json`. A restart after `digest.at` marks today's as sent without sending it.
 
@@ -291,7 +301,8 @@ To send it now: `digest-now.json`. A restart after `digest.at` marks today's as 
 | `✅ [WA live] 脑恢复了, 停了 <n> 分钟。排队的讯息现在接着判。` | The breaker closed; the queue runs. Sent only after the opening push | Nothing to do |
 | `🚨 [WA live] 拒读探测没挡住: 脑读得到 secrets 夹。…` | The deny probe read the marker in `<home>/secrets/`: the Read deny rules do not hold | `init`, then the probe again (`install/C2-daemon.md`, step 12) |
 | `🧪 [WA live] notify-test: 出口通了 (<time>)` | The answer to `notify-test.json` | Nothing to do |
-| `🗂 intake pre-sort · <n> open` (`🗂 intake 预分类 · <n> 条等归位`) | The evening intake list, a suggested place per entry | Say "intake" in a session |
+| A push about a failed Today brief build | The brief could not be built (the model's answer held no JSON, or the call failed); at most once in six hours (push key `today_fail`), and the next automatic try waits `today.every_minutes` | Troubleshooting, "The brief is empty or stale" |
+| `🗂 intake pre-sort · <n> open` (`🗂 intake 预分类 · <n> 条等归位`) | Only from an evening intake job kept from an earlier release (retired) | Say "intake" in a session, or read the Today brief |
 
 ## Usage
 
@@ -302,7 +313,7 @@ HOME_DIR="<paths.home from the progress file header>"; LIVE="$HOME_DIR/live"
 sqlite3 -readonly "$LIVE/state.sqlite" "select kind, count(*), sum(input_tokens + cache_read_tokens + cache_create_tokens), sum(output_tokens) from runs where started_at >= date('now', 'localtime') group by kind"
 ```
 
-The evening intake pre-sort and a `wa_backfill.py --run` from the terminal are not in the `runs` table.
+The Today brief and a `wa_backfill.py --run` from the terminal are not in the `runs` table. The brief's usage per build is in `today_brief.usage_json`, per day in `today-stats.json` and in the digest's brief line.
 
 ## Throwaway runs
 
@@ -333,6 +344,7 @@ Its first scan is a first start: the lookback rows are recorded as `skip:before_
 
 - **`live/runs/` grows forever.** The kit never deletes run folders. Check the size with `du -sh "$LIVE/runs"`, and count old ones with `find "$LIVE/runs" -maxdepth 1 -mtime +30 | wc -l`. They hold other people's messages; removing old ones is the owner's decision, made with them.
 - **`<home>/transcripts-cache/`, `<home>/doc-text-cache/` and `<home>/runs-work/`** grow with voice notes, documents and conversations; they rebuild themselves when removed, at the cost of transcribing and converting again.
+- **`live/today/`** gains one small file per day the brief was built; the cards stay in `state.sqlite` (pending ones expire after 7 days). Both are yours to prune.
 - **Config backups** (`live/config.json.bak-<time>`) pile up, one per change; keep the recent ones.
 - **After a kit update**, `"$PY" "$KIT/daemon/wa_setup.py" seed-status --config "$LIVE/config.json"` lists owner copies whose seed moved; `install/update.md` merges them.
 - **The fingerprint** of the running code goes into the registry at install (station C2, step 5) and after every update (`install/update.md`, step 9); station O10 checks it.

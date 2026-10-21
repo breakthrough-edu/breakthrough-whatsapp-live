@@ -1,6 +1,6 @@
 # Station O4 · Push outlet
 
-**When something breaks, where should the alert reach you, and which kinds of alert should go out?** What it costs: no model call. Each push is a few lines of text that leave the Mac through the outlet you pick: the Telegram servers for `telegram`, whatever service your command reaches for `command`. An error push names the conversation and the error line; the morning digest names the people waiting on you; with `notify.mode` at `needs_me` or `all`, judgments go out too, with other people's names and the draft text (`references/privacy.md`, "What else leaves, and to whom"). The outlet writes nothing in the vault; `telegram` reads one secret file, `live/telegram.json` (0600, never backed up, denied to the brain). One outlet serves the daemon, the command line tools and the evening intake job.
+**When something breaks, where should the alert reach you, and which kinds of alert should go out?** What it costs: no model call. Each push is a few lines of text that leave the Mac through the outlet you pick: the Telegram servers for `telegram`, whatever service your command reaches for `command`. An error push names the conversation and the error line; the morning digest names the people waiting on you; with `notify.mode` at `needs_me` or `all`, judgments go out too, with other people's names and the draft text (`references/privacy.md`, "What else leaves, and to whom"). The outlet writes nothing in the vault; `telegram` reads one secret file, `live/telegram.json` (0600, never backed up, denied to the brain). One outlet serves the daemon and the command line tools (and an evening intake job kept from an earlier release; the evening push is retired).
 
 The tool was chosen at `install/C5-your-tools.md`, question 4. The kinds, the modes, the dedupe rule and both outlets: `references/interfaces.md`, "4 · Push outlet". Why errors only: `references/defaults-and-why.md`, "6 · Pushes only for errors, plus the morning digest".
 
@@ -10,7 +10,7 @@ HOME_DIR="<paths.home from the progress file header>"
 LIVE="$HOME_DIR/live"
 PY=/usr/bin/python3
 LABEL="<launchd.label from the progress file header>"
-ILABEL="$LABEL.intake"
+ILABEL="<launchd.intake_label from the progress file header>"
 PORT="<board.port from the progress file header>"
 ```
 

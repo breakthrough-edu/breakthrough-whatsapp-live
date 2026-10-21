@@ -19,6 +19,12 @@ This changelog is payload metadata. It is never copied into a vault.
 
 ## playbooks/whatsapp-live-triage/_WhatsApp-Live-Triage-Guide.md
 
+### 1.1.0 · 2026-10-21
+
+- The summary line names the board's Today brief: with it on, the board also proposes, per
+  project, what today's conversations mean; it only proposes, writes nothing into the vault
+  and is never pushed. Nothing else in the door changed.
+
 ### 1.0.1 · 2026-10-21
 
 - The launchd line of the summary adds the restart rule: restart the daemon with
@@ -37,6 +43,21 @@ This changelog is payload metadata. It is never copied into a vault.
 - The summary names the v1 judgment contract (world, stage, priority, needs_me).
 
 ## playbooks/whatsapp-live-triage/whatsapp-live-triage-playbook.md
+
+### 1.2.0 · 2026-10-21
+
+- New move 11: with the Today brief on, read the board's cards before placing. The intake
+  mode lists with `--list-open --with-brief <board>/api/today`, which prints each entry's
+  card under it; the card is a starting point, not an answer, and every placement is still
+  the owner's yes. Why: an entry is one sentence one judgment saw, while a card has read the
+  day's conversations together with the project's existing tasks, so reading both keeps one
+  matter from becoming two tasks and keeps a date already in a task from being missed; the
+  card is machine written too, so it never decides. Cards with no entry are settled with
+  `--settle-card <id> --rev <n> --to "<where>" --with-brief <url>`; a `rev` refusal means
+  the card changed, so list again.
+- Move 10: the registry has two entries to write, not three. The evening intake job is
+  retired (the Today brief replaces it, and a new install never has it); an entry an
+  earlier release wrote is marked retired when `install/update.md` removes the job.
 
 ### 1.1.0 · 2026-10-21
 
@@ -82,6 +103,19 @@ This changelog is payload metadata. It is never copied into a vault.
 - Move 10 lists the three residents of this kit, including the six cells of the dossier run.
 
 ## playbooks/whatsapp-live-triage/standby-machine-runbook.md
+
+### 1.1.0 · 2026-10-21
+
+- The evening intake job is retired, so there is nothing to decide about it at takeover:
+  `render-launchd --intake` and `install-launchd --intake` refuse, a standby Mac never has
+  that job, and step 4 has nothing extra to stop. A job an earlier release left on the
+  always-on Mac is that Mac's own business.
+- Step 2 says the Today brief comes back with the restored config, reading the vault synced
+  to the standby Mac; step 3 says it waits for the first change after the start, and
+  `today-now.json` builds one at once (one model call).
+- The closing registry line no longer asks whether the evening job was installed.
+- The values block reads `ILABEL` from the config's `launchd.intake_label` instead of
+  assuming it is the label plus `.intake`.
 
 ### 1.0.1 · 2026-10-21
 

@@ -34,6 +34,15 @@ wa_live.py · 私人 WhatsApp 实时逐封分诊 daemon (住一台常驻 Mac, la
   backfill-summaries.json      摘要回填, 可带 {"limit": N, "dry_run": true}
   edit-check.<pk>.json         {"old_text": "…"}: 把那封 inbound 当成门铃当时看到的是 old_text 放进改讯息观察名单
                                (验收与修补用; 下一拍就跟库里现在的字比, 不一样就照改讯息处理)
+  today-now.json               今日简报现在算一次 (跟板上「刷新」同一条路: 手动, 不看输入变没变; 间隔内回 already), log 写回答
+  today-stats.json             今日简报的计数写进 live/today/stats.json (每天建几次、读多少 tokens、卡各状态几张; 没有名字没有字)
+板子的端点 (只绑本机, tailscale serve 挂出去):
+  GET  /  /api/board  /api/thread  /api/search  /api/packet  /api/runs  /api/digest  /media  /calendar/<key>.ics  /health  /v/<name>
+  POST /api/dismiss  /api/draft  /api/dossier  /api/field  /api/calendar  /api/run
+  GET  /api/today              今日简报 (只读; 没起来回 503)
+  POST /api/today/refresh  /api/today/decide {id, rev, action, note?}  /api/today/unassign {key, project | id}
+       /api/today/settle {id, rev, to}   today.enabled 关着时一律回 {"ok": false, "reason": "disabled"}
+今日简报 (today.*, 模组 wa_today): 输入变了才重算、最多每 today.every_minutes 分钟一次; 只提案, ⛔ 不写 vault、不进 runs、dry-run 不叫模型。
 """
 
 import argparse
@@ -61,7 +70,7 @@ import uuid
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 HOME = Path.home()
 DAEMON_DIR = Path(__file__).resolve().parent
 PAYLOAD = DAEMON_DIR.parent                     # 安装包根 (daemon/ 的上一层)
@@ -74,14 +83,15 @@ log = logging.getLogger("wa_live")
 sys.path.insert(0, str(DAEMON_DIR))
 _MOD = {}
 _IMPORT_ERRORS = {}
-for _name in ("wa_common", "wa_facts", "wa_digest", "wa_backup", "wa_intake", "wa_backfill", "wa_voice", "wa_calendar", "wa_second_source"):
+for _name in ("wa_common", "wa_facts", "wa_digest", "wa_backup", "wa_intake", "wa_backfill", "wa_voice", "wa_calendar", "wa_second_source",
+              "wa_today"):
     try:
         _MOD[_name] = __import__(_name)
     except Exception as _e:
         _MOD[_name] = None
         _IMPORT_ERRORS[_name] = "%s: %s" % (type(_e).__name__, str(_e)[:300])
 WC = _MOD["wa_common"]; WF = _MOD["wa_facts"]; WD = _MOD["wa_digest"]; WB = _MOD["wa_backup"]; WI = _MOD["wa_intake"]
-WBF = _MOD["wa_backfill"]; WV = _MOD["wa_voice"]; WCAL = _MOD["wa_calendar"]; WSS = _MOD["wa_second_source"]
+WBF = _MOD["wa_backfill"]; WV = _MOD["wa_voice"]; WCAL = _MOD["wa_calendar"]; WSS = _MOD["wa_second_source"]; WT = _MOD["wa_today"]
 
 
 def now_iso():
@@ -2536,7 +2546,7 @@ class Brain(object):
         lines += ["", "## 8 · 语气范本 (同一个世界里, 你上次的草稿 vs %s 实际发出去的; 学他的长短、语域、拆几封, ⛔ 不准搬里面的事实)" % owner, "", v8]
         return head.rstrip("\n") + "\n" + "\n".join(lines) + "\n"
 
-    def call_claude(self, prompt, run_dir, attempt=0, timeout=None, model=None, max_turns=None, append_system=None):
+    def call_claude(self, prompt, run_dir, attempt=0, timeout=None, model=None, max_turns=None, append_system=None, scrub=None):
         if self.dry_run:
             raise RunError("dry-run: 不叫 claude")
         if not self.settings.is_file():
@@ -2577,11 +2587,14 @@ class Brain(object):
             log.warning("MEMORY LOADED: 这个 run 载入了 Claude 记忆 (%s), 环境变数没生效; 丢 commands/probe-claude.json 查", mem)
         if done is None:
             tail = (r.stderr or r.stdout or "")[-400:].strip()
+            if scrub is not None:      # 简报 run: 主人回覆的原字不准进断路器纪录与 log
+                tail = scrub(tail)
             self.note_brain(False, tail)
             raise RunError("claude -p 没有回 result (rc=%s): %s" % (r.returncode, tail))
         denials = [d.get("tool_name", d) if isinstance(d, dict) else d for d in (done.get("permission_denials") or [])]
         if denials:
-            log.warning("设定档挡下了脑的读取 (%s): %s", Path(run_dir).name, "; ".join(str(x) for x in denials)[:400])
+            log.warning("设定档挡下了脑的读取 (%s): %s", Path(run_dir).name,
+                        "; ".join((scrub(str(x)) if scrub is not None else str(x)) for x in denials)[:400])
         u = done.get("usage") or {}
         text, is_err = done.get("result") or "", bool(done.get("is_error"))
         reason = ""
@@ -2590,6 +2603,8 @@ class Brain(object):
             errs = "; ".join(str(x) for x in (done.get("errors") or []) if str(x).strip())
             reason = (text.strip()[:300] or ": ".join(x for x in (str(done.get("subtype") or "").strip(), errs) if x)[:300]
                       or "is_error with no text and no reason")
+            if scrub is not None:
+                reason = scrub(reason)
         self.note_brain(not is_err, reason)
         return {"text": text, "is_error": is_err, "error": reason, "subtype": done.get("subtype"),
                 "cost_usd": done.get("total_cost_usd"), "duration_ms": done.get("duration_ms") or int((time.time() - t0) * 1000),
@@ -3744,6 +3759,388 @@ class Dossier(object):
                 "cache_read_tokens": u.get("cache_read_input_tokens"), "cache_create_tokens": u.get("cache_creation_input_tokens")}
 
 
+# ---------------------------------------------------------------- 今日简报 (Today brief; 规矩与资料表住 wa_today, 这里只接线)
+
+# ⛔ 简报只读: 不写主人的 vault、不进 runs 表 (简报的输入签章就是从 runs 算的, 写进去会自己改自己的输入)、dry-run 不叫模型、
+# log 不写名字与讯息原文、主人自己回的字只进 run 夹的 prompt.md (那是 wa_today 的事, 这里只把 hook 交过去)。
+TODAY_APPEND_SYSTEM = ("你在 headless 模式跑, 没有人可以问, 自己判断做完。只吐一个 JSON 物件, 不要 markdown 栅栏, 不要任何前后文字。"
+                       "可以用 Read 打开提示里列出的 vault 档, 最多 %d 个; 除此之外不要探索档案系统, 不要读别的东西。")
+_TODAY_DEFAULTS = {"enabled": False, "model": "claude-sonnet-5", "every_minutes": 30, "manual_min_gap_seconds": 60,
+                   "max_reads": 6, "quote_min_chars": 6, "extra_rules": ""}
+
+
+def today_cfg(cfg):
+    """today 那一节, 缺的键用默认值补 (wa_today 在就用它的 tcfg, 同一套规矩)。"""
+    if WT is not None and hasattr(WT, "tcfg"):
+        try:
+            got = WT.tcfg(cfg)
+            if isinstance(got, dict):
+                return dict(_TODAY_DEFAULTS, **got)
+        except Exception:
+            pass
+    t = (cfg or {}).get("today")
+    return dict(_TODAY_DEFAULTS, **(t if isinstance(t, dict) else {}))
+
+
+def _int_or(v, default):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def outbound_since(jid, since_iso, n=3):
+    """主人自己在这条对话里、since_iso (本机时间) 之后发出去的讯息, 最新 n 封照时间排: [{"at", "type", "text"}]。
+    只读 WhatsApp 的库; 只有文字类讯息带字, 其他类型 text 是空字串。只当 hook 交给 wa_today (主人回过什么)。"""
+    try:
+        since = dt.datetime.fromisoformat(str(since_iso or "")[:19])
+    except ValueError:
+        return []
+    since_core = (since.astimezone(dt.timezone.utc) - CORE_EPOCH_UTC).total_seconds()
+    CT = content_types()
+    text_types = set(getattr(WC, "TEXT_TYPES", None) or (0, 7, 41)) if WC is not None else {0, 7, 41}
+    conn = _ro(wa_root() / "ChatStorage.sqlite")
+    try:
+        rows = conn.execute("""SELECT m.ZMESSAGETYPE mtype, m.ZTEXT text, m.ZMESSAGEDATE d FROM ZWAMESSAGE m
+            JOIN ZWACHATSESSION s ON s.Z_PK=m.ZCHATSESSION
+            WHERE s.ZCONTACTJID=? AND m.ZISFROMME=1 AND COALESCE(m.ZMESSAGEDATE,0) > ? AND m.ZMESSAGETYPE IN (%s)
+            ORDER BY COALESCE(m.ZMESSAGEDATE,0) DESC, m.Z_PK DESC LIMIT ?""" % ",".join(str(int(t)) for t in CT),
+                            (jid, since_core, max(0, int(n)))).fetchall()
+    finally:
+        conn.close()
+    return [{"at": core_to_iso(r["d"]), "type": CT.get(r["mtype"], "?"),
+             "text": (r["text"] or "") if r["mtype"] in text_types else ""} for r in reversed(rows)]
+
+
+def _counts_only(obj, depth=0):
+    """stats.json 只留数字: 字串值一律丢掉 (名字、标题、原文不会因为上游多给了什么就落档)。"""
+    if depth > 6:
+        return None
+    if isinstance(obj, bool):
+        return obj
+    if isinstance(obj, (int, float)):
+        return obj
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            c = _counts_only(v, depth + 1)
+            if c is not None and c != {} and c != []:
+                out[str(k)] = c
+        return out
+    if isinstance(obj, (list, tuple)):
+        return [c for c in (_counts_only(v, depth + 1) for v in obj) if c is not None]
+    return None
+
+
+class Today(object):
+    """看板上的今日简报 (wa_today 出规矩, 这里管什么时候算、在哪条线程算、怎么叫模型、板子与命令档的入口)。
+    开着 = today.enabled 且 wa_today 载入了且不是 dry-run 且 paths.vault 有设。每个入口都包在 try 里, 出事只停这一块。
+    起跑与换日时把当下的输入签章记成「看过」: 不补算, 第一次自动重算等第一个变化 (手动刷新不受这条管)。"""
+
+    _NEVER = object()
+
+    def __init__(self, daemon):
+        self.d = daemon
+        self.cfg = daemon.cfg
+        self.t = today_cfg(self.cfg)
+        self.dry_run = bool(daemon.dry_run)
+        self.vault = vault_dir(self.cfg)
+        self.live = live_dir(self.cfg)
+        self.lang = str((self.cfg.get("board") or {}).get("lang") or "zh")
+        self.every_minutes = _int_or(self.t.get("every_minutes"), 30)
+        self.gap_seconds = _int_or(self.t.get("manual_min_gap_seconds"), 60)
+        self.max_reads = _int_or(self.t.get("max_reads"), 6)
+        self.lock = threading.RLock()
+        self.thread = None
+        self.building_since = None
+        self.last_built = None
+        self.last_error = None
+        self.last_sig = None
+        self.day = None
+        self.last_parts = None
+        self.retire_open = self._NEVER          # retire_tick 上次跑时的 parts["open"]; 起跑后第一拍一定跑一次
+        self.priority = False                   # 手动刷新碰上并发满了: 下一拍当手动再试
+        self.fail_ts = None
+        if WT is None:
+            why = "wa_today 模组没载入"
+        elif not self.t.get("enabled"):
+            why = "today.enabled=false"
+        elif self.dry_run:
+            why = "dry-run: 简报永远不叫模型"
+        elif self.vault is None:
+            why = "paths.vault 没设 (简报从 vault 读 project)"
+        else:
+            why = ""
+        self.enabled = not why
+        self.why_off = why
+        if not self.enabled:
+            log.info("今日简报: 关 (%s)", why)
+            return
+        with self._conn() as conn:
+            if hasattr(WT, "ensure_tables"):
+                WT.ensure_tables(conn)
+        self._seed_sig()
+        log.info("今日简报: 开 · model=%s · 输入变了才重算, 最多每 %d 分钟一次 · 手动刷新间隔 %d 秒 · 最多读 %d 个 vault 档",
+                 self.t.get("model"), self.every_minutes, self.gap_seconds, self.max_reads)
+
+    # ---- 小工具
+    @contextlib.contextmanager
+    def _conn(self):
+        """自己的状态库连线 (建简报的线程与板子的线程各开各的, 不跟 State 抢那一条)。"""
+        c = sqlite3.connect(str(state_db_path(self.cfg)), timeout=30)
+        c.row_factory = sqlite3.Row
+        try:
+            yield c
+            c.commit()
+        finally:
+            c.close()
+
+    def _buffer(self):
+        p = intake_buffer_path(self.cfg)
+        return str(p) if p is not None else ""
+
+    def _busy(self):
+        return self.thread is not None and self.thread.is_alive()
+
+    def _seed_sig(self):
+        """起跑 / 换日: 当下的签章记成看过 (不补算)。"""
+        day = dt.date.today().isoformat()
+        with self._conn() as conn:
+            sig, parts = WT.inputs_sig(conn, day, self._buffer())
+        self.day = day
+        self.last_sig = sig
+        self.last_parts = parts
+
+    def hooks(self):
+        cfg = self.cfg
+        return {"pack_messages": pack_messages, "extract_json": extract_json, "outbound_since": outbound_since,
+                "worlds_block": lambda: render_worlds_block(Vocab(cfg), owner_label(cfg))}
+
+    def off_reply(self, refresh=False):
+        return {"ok": False, "reason": ("dry_run" if (refresh and self.dry_run) else "disabled"), "why": self.why_off}
+
+    # ---- 要不要算
+    def request(self, manual=False, source="tick"):
+        if not self.enabled:
+            return self.off_reply(refresh=True)
+        with self.lock:
+            day = dt.date.today().isoformat()
+            if day != self.day:
+                self._seed_sig()
+            if not manual and self.fail_ts is not None and time.time() - self.fail_ts < self.every_minutes * 60:
+                return {"ok": True, "skipped": "backoff"}
+            busy = self._busy()
+            breaker = getattr(self.d, "breaker", None)
+            gate_down = bool(breaker is not None and breaker.down())
+            conc = _int_or((self.cfg.get("debounce") or {}).get("global_concurrency", 2), 2)
+            with self._conn() as conn:
+                dec = WT.decide_tick(conn, self.cfg, day, dt.datetime.now(), self.last_sig, self._buffer(),
+                                     gate_down=gate_down, busy=busy, manual=bool(manual),
+                                     running_n=len(self.d.running), concurrency=conc)
+            dec = dec if isinstance(dec, dict) else {}
+            if dec.get("parts") is not None:
+                self.last_parts = dec.get("parts")
+            why = dec.get("why")
+            if dec.get("go"):
+                self.priority = False
+                self.building_since = now_iso()
+                sig = dec.get("sig")
+                self.thread = threading.Thread(target=self._run, args=(bool(manual), source, sig), daemon=True)
+                self.thread.start()
+                return {"ok": True, "started": True, "started_at": self.building_since}
+            if why in ("already", "busy"):
+                out = {"ok": True, "already": True}
+                if busy and self.building_since:
+                    out["started_at"] = self.building_since
+                if self.last_built:
+                    out["built_at"] = self.last_built
+                return out
+            if why == "queued":
+                if manual:
+                    self.priority = True
+                    return {"ok": True, "queued": True}
+                return {"ok": True, "skipped": "queued"}
+            if why == "brain_down":
+                return {"ok": False, "reason": "brain_down", "brain_down": breaker.state() if breaker is not None else None}
+            if why == "disabled":
+                return self.off_reply(refresh=True)
+            return {"ok": True, "skipped": why}
+
+    def _run(self, manual, source, sig):
+        t0 = time.time()
+        res = None
+        try:
+            with self._conn() as conn:
+                res = WT.build(conn, self.cfg, self.day or dt.date.today().isoformat(), self._buffer(), self.vault, self.live,
+                               call=self._call, hooks=self.hooks(), dry_run=False, force=bool(manual), lang=self.lang)
+            res = res if isinstance(res, dict) else {"ok": False, "why": "no_result"}
+        except Exception as e:
+            res = {"ok": False, "why": "exception", "error": "%s: %s" % (type(e).__name__, str(e)[:300])}
+        finally:
+            secs = int(time.time() - t0)
+            with self.lock:
+                self.building_since = None
+        run_name = Path(str(res.get("run_dir") or "")).name if res.get("run_dir") else "-"
+        if res.get("ok") and res.get("skipped"):
+            self.last_sig = res.get("sig") or sig
+            self.fail_ts = None
+            log.info("今日简报: 没重算 (%s, %s)", res.get("why") or "skipped", source)
+            return res
+        if res.get("ok"):
+            brief = res.get("brief") or {}
+            counts = dict((k, v) for k, v in (res.get("counts") or {}).items() if isinstance(v, (int, float)) and not isinstance(v, bool))
+            usage = brief.get("usage") or {}
+            self.last_sig = res.get("sig") or sig
+            self.last_built = brief.get("built_at") or now_iso()
+            self.last_error = None
+            self.fail_ts = None
+            log.info("今日简报: 建好 (%s, %d 秒) · %s · 读 %s / 写 %s tokens · %s", source, secs,
+                     " ".join("%s=%s" % kv for kv in sorted(counts.items())) or "-", usage.get("read", "?"), usage.get("output", "?"), run_name)
+            return res
+        # 失败: 同一份输入不再自动重试 (签章记成看过), 自动的也退一个 every_minutes; 手动刷新照样可以按
+        self.last_sig = sig if sig is not None else self.last_sig
+        self.fail_ts = time.time()
+        self.last_error = str(res.get("why") or "failed") + ((": " + str(res.get("error"))[:200]) if res.get("error") else "")
+        log.warning("今日简报: 没建成 (%s, %s, %d 秒) · %s", source, self.last_error, secs, run_name)
+        try:
+            self.d.notifier.send("⚠️ [WA live] 今日简报没建成 (%s)。板子照常, 看 wa_live.log 那一行。" % str(res.get("why") or "failed"),
+                                 key="today_fail", min_gap=6 * 3600, kind="error")
+        except Exception as e:
+            log.warning("今日简报: 推播失败: %s", e)
+        return res
+
+    def _call(self, prompt, run_dir, scrub=None):
+        """简报 run 的模型呼叫: 跟分诊同一个笼子 (Brain.call_claude), 换 today.model 与自己的 system 附加。
+        ⛔ 不用 call_claude_recorded: 简报不进 runs 表。scrub: wa_today 给的, 失败时的输出尾巴先换掉主人回覆的原字。"""
+        b = self.cfg.get("brain") or {}
+        return call_opt(self.d.brain.call_claude, prompt, run_dir, model=self.t.get("model") or b.get("model", "claude-sonnet-5"),
+                        max_turns=b.get("max_turns", 12), append_system=TODAY_APPEND_SYSTEM % max(0, self.max_reads), scrub=scrub)
+
+    # ---- 每分钟那一拍
+    def tick(self):
+        if not self.enabled:
+            return
+        try:
+            self.reply_tick()
+        except Exception as e:
+            log.warning("今日简报 reply_tick 失败 (继续): %s", str(e)[:300])
+        try:
+            self.request(manual=self.priority, source="tick")
+        except Exception as e:
+            log.warning("今日简报 request 失败 (继续): %s", str(e)[:300])
+        try:
+            self.retire_tick()
+        except Exception as e:
+            log.warning("今日简报 retire_tick 失败 (继续): %s", str(e)[:300])
+
+    def reply_tick(self):
+        with self._conn() as conn:
+            got = WT.reply_stamp(conn) or {}
+        n = len(got.get("stamped") or [])
+        if n:
+            log.info("今日简报: %d 张卡的对话主人已经回过 (只记时间)", n)
+        return n
+
+    def retire_tick(self):
+        """intake 的 open 条目变了 (或起跑后第一拍) 才去看卡的条目归了没; 归了的卡收起, 只改 daemon 自己的状态。"""
+        cur = (self.last_parts or {}).get("open") if isinstance(self.last_parts, dict) else None
+        if self.retire_open is not self._NEVER and cur == self.retire_open:
+            return None
+        self.retire_open = cur
+        with self._conn() as conn:
+            got = WT.retire_placed(conn, self._buffer()) or {}
+        sup = got.get("superseded") or []
+        trimmed = got.get("trimmed") or []
+        placed = got.get("placed") or []
+        if sup or trimmed or placed:
+            log.info("今日简报: 条目归位, 收起 %d 张 (%s) · 修剪 %d · 记已归 %d", len(sup) if isinstance(sup, list) else sup,
+                     ",".join(str(x)[:8] for x in (sup if isinstance(sup, list) else [])) or "-",
+                     len(trimmed) if isinstance(trimmed, list) else trimmed, len(placed) if isinstance(placed, list) else placed)
+        elif got.get("skipped"):
+            log.info("今日简报: retire 略过 (%s)", str(got.get("skipped"))[:120])
+        return got
+
+    # ---- 板子与命令档
+    def payload(self):
+        day = dt.date.today().isoformat()
+        p = None
+        if WT is not None:
+            try:
+                with self._conn() as conn:
+                    p = WT.api_payload(conn, day, lang=self.lang)
+            except Exception as e:
+                log.warning("今日简报 api_payload 失败: %s", str(e)[:200])
+        if not isinstance(p, dict):
+            p = {"ok": True, "date": day, "empty": True, "stale": True, "projects": [], "one": [], "short": "", "tail": []}
+        p.pop("seen", None)
+        breaker = getattr(self.d, "breaker", None)
+        p["status"] = {"enabled": self.enabled, "building": self._busy(), "building_since": self.building_since,
+                       "last_built": self.last_built, "last_error": self.last_error,
+                       "brain_down": breaker.state() if breaker is not None else None,
+                       "every_minutes": self.every_minutes, "manual_min_gap_seconds": self.gap_seconds, "dry_run": self.dry_run}
+        return p
+
+    def decide(self, body):
+        if not self.enabled:
+            return self.off_reply()
+        pid = str(body.get("id") or "")
+        rev = _int_or(body.get("rev"), None)
+        if not pid or rev is None:
+            return {"ok": False, "reason": "bad_request"}
+        note = body.get("note")
+        with self._conn() as conn:
+            r = call_opt(WT.decide, conn, pid, rev, str(body.get("action") or ""), note=(str(note)[:500] if note is not None else None), lang=self.lang)
+        r = r if isinstance(r, dict) else {"ok": False}
+        log.info("今日简报: 板上按 %s · 卡 %s · %s", str(body.get("action") or "")[:10], pid[:8], "ok" if r.get("ok") else r.get("reason"))
+        return r
+
+    def unassign(self, body):
+        if not self.enabled:
+            return self.off_reply()
+        key = str(body.get("key") or "")
+        project = str(body.get("project") or "")
+        if key and not project and body.get("id"):
+            with self._conn() as conn:
+                row = conn.execute("SELECT project FROM today_proposals WHERE id=?", (str(body["id"]),)).fetchone()
+            project = (row["project"] or "") if row else ""
+        if not key or not project:
+            return {"ok": False, "reason": "bad_request"}
+        with self._conn() as conn:
+            r = WT.unassign(conn, key, project)
+        log.info("今日简报: 板上把一个来源移出一个 project%s", (" (卡 %s)" % str(body.get("id"))[:8]) if body.get("id") else "")
+        return r if isinstance(r, dict) else {"ok": True}
+
+    def settle(self, body):
+        if not self.enabled:
+            return self.off_reply()
+        pid = str(body.get("id") or "")
+        rev = _int_or(body.get("rev"), None)
+        if not pid or rev is None:
+            return {"ok": False, "reason": "bad_request"}
+        with self._conn() as conn:
+            r = call_opt(WT.settle, conn, pid, rev, str(body.get("to") or ""), lang=self.lang)
+        r = r if isinstance(r, dict) else {"ok": False}
+        log.info("今日简报: settle 卡 %s · %s", pid[:8], "ok" if r.get("ok") else r.get("reason"))
+        return r
+
+    def stats(self):
+        """commands/today-stats.json → live/today/stats.json: 只有数字 (每天建几次、读多少 tokens、卡各状态几张), 没有名字没有字。"""
+        with self._conn() as conn:
+            got = WT.stats(conn) if WT is not None else {}
+        out = _counts_only(got if isinstance(got, dict) else {}) or {}
+        out["written_at_epoch"] = int(time.time())
+        path = self.live / "today" / "stats.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        os.chmod(str(path.parent), 0o700)
+        if WC is not None and hasattr(WC, "write_json_atomic"):
+            WC.write_json_atomic(path, out)
+        else:
+            path.write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
+            os.chmod(str(path), 0o600)
+        log.info("今日简报: stats 写进 %s", path.name)
+        return path
+
+
 # ---------------------------------------------------------------- 板子 (只绑本机 port, 由 tailscale serve 挂进主人自己的 tailnet)
 
 _CAL_LABELS = {"ics": "Apple / Google / Outlook 日历 (.ics)", "lark": "Lark 日历", "none": ""}
@@ -3775,7 +4172,11 @@ def make_board_handler(daemon):
                     "features": {"dossier": bool(daemon.dossier.enabled and DC is not None),
                                  "digest": bool((cfg.get("digest") or {}).get("enabled", True) and WD is not None),
                                  "intake": bool((cfg.get("intake") or {}).get("enabled") and WI is not None),
-                                 "voice": bool((cfg.get("voice") or {}).get("enabled", True) and WV is not None)},
+                                 "voice": bool((cfg.get("voice") or {}).get("enabled", True) and WV is not None),
+                                 "today": bool(daemon.today is not None and daemon.today.enabled)},
+                    "today": {"every_minutes": int(daemon.today.every_minutes if daemon.today is not None else today_cfg(cfg).get("every_minutes", 30)),
+                              "manual_min_gap_seconds": int(daemon.today.gap_seconds if daemon.today is not None
+                                                            else today_cfg(cfg).get("manual_min_gap_seconds", 60))},
                     "owner_label": owner_label(cfg), "vault_name": vault.name if vault is not None else "",
                     "context_days": int(br.get("context_days", 7)), "group_context_days": int(br.get("group_context_days", 3)),
                     "others_days": int(b.get("others_days", 3)), "others_limit": int(b.get("others_limit", 120)),
@@ -4011,6 +4412,15 @@ def make_board_handler(daemon):
             elif path == "/health":
                 code, body = daemon.health_status()
                 self._send(code, body, "text/plain; charset=utf-8")
+            elif path == "/api/today":
+                # 今日简报 (只读): 没起来回 503; 其余一律 200 JSON (没有简报时 empty: true)
+                if daemon.today is None:
+                    self._send(503, json.dumps({"ok": False, "error": "今日简报没起来: %s" % (daemon.today_error or "?")}, ensure_ascii=False)); return
+                try:
+                    self._send(200, json.dumps(daemon.today.payload(), ensure_ascii=False, default=str))
+                except Exception as e:
+                    log.warning("板子: /api/today 失败: %s", str(e)[:200])
+                    self._send(500, json.dumps({"ok": False, "error": str(e)[:300]}, ensure_ascii=False))
             else:
                 # ⛔ 没有 GET /draft: 会改状态的 GET 不留 (存草稿一律走 POST /api/draft)
                 self._send(404, "not found", "text/plain; charset=utf-8")
@@ -4127,6 +4537,26 @@ def make_board_handler(daemon):
                 daemon.dispatch(p, source="board-full" if body.get("full") else "board")
                 log.info("板子: 手动跑 %s%s%s", p["name"], " (全量重判)" if body.get("full") else "", " (闸外, 主人确认)" if not ok_gate else "")
                 self._send(200, json.dumps({"ok": True}))
+            elif path in ("/api/today/refresh", "/api/today/decide", "/api/today/unassign", "/api/today/settle"):
+                tdy = daemon.today
+                if tdy is None:
+                    self._send(503, json.dumps({"ok": False, "error": "今日简报没起来: %s" % (daemon.today_error or "?")}, ensure_ascii=False)); return
+                if not tdy.enabled:
+                    self._send(200, json.dumps(tdy.off_reply(refresh=(path == "/api/today/refresh")), ensure_ascii=False)); return
+                try:
+                    if path == "/api/today/refresh":
+                        ans = tdy.request(manual=True, source="board")
+                        log.info("板子: 简报刷新 → %s", ", ".join(k for k in ("started", "already", "queued", "reason", "skipped") if ans.get(k)) or "?")
+                    elif path == "/api/today/decide":
+                        ans = tdy.decide(body)
+                    elif path == "/api/today/unassign":
+                        ans = tdy.unassign(body)
+                    else:
+                        ans = tdy.settle(body)
+                except Exception as e:
+                    log.warning("板子: %s 失败: %s", path, str(e)[:200])
+                    self._send(500, json.dumps({"ok": False, "error": str(e)[:300]}, ensure_ascii=False)); return
+                self._send(200, json.dumps(ans, ensure_ascii=False, default=str))
             else:
                 self._send(400, json.dumps({"ok": False, "error": "bad request"}))
 
@@ -4171,6 +4601,14 @@ class Daemon(object):
         self.brain.dossier = self.dossier
         self.breaker = BrainGate(self.notifier, self.brain, cfg)
         self.brain.breaker = self.breaker
+        # 今日简报: 起不来只停这一块 (板子的 /api/today 回 503), 门铃、脑、板子照常
+        self.today = None
+        self.today_error = None
+        try:
+            self.today = Today(self)
+        except Exception as e:
+            self.today_error = "%s: %s" % (type(e).__name__, str(e)[:300])
+            log.error("今日简报起不来 (那一块停, 其他照常): %s", self.today_error)
         if (cfg.get("backfill") or {}).get("respect_gate", True):
             self.brain.gate = self.bell.gate_for
         self.running = set(); self.threads = []
@@ -4729,6 +5167,23 @@ class Daemon(object):
             self.dispatch(p, source="test-run")
         for fname, spec in self._take("edit-check.*.json"):
             self.edit_check(fname[len("edit-check."):-len(".json")], spec)
+        for _ in self._take("today-now*.json"):
+            if self.today is None:
+                log.warning("today-now 指令: 今日简报没起来 (%s), 略过", self.today_error or "?")
+                continue
+            try:
+                ans = self.today.request(manual=True, source="command")
+            except Exception as e:
+                ans = {"ok": False, "error": str(e)[:200]}
+            log.info("today-now 指令: %s", json.dumps(ans, ensure_ascii=False, default=str))
+        for _ in self._take("today-stats*.json"):
+            if self.today is None or WT is None:
+                log.warning("today-stats 指令: 今日简报没起来或 wa_today 没载入, 略过")
+                continue
+            try:
+                self.today.stats()
+            except Exception as e:
+                log.warning("today-stats 指令失败: %s", str(e)[:200])
 
     def edit_check(self, pk_s, spec):
         """commands/edit-check.<pk>.json {"old_text": "…"}: 把那封 inbound 放进改讯息观察名单, 当作门铃当时看到的是 old_text;
@@ -4797,6 +5252,12 @@ class Daemon(object):
         self.dossier.nightly()
         self.daily_tick()
         self.stale_check()
+        # 今日简报: 自己一个 try, 出事只记一行
+        if self.today is not None:
+            try:
+                self.today.tick()
+            except Exception as e:
+                log.warning("今日简报 tick 失败 (继续): %s", str(e)[:300])
         if WV is not None and (self.cfg.get("voice") or {}).get("enabled", True):
             try:
                 k = WV.close_stale(str(state_db_path(self.cfg)), str(voice_pairs_path(self.cfg)))   # 开对超过 30 分钟就关
@@ -5140,8 +5601,8 @@ def selftest():
     """假 WhatsApp 库 + 假状态库 + 假设定 + 假旁支模组 (monkeypatch), 只写暂存夹。⛔ 不叫 claude、不连外网 (板子测试只连本机 127.0.0.1)。"""
     import http.client
     import types
-    global WC, WF, WD, WB, WI, WBF, WV, WCAL, WSS, DC
-    saved = (WC, WF, WD, WB, WI, WBF, WV, WCAL, WSS, DC)
+    global WC, WF, WD, WB, WI, WBF, WV, WCAL, WSS, DC, WT
+    saved = (WC, WF, WD, WB, WI, WBF, WV, WCAL, WSS, DC, WT)
     saved_errors = dict(_IMPORT_ERRORS)
     saved_modules = sys.modules.get("dossier_core")
     saved_run, saved_popen = subprocess.run, subprocess.Popen
@@ -5209,7 +5670,7 @@ def selftest():
         fake_wc = _FakeCommon(root)
         fake_wc.lids = {"15550004444": "222000"}
         WC = fake_wc
-        WF = WD = WB = WI = WBF = WV = WCAL = WSS = None
+        WF = WD = WB = WI = WBF = WV = WCAL = WSS = WT = None
         _IMPORT_ERRORS.clear()
         _IMPORT_ERRORS["wa_selftest_fake"] = "ImportError: 自测故意放的一行"
         cfg_obj = {
@@ -6022,6 +6483,50 @@ def selftest():
               (opened18, after_run, after_probe))
         check("断路器 · 不是叫不动的失败照推 ⚠️ (断路器不开)",
               not d.breaker.down() and len(after_other) == 1 and after_other[0].startswith("⚠️"), after_other)
+        # 简报 run 的 scrub: 叫不动时的输出尾巴与 is_error 的原因先换掉主人回覆的原字, 才进断路器与 RunError
+        scr = lambda x: str(x).replace("REPLY-WORDS-91", "(r)")
+        rd_s = Path(tempfile.mkdtemp(prefix="wa_scrub_"))
+
+        def fake_claude_noresult(args, **kw):
+            r_ = _Done()
+            r_.stdout = json.dumps({"type": "system", "subtype": "init", "tools": ["Read"]}) + "\nyou said REPLY-WORDS-91 ok\n"
+            r_.returncode = 1
+            return r_
+        seen_fail = []
+        nf_saved = d.breaker.note_failure
+        d.breaker.note_failure = lambda reason: seen_fail.append(reason)
+        subprocess.run = fake_claude_noresult
+        try:
+            try:
+                d.brain.call_claude("p", str(rd_s), scrub=scr)
+                msg_s = ""
+            except RunError as e:
+                msg_s = str(e)
+            claude_reply.clear(); claude_reply.update({"result": "REPLY-WORDS-91 again", "is_error": True})
+            subprocess.run = fake_claude_any
+            res_s = d.brain.call_claude("p", str(rd_s), scrub=scr)
+            claude_reply.clear(); claude_reply.update({"result": "ok", "is_error": False,
+                                                       "permission_denials": ["Read /x/.ssh/REPLY-WORDS-91.md"]})
+            d.brain.call_claude("p", str(rd_s), scrub=scr)
+            den_lines = [x for x in (live / "wa_live.log").read_text(encoding="utf-8").splitlines() if "设定档挡下了脑的读取 (%s)" % rd_s.name in x]
+        finally:
+            subprocess.run = saved_run
+            d.breaker.note_failure = nf_saved
+        got_kw = {}
+
+        class _B(object):
+            def call_claude(self, prompt, run_dir, model=None, max_turns=None, append_system=None, scrub=None):
+                got_kw["scrub"] = scrub
+                return {}
+        fake_ty = type("FT", (), {})()
+        fake_ty.cfg, fake_ty.t, fake_ty.max_reads, fake_ty.d = {"brain": {}}, {}, 3, type("FD", (), {"brain": _B()})()
+        Today._call(fake_ty, "p", str(rd_s), scrub=scr)
+        check("简报 run 的 scrub: 没回 result 的尾巴、is_error 原因与被挡下的读取路径换掉主人回覆的原字才进断路器、错误讯息与 log; Today._call 把 scrub 传下去",
+              msg_s and "REPLY-WORDS-91" not in msg_s and "(r)" in msg_s and "REPLY-WORDS-91" not in res_s.get("error", "x")
+              and seen_fail and not any("REPLY-WORDS-91" in str(x) for x in seen_fail) and got_kw.get("scrub") is scr
+              and den_lines and not any("REPLY-WORDS-91" in x for x in den_lines) and "(r)" in den_lines[-1],
+              (msg_s, res_s.get("error"), seen_fail, got_kw, den_lines))
+        shutil.rmtree(rd_s, ignore_errors=True)
         lsrc = inspect.getsource(Daemon.loop)
         check("断路器 · 主循环每圈都看探测到期没 (不等每分钟那一拍)",
               "self.breaker.maybe_probe()" in lsrc and "self.breaker.maybe_probe()" not in inspect.getsource(Daemon.minute_tick))
@@ -6249,6 +6754,284 @@ def selftest():
             dmeta = dd2.state.conn.execute("SELECT COUNT(*) FROM meta WHERE key LIKE 'edits_%'").fetchone()[0]
         check("改讯息观察 · dry-run 照样换 pending 的字 (只动状态), 不记日报计数",
               nd == 1 and dit.get("text") == "这堂课的价钱是 RM 80" and dmeta == 0, (nd, dit, dmeta))
+
+        # ---- 23 · 今日简报接线 (假 wa_today 照 wa_today.py 的函数签章; 真的规矩由 wa_today 自己的自测管)
+        ft = {"sig": "sig-1", "open": "open-1", "built_ts": None, "block": False, "builds": [], "ticks": [], "decide": [],
+              "unassign": [], "settle": [], "retire": 0, "reply": 0, "raise_sig": False}
+        gate_ev = threading.Event()
+
+        def ft_tcfg(cfg_):
+            return dict(_TODAY_DEFAULTS, **((cfg_ or {}).get("today") or {}))
+
+        def ft_ensure(conn):
+            conn.execute("CREATE TABLE IF NOT EXISTS today_proposals(id TEXT PRIMARY KEY, project TEXT, rev INTEGER, status TEXT)")
+
+        def ft_sig(conn, day, buffer_path):
+            if ft["raise_sig"]:
+                raise RuntimeError("假的 inputs_sig 坏掉")
+            return ft["sig"], {"open": ft["open"]}
+
+        def ft_decide_tick(conn, cfg_, day, now, last_sig, buffer_path, gate_down=False, busy=False, manual=False, running_n=0, concurrency=2):
+            ft["ticks"].append({"manual": manual, "busy": busy, "last_sig": last_sig, "now": now})
+            sig, parts = ft_sig(conn, day, buffer_path)
+            gap = int(ft_tcfg(cfg_)["manual_min_gap_seconds"])
+            why = None
+            if busy:
+                why = "already" if manual else "busy"
+            elif manual and ft["built_ts"] is not None and time.time() - ft["built_ts"] < gap:
+                why = "already"
+            elif not manual and sig == last_sig:
+                why = "same_sig"
+            elif gate_down:
+                why = "brain_down"
+            elif running_n >= concurrency:
+                why = "queued"
+            return {"go": why is None, "why": why or "go", "sig": sig, "parts": parts}
+
+        def ft_build(conn, cfg_, day, buffer_path, vault, live_dir_, call=None, hooks=None, dry_run=False, force=False, now=None, lang="zh"):
+            rd = tmp / ("today-run-%d" % len(ft["builds"]))
+            rd.mkdir(exist_ok=True)
+            ft["builds"].append({"force": force, "dry_run": dry_run, "hooks": sorted(hooks or {}), "lang": lang, "vault": vault})
+            if ft["block"]:
+                gate_ev.wait(10)
+            if ft.get("fail"):
+                return {"ok": False, "why": "model_error", "error": "假的模型错误", "run_dir": str(rd)}
+            res_ = call("今日简报的假提示", rd)
+            ft["built_ts"] = time.time()
+            return {"ok": True, "brief": {"built_at": now_iso(), "usage": {"read": 120, "output": 30}}, "counts": {"props": 2, "who": "Casey Sample"},
+                    "run_dir": str(rd), "sig": ft["sig"], "text": res_.get("text")}
+
+        def ft_payload(conn, day, lang="zh"):
+            return {"ok": True, "date": day, "empty": False, "projects": [{"id": "Grow/Baking-School", "props": []}], "one": [], "short": "x",
+                    "tail": [], "seen": {"secret": 1}}
+
+        def ft_decide(conn, pid, rev, action, note=None, now=None):
+            ft["decide"].append((pid, rev, action, note))
+            return {"ok": True}
+
+        def ft_unassign(conn, key, project, now=None):
+            ft["unassign"].append((key, project))
+
+        def ft_settle(conn, pid, rev, to, now=None):
+            ft["settle"].append((pid, rev, to))
+            return {"ok": True}
+
+        def ft_retire(conn, buffer_path, now=None):
+            ft["retire"] += 1
+            return {"superseded": [], "trimmed": [], "placed": [], "skipped": None}
+
+        def ft_reply(conn, now=None):
+            ft["reply"] += 1
+            return {"stamped": []}
+
+        def ft_stats(conn, days=10):
+            return {"builds": {"2026-10-20": 3}, "read_tokens": {"2026-10-20": 900}, "by_status": {"ok": 2, "no": 1}, "who": "Casey Sample",
+                    "names": ["Casey Sample"]}
+        WT = types.SimpleNamespace(tcfg=ft_tcfg, ensure_tables=ft_ensure, inputs_sig=ft_sig, decide_tick=ft_decide_tick, build=ft_build,
+                                   api_payload=ft_payload, decide=ft_decide, unassign=ft_unassign, settle=ft_settle, retire_placed=ft_retire,
+                                   reply_stamp=ft_reply, stats=ft_stats)
+
+        def req_at(port_, method, path, body=None):
+            conn = http.client.HTTPConnection("127.0.0.1", port_, timeout=10)
+            try:
+                conn.request(method, path, body=json.dumps(body) if body is not None else None)
+                r = conn.getresponse()
+                raw_ = r.read()
+                try:
+                    return r.status, json.loads(raw_.decode("utf-8"))
+                except Exception:
+                    return r.status, None
+            finally:
+                conn.close()
+        today_on = {"enabled": True, "model": "claude-today-probe", "every_minutes": 45, "manual_min_gap_seconds": 60, "max_reads": 4}
+        model_calls = []
+
+        def fake_claude_today(args, **kw):
+            model_calls.append(list(args))
+            r_ = _Done()
+            r_.stdout = "\n".join(json.dumps(x) for x in [
+                {"type": "system", "subtype": "init", "tools": ["Read", "Glob", "Grep"]},
+                {"type": "result", "subtype": "success", "is_error": False, "result": "{}", "permission_denials": [],
+                 "usage": {"input_tokens": 1, "output_tokens": 1}}])
+            return r_
+
+        # dry run: 简报关着, 刷新回 dry_run, 一次模型都不叫, build 一次都不跑; GET /api/today 照样 200 JSON
+        subprocess.run = fake_claude_today
+        try:
+            dt_dry = Daemon(dict(cfg, state_db=str(live / "today-dry.sqlite"), today=dict(today_on)), dry_run=True)
+            srv_dry = start_board(dt_dry)
+            servers.append(srv_dry)
+            s_r, j_r = req_at(dt_dry.board_port, "POST", "/api/today/refresh", {})
+            s_g, j_g = req_at(dt_dry.board_port, "GET", "/api/today")
+            s_b, j_b = req_at(dt_dry.board_port, "GET", "/api/board")
+            (dt_dry.commands_dir / "today-now.json").write_text("{}", encoding="utf-8")
+            dt_dry.commands()
+            dt_dry.minute_tick()
+        finally:
+            subprocess.run = saved_run
+        check("今日简报 · dry-run: 关着, /api/today/refresh 回 dry_run, 不叫模型也不跑 build; GET /api/today 照样 200 JSON",
+              dt_dry.today is not None and not dt_dry.today.enabled and "dry-run" in dt_dry.today.why_off
+              and s_r == 200 and (j_r or {}).get("ok") is False and (j_r or {}).get("reason") == "dry_run"
+              and s_g == 200 and (j_g or {}).get("ok") is True and ((j_g or {}).get("status") or {}).get("dry_run") is True
+              and ((j_b or {}).get("ui") or {}).get("features", {}).get("today") is False
+              and not model_calls and not ft["builds"], (j_r, (j_g or {}).get("status"), model_calls, ft["builds"]))
+
+        # 开着: 起跑记下当下签章, 不补算
+        dt_on = Daemon(dict(cfg, state_db=str(live / "today-on.sqlite"), today=dict(today_on)))
+        ty = dt_on.today
+        srv_on = start_board(dt_on)
+        servers.append(srv_on)
+        P = dt_on.board_port
+        with ty._conn() as conn_:
+            n_runs0 = conn_.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
+        ty.tick()
+        check("今日简报 · 起跑把当下签章记成看过: 第一拍输入没变就不算 (不补算)",
+              ty.enabled and ty.last_sig == "sig-1" and not ft["builds"] and ft["ticks"] and ft["ticks"][-1]["last_sig"] == "sig-1", ft["ticks"][-1:])
+        s_b, j_b = req_at(P, "GET", "/api/board")
+        ui_on = (j_b or {}).get("ui") or {}
+        s_g, j_g = req_at(P, "GET", "/api/today")
+        check("今日简报 · GET /api/today 回 200 JSON (seen 不送出去, status 带 enabled · building · 间隔); ui.features.today 与 ui.today",
+              s_g == 200 and (j_g or {}).get("ok") is True and "seen" not in (j_g or {}) and ((j_g or {}).get("status") or {}).get("enabled") is True
+              and ((j_g or {}).get("status") or {}).get("every_minutes") == 45 and ((j_g or {}).get("status") or {}).get("building") is False
+              and ui_on.get("features", {}).get("today") is True and ui_on.get("today") == {"every_minutes": 45, "manual_min_gap_seconds": 60},
+              (s_g, j_g, ui_on.get("today")))
+        # 刷新: 第一次 started, 跑着时再按回 already, 跑完马上再按 (间隔内) 也回 already; 模型只叫一次
+        ft["block"] = True
+        subprocess.run = fake_claude_today
+        try:
+            s1_, a1 = req_at(P, "POST", "/api/today/refresh", {})
+            s2_, a2 = req_at(P, "POST", "/api/today/refresh", {})
+            s_mid, j_mid = req_at(P, "GET", "/api/today")
+            gate_ev.set()
+            if ty.thread is not None:
+                ty.thread.join(10)
+            ft["block"] = False
+            s3_, a3 = req_at(P, "POST", "/api/today/refresh", {})
+        finally:
+            subprocess.run = saved_run
+        check("今日简报 · 刷新: started → 跑着时 already → 刚建好 (间隔内) 也 already; build 只跑一次, 带 force 与四个 hook",
+              (a1 or {}).get("started") is True and (a2 or {}).get("already") is True and (a3 or {}).get("already") is True
+              and ((j_mid or {}).get("status") or {}).get("building") is True and len(ft["builds"]) == 1 and ft["builds"][0]["force"] is True
+              and ft["builds"][0]["hooks"] == ["extract_json", "outbound_since", "pack_messages", "worlds_block"]
+              and ft["builds"][0]["dry_run"] is False and ty.last_built, (a1, a2, a3, ft["builds"]))
+        with ty._conn() as conn_:
+            n_runs1 = conn_.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
+        mc = model_calls[-1] if model_calls else []
+        logtext = (live / "wa_live.log").read_text(encoding="utf-8")
+        check("今日简报 · _call 走 brain.call_claude, 用 today.model 与简报自己的 system (最多读 today.max_reads 个档), 不进 runs 表",
+              len(model_calls) == 1 and "--model" in mc and mc[mc.index("--model") + 1] == "claude-today-probe"
+              and "--append-system-prompt" in mc and "最多 4 个" in mc[mc.index("--append-system-prompt") + 1]
+              and n_runs1 == n_runs0 and "今日简报: 建好" in logtext and "Casey Sample" not in logtext.split("今日简报: 建好", 1)[1].split("\n", 1)[0],
+              (n_runs0, n_runs1, mc[:8]))
+        # 板上按卡: decide · unassign (用卡的 id 查 project) · settle 都照参数交给 wa_today
+        with ty._conn() as conn_:
+            conn_.execute("INSERT INTO today_proposals(id, project, rev, status) VALUES(?,?,?,?)", ("cafe0123456789ab", "Grow/Baking-School", 1, "pending"))
+        sd_, ad_ = req_at(P, "POST", "/api/today/decide", {"id": "cafe0123456789ab", "rev": "2", "action": "ok", "note": "先问价钱"})
+        su_, au_ = req_at(P, "POST", "/api/today/unassign", {"key": D1, "id": "cafe0123456789ab"})
+        su2_, au2_ = req_at(P, "POST", "/api/today/unassign", {"key": D1, "project": "Run/Weekly-Market"})
+        ss_, as_ = req_at(P, "POST", "/api/today/settle", {"id": "cafe01", "rev": 3, "to": "Tasks/Order-Flour.md"})
+        sbad_, abad_ = req_at(P, "POST", "/api/today/decide", {"id": "cafe0123456789ab", "action": "ok"})
+        logtext = (live / "wa_live.log").read_text(encoding="utf-8")
+        check("今日简报 · decide / unassign / settle 照参数交给 wa_today (rev 转整数, unassign 用 id 查 project); 没 rev 回 bad_request; log 不写 note 与去处",
+              ft["decide"] == [("cafe0123456789ab", 2, "ok", "先问价钱")]
+              and ft["unassign"] == [(D1, "Grow/Baking-School"), (D1, "Run/Weekly-Market")]
+              and ft["settle"] == [("cafe01", 3, "Tasks/Order-Flour.md")] and (ad_ or {}).get("ok") is True and (au_ or {}).get("ok") is True
+              and (as_ or {}).get("ok") is True and (abad_ or {}).get("reason") == "bad_request"
+              and "先问价钱" not in logtext and "Order-Flour" not in logtext, (ft["decide"], ft["unassign"], ft["settle"], abad_))
+        # 命令档: today-now 走 request(manual=True); today-stats 写 live/today/stats.json, 只有数字
+        req_seen = []
+        real_request = ty.request
+        ty.request = lambda manual=False, source="tick": req_seen.append((manual, source)) or {"ok": True, "already": True}
+        (dt_on.commands_dir / "today-now.json").write_text("{}", encoding="utf-8")
+        (dt_on.commands_dir / "today-stats.json").write_text("{}", encoding="utf-8")
+        dt_on.commands()
+        ty.request = real_request
+        stats_p = live / "today" / "stats.json"
+        stats_txt = stats_p.read_text(encoding="utf-8") if stats_p.is_file() else ""
+        logtext = (live / "wa_live.log").read_text(encoding="utf-8")
+        check("today-now.json: 走 request(manual=True, source=command), log 写回答; 命令档吃掉",
+              req_seen == [(True, "command")] and 'today-now 指令: {"ok": true, "already": true}' in logtext
+              and not list(dt_on.commands_dir.glob("today-*.json")), req_seen)
+        check("today-stats.json: 写 live/today/stats.json, 只有数字 (上游多给的名字不落档)",
+              bool(stats_txt) and json.loads(stats_txt).get("builds") == {"2026-10-20": 3} and json.loads(stats_txt).get("by_status") == {"ok": 2, "no": 1}
+              and "Casey" not in stats_txt and oct(stats_p.stat().st_mode & 0o777) == "0o600", stats_txt[:200])
+        # retire_tick: 起跑后第一拍跑一次, open 没变不跑, 变了才跑
+        r0 = ft["retire"]
+        ty.tick()
+        ty.tick()
+        r1 = ft["retire"]
+        ft["open"] = "open-2"
+        ty.tick()
+        r2 = ft["retire"]
+        ty.tick()
+        r3 = ft["retire"]
+        check("今日简报 · retire_tick 只在 intake 的 open 条目变了才跑 (起跑后第一拍跑一次); reply_tick 每拍都跑",
+              r0 == 1 and r1 == 1 and r2 == 2 and r3 == 2 and ft["reply"] >= 5, (r0, r1, r2, r3, ft["reply"]))
+        # 建不成: 推一则 (today_fail), 同一份输入不自动重试, 自动的退一个 every_minutes
+        ft["fail"] = True
+        ft["built_ts"] = None
+        sent_before = len(fake_wc.sent)
+        builds_before = len(ft["builds"])
+        af = ty.request(manual=True, source="selftest")
+        if ty.thread is not None:
+            ty.thread.join(10)
+        ft["fail"] = False
+        ft["sig"] = "sig-2"
+        ab = ty.request(manual=False, source="tick")
+        check("今日简报 · 建不成: 推一则 today_fail, last_error 记原因, 自动重算退一个 every_minutes (不会每分钟叫一次模型)",
+              (af or {}).get("started") is True and len(ft["builds"]) == builds_before + 1 and len(fake_wc.sent) == sent_before + 1
+              and "今日简报没建成" in fake_wc.sent[-1] and str(ty.last_error).startswith("model_error") and ab == {"ok": True, "skipped": "backoff"},
+              (af, ab, fake_wc.sent[sent_before:], ty.last_error))
+        ty.fail_ts = None
+        ft["sig"] = "sig-1"
+        # today.enabled 关着 (不是 dry-run): 每个 POST 都回 disabled
+        dt_off = Daemon(dict(cfg, state_db=str(live / "today-off.sqlite"), today=dict(today_on, enabled=False)))
+        srv_off = start_board(dt_off)
+        servers.append(srv_off)
+        offs = [req_at(dt_off.board_port, "POST", "/api/today/" + x, {"id": "cafe01", "rev": 1, "action": "ok", "key": D1, "project": "x", "to": "y"})[1]
+                for x in ("refresh", "decide", "unassign", "settle")]
+        check("今日简报 · today.enabled 关着: refresh / decide / unassign / settle 一律回 {ok: false, reason: disabled}, 不碰 wa_today",
+              all((o or {}).get("ok") is False and (o or {}).get("reason") == "disabled" for o in offs) and len(ft["decide"]) == 1, offs)
+        msrc = inspect.getsource(Daemon.minute_tick)
+        check("今日简报 · minute_tick 叫 today.tick() 包在自己的 try 里", "self.today.tick()" in msrc and "今日简报 tick 失败 (继续)" in msrc)
+        # Today 起不来: daemon 照起, /api/today 503, 每分钟那一拍不炸
+        ft["raise_sig"] = True
+        dt_bad = Daemon(dict(cfg, state_db=str(live / "today-bad.sqlite"), today=dict(today_on)))
+        srv_bad = start_board(dt_bad)
+        servers.append(srv_bad)
+        sb_, jb_ = req_at(dt_bad.board_port, "GET", "/api/today")
+        sbp_, jbp_ = req_at(dt_bad.board_port, "POST", "/api/today/refresh", {})
+        sbb_, jbb_ = req_at(dt_bad.board_port, "GET", "/api/board")
+        crash = None
+        try:
+            dt_bad.minute_tick()
+            (dt_bad.commands_dir / "today-now.json").write_text("{}", encoding="utf-8")
+            dt_bad.commands()
+        except Exception as e:
+            crash = e
+        ft["raise_sig"] = False
+        logtext = (live / "wa_live.log").read_text(encoding="utf-8")
+        check("今日简报 · 起不来: daemon 照起, GET /api/today 回 503, 刷新也 503, 板子照常, 每分钟那一拍不炸",
+              dt_bad.today is None and "今日简报起不来" in logtext and sb_ == 503 and (jb_ or {}).get("ok") is False and sbp_ == 503
+              and sbb_ == 200 and ((jbb_ or {}).get("ui") or {}).get("features", {}).get("today") is False and crash is None, (sb_, jb_, sbp_, crash))
+        WT = None
+        # outbound_since: 只读 ZISFROMME=1、时间之后、最新 n 封照时间排, 只有文字类带字
+        since_ = (dt.datetime.now() - dt.timedelta(minutes=30)).isoformat(timespec="seconds")
+        D9 = "15550009191@s.whatsapp.net"
+        cs.execute("INSERT INTO ZWACHATSESSION VALUES(?,?,?,?,?,?,?)", (91, D9, "Outbound Probe", 0, core_now_minus(), 0, None))
+        cs.commit()
+        add_msg(9101, 91, "半小时前的回覆", fromme=1, minutes_ago=60)
+        add_msg(9102, 91, "我下午三点到", fromme=1, minutes_ago=20)
+        add_msg(9103, 91, "对方的讯息", fromme=0, minutes_ago=15)
+        add_msg(9104, 91, "图片的字不该带出来", mtype=1, fromme=1, minutes_ago=10)
+        add_msg(9105, 91, "面粉我带", fromme=1, minutes_ago=5)
+        add_msg(9106, 91, "到了", fromme=1, minutes_ago=1)
+        ob3 = outbound_since(D9, since_, n=3)
+        ob9 = outbound_since(D9, since_, n=9)
+        check("outbound_since: 只读主人发的、时间之后的、最新 n 封照时间排; 非文字类不带字",
+              [o["text"] for o in ob3] == ["", "面粉我带", "到了"] and ob3[0]["type"] == "图片"
+              and [o["text"] for o in ob9] == ["我下午三点到", "", "面粉我带", "到了"] and all(sorted(o) == ["at", "text", "type"] for o in ob9)
+              and ob9[0]["at"] < ob9[-1]["at"] and outbound_since(D9, "not a time") == [], (ob3, ob9))
     except Exception:
         import traceback
         traceback.print_exc()
@@ -6260,7 +7043,7 @@ def selftest():
             except Exception:
                 pass
         subprocess.run, subprocess.Popen = saved_run, saved_popen
-        WC, WF, WD, WB, WI, WBF, WV, WCAL, WSS, DC = saved
+        WC, WF, WD, WB, WI, WBF, WV, WCAL, WSS, DC, WT = saved
         _IMPORT_ERRORS.clear(); _IMPORT_ERRORS.update(saved_errors)
         if saved_modules is not None:
             sys.modules["dossier_core"] = saved_modules

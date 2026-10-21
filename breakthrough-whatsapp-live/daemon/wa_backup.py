@@ -18,7 +18,8 @@ Copied (a missing item is skipped, not an error):
                          api key, access key, private key, client key, app key, auth, cookie, bearer, webhook or signing;
                          and inside any string, bot tokens, bearer tokens, sk-/ghp_/xox tokens and passwords in URLs
   summaries.md · facts.json · voice-pairs.jsonl · second-source-whitelist.json ·
-  topic-map.json · seeds.json · acceptance.json · prompts/ · digest/ · dossier-backups/ · adapters/ (the owner's own)
+  topic-map.json · seeds.json · acceptance.json · prompts/ · digest/ · dossier-backups/ · adapters/ (the owner's own) ·
+  today/ (the board's Today brief: one <YYYY-MM-DD>.json per day and stats.json; counts and the program's own lines)
 Never copied: telegram.json · runs/ · commands/ · variants/ · dossier-cli/ · calendar/ · *.log · claude-settings.json
   (rendered again by wa_setup.py init) · backup-last.json · second-source-last.json
 Every copied file is read back (same size as its source). Rotation deletes only YYYY-MM-DD folders directly under the
@@ -49,6 +50,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import wa_common as W  # noqa: E402
 
+VERSION = "1.3.0"
 DATE_DIR = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SECRET_KEY_RE = re.compile(r"(token|secret|passw|pwd|credential|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?key|"
                            r"app[_-]?key|auth|cookie|bearer|webhook|signing)", re.I)
@@ -64,7 +66,7 @@ _VALUE_PATTERNS = [
 COPY_FILES = ("summaries.md", "facts.json", "topic-map.json")
 # owner records that are not in the lists above: kept too (they are small and hard to rebuild)
 EXTRA_FILES = ("seeds.json", "acceptance.json")
-COPY_DIRS = ("prompts", "digest", "dossier-backups", "adapters")
+COPY_DIRS = ("prompts", "digest", "dossier-backups", "adapters", "today")
 NEVER = ("telegram.json", "runs/", "commands/", "variants/", "dossier-cli/", "calendar/", "*.log",
          "claude-settings.json (rendered by wa_setup.py init)", "backup-last.json", "second-source-last.json",
          "people-write.lock (an empty lock file)")
@@ -186,8 +188,10 @@ def plan(cfg, dest, now):
     add("file", live / COPY_FILES[2], COPY_FILES[2])
     for name in EXTRA_FILES:
         add("file", live / name, name)
+    today_on = bool((cfg.get("today") or {}).get("enabled"))
     for name in COPY_DIRS:
-        add("dir", live / name, name, expected=(name != "adapters"))
+        # adapters/ exists only when the owner wrote one; today/ only once the brief is on
+        add("dir", live / name, name, expected=(name not in ("adapters", "today") or (name == "today" and today_on)))
     keep = max(1, int((cfg.get("backup") or {}).get("keep") or 7))
     existing = [p for p in date_dirs(dest) if p.name != day]
     survivors = sorted(existing + [target], key=lambda p: p.name)
@@ -333,6 +337,7 @@ def selftest():
         (live / "second-source-whitelist.json").write_text('{"chats": []}', encoding="utf-8")
         (live / "topic-map.json").write_text("{}", encoding="utf-8")
         for d, f, body in (("digest", "2026-09-13.md", "quiet day\n"), ("prompts", "brain-prompt.md", "prompt\n"),
+                           ("today", "2026-09-13.json", '{"date": "2026-09-13", "projects": []}\n'),
                            ("dossier-backups", "Alex-Rivera/2026-09-12.md", "old note\n"), ("digest", "noise.log", "log\n")):
             (live / d / f).parent.mkdir(parents=True, exist_ok=True)
             (live / d / f).write_text(body, encoding="utf-8")
@@ -360,16 +365,19 @@ def selftest():
         (fresh / "config.json").write_text("{}", encoding="utf-8")
         fresh_txt = describe(plan(W.apply_defaults({}, fresh / "config.json"), tmp / "fresh-dest", now))
         check("[later]  voice-pairs.jsonl" in fresh_txt and "second-source-whitelist" not in fresh_txt and "adapters" not in fresh_txt
-              and "people-write.lock" in fresh_txt,
-              "fresh install plan: voice-pairs.jsonl shows as a [later] line, no whitelist or adapters line, people-write.lock never copied")
+              and "today/" not in fresh_txt and "people-write.lock" in fresh_txt,
+              "fresh install plan: voice-pairs.jsonl shows as a [later] line, no whitelist, adapters or today line, people-write.lock never copied")
+        fresh_on = describe(plan(W.apply_defaults({"today": {"enabled": True}}, fresh / "config.json"), tmp / "fresh-dest", now))
+        check("[later]  today/" in fresh_on, "today brief on: today/ shows as a [later] line until the first brief is written")
 
         rec = run_backup(cfg, dest=str(dest), now=now, require_process="", out=quiet.append)
         t = dest / "2026-09-14"
         check(rec["ok"] is True and rec["error"] is None, "real run ok (path with # and ? in the live folder)")
         names = sorted(str(p.relative_to(t)) for p in t.rglob("*") if p.is_file())
         check(names == ["config.json", "digest/2026-09-13.md", "dossier-backups/Alex-Rivera/2026-09-12.md", "prompts/brain-prompt.md",
-                        "second-source-whitelist.json", "state.sqlite", "summaries.md", "topic-map.json", "voice-pairs.jsonl"],
-              "copied exactly the listed items (empty voice-pairs.jsonl included, logs and never-list excluded)")
+                        "second-source-whitelist.json", "state.sqlite", "summaries.md", "today/2026-09-13.json", "topic-map.json",
+                        "voice-pairs.jsonl"],
+              "copied exactly the listed items (today/<date>.json and empty voice-pairs.jsonl included, logs and never-list excluded)")
         cj = json.loads((t / "config.json").read_text(encoding="utf-8"))
         text = (t / "config.json").read_text(encoding="utf-8")
         check(cj["bot_token"] == REDACTED and cj["telegram"]["api_key"] == REDACTED and cj["list"][0]["Secret"] == REDACTED
@@ -388,7 +396,7 @@ def selftest():
         check(len(dd) == 7 and dd[-1] == "2026-09-14" and "2026-08-03" not in dd and "2026-08-04" in dd and (dest / "notes-keep-me").is_dir(),
               "rotation keeps 7 dated folders, other folders untouched")
         last = json.loads((live / "backup-last.json").read_text(encoding="utf-8"))
-        check(sorted(last) == ["at", "bytes", "dest", "dry_run", "error", "files", "ok"] and last["ok"] and last["files"] == 9
+        check(sorted(last) == ["at", "bytes", "dest", "dry_run", "error", "files", "ok"] and last["ok"] and last["files"] == 10
               and last["bytes"] > 0 and last["dest"] == str(t), "backup-last.json has the seven keys")
         rec2 = run_backup(cfg, dest=str(dest), now=now, require_process="", out=quiet.append)
         check(rec2["ok"] and len(date_dirs(dest)) == 7, "same day again overwrites the same folder")

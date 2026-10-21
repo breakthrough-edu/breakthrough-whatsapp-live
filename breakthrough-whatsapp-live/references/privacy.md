@@ -9,7 +9,7 @@ WhatsApp Live reads private messages that other people sent you. This page says,
 - **Excerpts of conversations do leave the Mac, to Anthropic.** Every judgment, person note and nightly pull is a Claude Code run, and the messages it reads travel with it, under the terms of the account Claude Code is logged in with.
 - **Pushes leave through the outlet you choose.** With Telegram they pass through Telegram's servers.
 - **The board never leaves the Mac.** It listens on `127.0.0.1` and your phone reaches it over your tailnet. It has no login.
-- **Your vault receives other people's words** in person notes and intake entries. Your vault may sync and be indexed. Each writer has its own switch.
+- **Your vault receives other people's words** in person notes and intake entries. Your vault may sync and be indexed. Each writer has its own switch. The board's Today brief reads the vault and writes nothing into it.
 - **The nightly backup is a plain, unencrypted copy** of the daemon's state in the folder you pick.
 
 ## What data exists, and where
@@ -31,17 +31,18 @@ WhatsApp Live reads private messages that other people sent you. This page says,
 | `<home>/INSTALL-PROGRESS.md`, `<home>/INSTALLED.md` | Your answers during install and, when your vault keeps no registry, the six-cell entries. Can name tools you chose and groups you ticked. |
 | `<live>/config.json` (0600) | Your phone and names, group names with their policies, your vocabulary and business paragraph, paths. |
 | `<live>/telegram.json` (0600) | The push bot's token and chat id. |
-| `<live>/state.sqlite` | Per conversation: name, world, stage, priority, latest draft, the brain's situation line and timeline, rolling summary, calendar hint. Per run: the brain's full output, token counts, errors. Pending bursts with their message text. One row per inbound message with sender name and gate decision (no message text). The edit watch list: the words of each message that passed the gate, kept for at most `edit_watch.minutes` ("Quotes in your vault", below). |
+| `<live>/state.sqlite` | Per conversation: name, world, stage, priority, latest draft, the brain's situation line and timeline, rolling summary, calendar hint. Per run: the brain's full output, token counts, errors. Pending bursts with their message text. One row per inbound message with sender name and gate decision (no message text). The edit watch list: the words of each message that passed the gate, kept for at most `edit_watch.minutes` ("Quotes in your vault", below). With the Today brief on, its three tables ("The Today brief", below). |
 | `<live>/summaries.md` | One line per conversation, written by the brain. |
 | `<live>/facts.json` | Names, phones, payments and attendance from your facts source. |
 | `<live>/voice-pairs.jsonl` | The brain's drafts next to what you actually sent. Nothing the other side wrote, no names. |
 | `<live>/runs/<run>/` | For each run: the full prompt (conversation pack, voice transcripts, candidate notes), the model's raw output stream and its judgment. The most complete record on the Mac. Never backed up, never cleaned by the kit. |
 | `<live>/dossier-backups/<note>/` | The last three versions of each person note (`dossier.backups_keep`). |
 | `<live>/digest/` | Each morning digest: names and short situation lines. |
+| `<live>/today/<date>.json` | With the Today brief on: the latest brief of that day (project names, the brain's gist lines, the cards with their evidence lines), and `stats.json` (counts only) when you ask for it. |
 | `<live>/calendar/<key>.ics` | With `calendar.destination: ics`: event title, date, place, note, and the person's name and phone. |
 | `<live>/wa_live.log`, `<live>/stderr.log` | The operational log. It can carry conversation names and the opening words of messages that passed the gate. |
 
-The daemon sets `umask 077` when it starts, so every file it and the programs it starts create (runs, packs, transcripts, snapshots, logs, digests, calendar files, new person notes) is 0600 and every folder 0700; a file that already exists keeps its mode. `wa_setup.py init` creates the working tree 0700 and its files 0600, and the reader writes its packs 0600 when you run it yourself. The exceptions are the rendered launchd files (0644, they hold paths only) and the playbook copies in your vault (files 0644, new folders 0755, like the rest of a vault). The two logs launchd opens itself (`live/stderr.log`, `live/intake-evening.log`) are created with launchd's own mode, so the kit closes them: the daemon sets `stderr.log` to 0600 every time it starts, and the evening job sets `intake-evening.log` to 0600 every time it runs. To confirm nothing is readable by other users of the Mac: `find <home> -perm -004 -type f` lists only files in `launchd/`.
+The daemon sets `umask 077` when it starts, so every file it and the programs it starts create (runs, packs, transcripts, snapshots, logs, digests, calendar files, new person notes) is 0600 and every folder 0700; a file that already exists keeps its mode. `wa_setup.py init` creates the working tree 0700 and its files 0600, and the reader writes its packs 0600 when you run it yourself. The exceptions are the rendered launchd files (0644, they hold paths only) and the playbook copies in your vault (files 0644, new folders 0755, like the rest of a vault). The log launchd opens itself (`live/stderr.log`) is created with launchd's own mode, so the daemon sets it to 0600 every time it starts. An evening job kept from an earlier release does the same for its own `live/intake-evening.log` each time it runs. To confirm nothing is readable by other users of the Mac: `find <home> -perm -004 -type f` lists only files in `launchd/`.
 
 ### In your vault
 
@@ -58,7 +59,7 @@ A vault usually syncs (Obsidian Sync, iCloud, git) and is often indexed (search 
 
 ### In the backup folder
 
-Each night `wa_backup.run_backup` copies into `<backup.dest>/<date>/`: `state.sqlite` (everything listed for it above), `config.json` with secret-looking values replaced by `<redacted>`, `summaries.md`, `facts.json`, `voice-pairs.jsonl`, `second-source-whitelist.json`, `topic-map.json`, `seeds.json` (install-time hashes), `acceptance.json` (the observation week's questions), `prompts/`, `digest/`, `dossier-backups/` (full copies of person notes) and `adapters/` (your own implementations, copied as they are, so no token belongs in them). It never copies `telegram.json`, `runs/`, `commands/`, `variants/`, `dossier-cli/`, `calendar/`, logs, `claude-settings.json`, `backup-last.json`, `second-source-last.json` or `people-write.lock` (an empty lock file), and it keeps `backup.keep` (7) dated folders.
+Each night `wa_backup.run_backup` copies into `<backup.dest>/<date>/`: `state.sqlite` (everything listed for it above), `config.json` with secret-looking values replaced by `<redacted>`, `summaries.md`, `facts.json`, `voice-pairs.jsonl`, `second-source-whitelist.json`, `topic-map.json`, `seeds.json` (install-time hashes), `acceptance.json` (the observation week's questions), `prompts/`, `digest/`, `dossier-backups/` (full copies of person notes), `today/` (the Today briefs, when that feature is on) and `adapters/` (your own implementations, copied as they are, so no token belongs in them). It never copies `telegram.json`, `runs/`, `commands/`, `variants/`, `dossier-cli/`, `calendar/`, logs, `claude-settings.json`, `backup-last.json`, `second-source-last.json` or `people-write.lock` (an empty lock file), and it keeps `backup.keep` (7) dated folders.
 
 The kit does not encrypt the backup. When `backup.dest` is a cloud-synced folder, that provider stores the daemon's state, drafts, summaries and three versions of every person note. An external disk keeps all of it off every cloud; an encrypted disk, or an encrypted disk image made in Disk Utility, keeps it unreadable if the disk is lost.
 
@@ -72,7 +73,7 @@ Every model call is `claude -p` on your Mac, and its prompt, plus any file the m
 | Person note | Nightly (`dossier.nightly_at`), the board's note buttons, the facts queue | This person's messages over `dossier.pack_days` (30), their facts lines, the current note, the person-dossier playbook skeleton, your doctrine's roles list | `dossier.enabled` |
 | Summary backfill | Only when you start it (station O9) | Reading packs over `backfill.days` (30) for chats with at least `backfill.min_msgs` (10) messages, `backfill.batch_size` (10) chats per call, only chats the gate passes (`backfill.respect_gate`) | Do not start it |
 | Second source | Nightly (`second_source.at`) | Yesterday's messages from whitelisted chats, only when someone other than you wrote | `second_source.enabled` |
-| Evening intake sort | Nightly (`intake.evening_at`) | The open intake entries: names, what to do, quotes | `intake.evening_push` |
+| Today brief | At most every `today.every_minutes` (30), only when its inputs changed, and when you press refresh | Today's judgments of the conversations that moved (name, world, situation, stake, summary, captures); your own replies after the last judgment, at most three per conversation, each cut to 200 characters; every open intake entry with its quote; the brief and task list of each candidate project; one line per other active project; any vault file it opens itself, at most `today.max_reads` (6) | `today.enabled` |
 | Probe | When you drop `probe-claude.json` | A trivial test prompt | none needed |
 
 Two things to know about that table:
@@ -94,7 +95,7 @@ Two things to know about that table:
 
 | Flow | What leaves | To whom |
 |---|---|---|
-| Pushes, `notify.outlet: telegram` | In `errors` mode: a conversation name and an error line. In `needs_me` or `all` mode: the name, world, stage and priority, the brain's reason, the full draft, and a `wa.me` link with the phone number. The morning digest: names and short situation lines. The evening intake list: names, what to do, the suggestion. | Telegram's servers (bot chats are not end-to-end encrypted), then your phone |
+| Pushes, `notify.outlet: telegram` | In `errors` mode: a conversation name and an error line. In `needs_me` or `all` mode: the name, world, stage and priority, the brain's reason, the full draft, and a `wa.me` link with the phone number. The morning digest: names and short situation lines (and, with the Today brief on, a line of counts with no names). An evening intake list, only from an evening job an earlier release installed and you kept: names, what to do, the suggestion. | Telegram's servers (bot chats are not end-to-end encrypted), then your phone |
 | Pushes, `notify.outlet: command` | The same text, on the command's stdin | Wherever your command sends it |
 | Facts source, `facts.source` | Reads only. `lark` calls Lark's API for your tables; `csv` with a link fetches that file | Lark, or the host of the CSV link |
 | Second source, `second_source.source: lark` | Reads only: yesterday's messages from whitelisted chats | Lark's API |
@@ -151,7 +152,7 @@ Only when the owner chose the optional setup token at station C2 (`install/C2-da
 | Writer | What lands | Where | Switch it off |
 |---|---|---|---|
 | Intake capture from a triage run | One quote (up to 200 characters, marked 🗣 when found word for word, ≈ when a gist), who said it, what to do, the machine's guess; a correction entry also holds the words before an edit | Intake buffer | `intake.enabled: false` |
-| Intake capture from the second source | The same, tagged with that source | Intake buffer | `intake.enabled: false` (it stops every intake writer and the evening push), or `second_source.enabled: false` |
+| Intake capture from the second source | The same, tagged with that source | Intake buffer | `intake.enabled: false` (it stops every intake writer), or `second_source.enabled: false` |
 | Recent line from a one-to-one run | One line the brain wrote about where things stand, not a quote | The recent block of an existing person note | See below |
 | Recent line from a group speaker | The speaker's own words, up to 90 characters, with the group's name | The recent block of that speaker's existing note | See below |
 | Recent line from the second source | One line about what the person has been saying | The recent block of a note carrying that source's id key (`second_source.id_key`) | `second_source.enabled: false` |
@@ -165,9 +166,20 @@ Only when the owner chose the optional setup token at station C2 (`install/C2-da
 
 **Removing a quote that already landed.** Edit the note or the buffer entry by hand. Earlier versions still sit in `<live>/dossier-backups/<note>/` (three) and in every nightly backup folder (seven days), and in your vault's own sync history; clean those too if the words must be gone everywhere.
 
+## The Today brief
+
+Only while `today.enabled` is true (station O7).
+
+- **What it reads.** Today's judgments of the conversations that moved, the open entries of the intake buffer, the brief note and task list of each project a source may belong to (found from your vault's own folders and doctrine, `paths.vault` and `paths.doctrine`), one line per other active project, and at most `today.max_reads` (6) vault files the run opens itself. It also reads your own replies after a conversation's last judgment, at most three per conversation and 200 characters each, from the WhatsApp database through the daemon, so a card can say you already answered. To check quoted words, it reads the run packs the triage runs already wrote, on the Mac.
+- **What it stores.** Three tables in `<live>/state.sqlite` (`today_brief`, `today_proposals`, `today_assign`): each build's brief, each card with its status, your note on it and the evidence lines the program built (entry titles, checked quote lines, capture lines), and which project a source was assigned to or taken away from. `<live>/today/<date>.json` (0600) holds the latest brief of each day. Each build has a run folder under `<live>/runs/` with its `prompt.md` and the model's output, like every run. The nightly backup copies `today/` and `state.sqlite`, never `runs/`.
+- **What it never stores.** The text of your replies goes into the brief run folder's `prompt.md` and nowhere else the brief writes (a later triage run of that conversation reads your reply like any message, in its own run folder); the run folder also keeps the model's raw answer (`result.txt`, `claude.stdout.jsonl`, and `claude.stderr.txt` when the call wrote one), which may repeat them, like every run folder (the kit never deletes run folders; `references/operating.md` says how to clear old ones). A card records only the time you replied. Before anything else is stored (tables, `today/<date>.json`, the board's answers, the log, and the error text of a failed call), the program replaces any stretch of the model's answer (and of a failed call's error text, which is otherwise stored as written), in any field (labels, task names and task fields included, and again after a list or an object is joined into text), that also appears in one of your replies (at least `today.quote_min_chars` CJK characters, or 4 Latin words (6 letters or digits or more), ignoring case, spacing, punctuation (inside a word too) and full-width forms, and reading what is written between the words the way a program would: backslash escapes (`\n`, `\t`, `\uXXXX`, `\u{...}`, `\UXXXXXXXX`, `\xXX`, octal of one to three digits, `\N{...}`, at any depth, a backslash before a letter or digit read both as an escape and as a plain separator), HTML entities (named, legacy names such as `&nbsp` also without the semicolon, and numeric), percent codes (`%20`, `%2520`, `%u0020`), tags (also malformed ones, read the way a browser reads them) and HTML comments, also when one is written inside another, at any depth (`&lt;br&gt;`, `&amp;nbsp;`); a CSS escape (`\0020 `) is not read as one) with "(your reply, not copied)" (zh "(你的回覆, 不抄)"). Known limitation: the match covers the common forms above, nested ones included; a deliberately constructed shape outside them (a CSS escape, decomposed Unicode, a gap that reads two different ways, one reply split across two fields) can keep words, and no model has a reason to write one. CJK here means Chinese characters, Japanese kana and Korean Hangul, each counted on its own. A paraphrase shorter than that, or reworded, is not caught: it is the model's own text and is stored like the rest of the brief.
+- **What it writes into the vault.** Nothing. The board proposes; your OK or No and your note change only the daemon's own state. Placing happens in your own session, through the intake mode. A card whose entries were placed retires itself, which again changes only the daemon's state.
+- **What goes to Anthropic.** The prompt above, once per build ("What goes to Anthropic, run by run").
+- **Turning it off.** `today.enabled: false` and a restart. The tables and `live/today/` stay; delete the folder by hand if you want the briefs gone (the run folders follow the rule for every run folder).
+
 ## The old session transcript hazard
 
-`claude -p` normally saves every session as a transcript under `~/.claude/projects/<a folder named after the working directory>/`. Every headless call this kit makes (triage, person notes, backfill, second source, evening sort, probe) passes `--no-session-persistence`, so no transcript is written, and `brain.cwd` sits outside the vault so no vault instructions or indexes are involved. Each one also runs with `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` and `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1`, so your own Claude Code memory and any `CLAUDE.md` above the working folder do not travel to Anthropic inside every run; the `probe-claude.json` probe proves it (`references/pitfalls.md`, pit 14).
+`claude -p` normally saves every session as a transcript under `~/.claude/projects/<a folder named after the working directory>/`. Every headless call this kit makes (triage, person notes, backfill, second source, the Today brief, probe) passes `--no-session-persistence`, so no transcript is written, and `brain.cwd` sits outside the vault so no vault instructions or indexes are involved. Each one also runs with `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` and `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1`, so your own Claude Code memory and any `CLAUDE.md` above the working folder do not travel to Anthropic inside every run; the `probe-claude.json` probe proves it (`references/pitfalls.md`, pit 14).
 
 If anything ever ran `claude -p` from that folder, or from an older working folder, without the flag (an older version, a test run, an adapter you wrote), its transcripts are still on disk, and each one holds a full prompt: a conversation pack with other people's messages.
 
@@ -214,8 +226,8 @@ Restart after any change: `wa_setup.py restart --config <live>/config.json`.
 | One-to-one chats, groups, single chats | `direct_policy`, `group_policies`, `unlisted_group_policy`, `ignored_jids` | Narrows what the gate passes |
 | Pushes | `notify.mode: off`, or `notify.outlet: none` | No pushes at all |
 | The digest push | `digest.push: false` (still written to `<live>/digest/`), or `digest.enabled: false` | No morning push |
-| The evening intake list | `intake.evening_push: false` | No evening push |
-| Intake writers | `intake.enabled: false` | Nothing appended to the buffer, no evening push |
+| The Today brief | `today.enabled: false` | No brief run; the board hides the page; the tables and `live/today/` stay until you delete them |
+| Intake writers | `intake.enabled: false` | Nothing appended to the buffer |
 | Person notes | `dossier.enabled: false` | No note runs (prove the recent lines separately, above) |
 | Second source | `second_source.enabled: false` | No nightly pull |
 | Facts | `facts.enabled: false` | No nightly facts read |
@@ -224,4 +236,4 @@ Restart after any change: `wa_setup.py restart --config <live>/config.json`.
 | Document text in packs | `reader.read_documents: false`, then `sync-reader-config` | Packs list documents by name only |
 | The setup token | `bin.claude` back to its previous value, then remove the token file ("The setup token file", above) | The daemon uses the Keychain login |
 | The board | `board.enabled: false`, and remove its `tailscale serve` rule | No board |
-| Everything | `wa_setup.py uninstall-launchd --config <live>/config.json` (the same with `--intake` when the evening job is installed) | The daemon's python is stopped first, then the job is booted out and its plist removed from `~/Library/LaunchAgents/`, so a reboot does not bring it back; `install-launchd` brings it back |
+| Everything | `wa_setup.py uninstall-launchd --config <live>/config.json` (the same with `--intake` when an evening job from an earlier release is still installed) | The daemon's python is stopped first, then the job is booted out and its plist removed from `~/Library/LaunchAgents/`, so a reboot does not bring it back; `install-launchd` brings it back |

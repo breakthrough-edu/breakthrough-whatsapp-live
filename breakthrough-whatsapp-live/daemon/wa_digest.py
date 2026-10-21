@@ -21,6 +21,13 @@ Blocks, each only when it has something (the health line always):
                  edits_reread:<day> written by the daemon's edit watch; nothing when none were edited);
                  a block that is not configured is left out, and a result from an earlier night says so instead of
                  passing for fresh (fix)
+  7 brief        its own line after the health line: how often the board's Today brief was rebuilt that day and what
+                 happened to its cards (OK, No, retired). The numbers come from wa_today.yesterday_line_data (one rule,
+                 the brief's own module; imported only here and guarded): no line when that module is missing, its
+                 tables are absent or no brief was built that day. The pushed short form carries builds/cards in the
+                 health block.
+A digest for the current date (--for <today>, or digest-now.json with that date) says today, not yesterday, in every line
+that names the day.
 The acceptance question (<live>/acceptance.json {"questions": {"YYYY-MM-DD": "..."}}, keyed by the send day, which is
 the digest day plus one) adds two lines outside the 12. A quiet day still gets a digest: silence must not look like a
 dead daemon.
@@ -55,7 +62,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import wa_common as W  # noqa: E402
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 MAX_LINES = 12
 MAX_OPEN = 5
@@ -80,12 +87,15 @@ TXT = {
         "intake": "intake 里 %d 条 open", "intake_missing": "intake buffer 不在", "seed_fallback": "⚠️ 主人副本不在, 正用 payload 种子: %s", "intake_unset": "intake.buffer 没设",
         "acceptance": "🧪 今天验收 (%s):", "brain_down": "脑叫不动 %d 分钟 (%s)", "s_brain_down": "脑停 %d 分",
         "edits": "改讯息 %d, 重读 %d", "s_edits": "改 %d/%d",
+        "brief": "简报: 重算 %d 次 · 卡 %d 张 (好 %d · 不用 %d · 收起 %d)", "s_brief": "简报 %d/%d",
+        "quiet_today": "今天安静, daemon 活着 (库 %s 小时前有动)",
+        "volume_today": "今天 %d 封进闸 · %d 个 run (成功 %d / 失败 %s) · 省了 %d 个", "s_quiet_today": "今天安静, daemon 活着",
         "kinds": {"triage": "分诊", "dossier": "人物档", "second_source": "第二来源", "backfill": "回填", "intake_evening": "intake 晚间"},
         "s_quiet": "昨天安静, daemon 活着", "s_volume": "%d 封 · %d run%s · 省 %d", "s_fail": " (败 %d)",
         "s_open": "要回 %d", "s_moves": "阶段动 %d", "s_more": "+%d 个, 板上看", "s_notes": "人物档", "s_notes_line": "开 %d · 重写 %d%s",
         "s_bounced": " · 退 %d", "s_facts": "%s 对不上", "s_facts_line": "没对话 %d · 电话坏 %d · 排开档 %d%s", "s_silent": " (另 %d 没话)",
         "s_health": "健康", "s_db": "库 %sh", "s_db_missing": "库 ?", "s_never": "未跑", "s_stale": "旧", "s_intake_missing": "未建",
-        "s_accept": "🧪 今天验收", "s_footer_board": "全文在板上「昨天」格", "s_footer_file": "全文在 digest/%s.md",
+        "s_accept": "🧪 今天验收", "s_footer_board": "全文在板上「昨天」格", "s_footer_board_today": "全文在板上「日报」格", "s_footer_file": "全文在 digest/%s.md",
     },
     "en": {
         "header": "📋 WhatsApp Live digest · %s", "quiet": "Quiet yesterday, daemon alive (database changed %s hours ago)",
@@ -104,13 +114,16 @@ TXT = {
         "intake": "intake has %d open", "intake_missing": "intake buffer missing", "seed_fallback": "⚠️ owner copy missing, running on the payload seed: %s", "intake_unset": "intake.buffer not set",
         "acceptance": "🧪 Today's check (%s):", "brain_down": "brain was down %d minutes (%s)", "s_brain_down": "brain down %dm",
         "edits": "edited %d, re-read %d", "s_edits": "edits %d/%d",
+        "brief": "Brief: rebuilt %d times · %d cards (OK %d · No %d · retired %d)", "s_brief": "brief %d/%d",
+        "quiet_today": "Quiet today, daemon alive (database changed %s hours ago)",
+        "volume_today": "Today %d messages through the gate · %d runs (ok %d / failed %s) · %d saved", "s_quiet_today": "Quiet today, daemon alive",
         "kinds": {"triage": "triage", "dossier": "notes", "second_source": "second source", "backfill": "backfill", "intake_evening": "intake evening"},
         "s_quiet": "Quiet yesterday, daemon alive", "s_volume": "%d msgs · %d runs%s · %d saved", "s_fail": " (%d failed)",
         "s_open": "Waiting on you %d", "s_moves": "Stage moves %d", "s_more": "+%d more on the board", "s_notes": "Person notes",
         "s_notes_line": "opened %d · rewritten %d%s", "s_bounced": " · bounced %d", "s_facts": "%s mismatches",
         "s_facts_line": "no chat %d · bad phone %d · queued %d%s", "s_silent": " (plus %d silent)",
         "s_health": "Health", "s_db": "db %sh", "s_db_missing": "db ?", "s_never": "not run", "s_stale": "stale", "s_intake_missing": "missing",
-        "s_accept": "🧪 Today's check", "s_footer_board": "Full text in the board's yesterday card", "s_footer_file": "Full text in digest/%s.md",
+        "s_accept": "🧪 Today's check", "s_footer_board": "Full text in the board's yesterday card", "s_footer_board_today": "Full text in the board's digest card", "s_footer_file": "Full text in digest/%s.md",
     },
 }
 
@@ -387,6 +400,31 @@ def _edits(conn, day):
     return out if out["seen"] > 0 else None
 
 
+def _brief(conn, day):
+    """The Today brief's numbers for the day through wa_today.yesterday_line_data (the brief's own module owns the rule;
+    imported here, never at the top, so the digest runs without it). Returns {"builds", "cards", "ok", "no", "retired"} or
+    None: module missing, its tables absent, no build that day, or anything unreadable."""
+    try:
+        import wa_today
+        got = wa_today.yesterday_line_data(conn, day.isoformat())
+    except Exception:
+        return None
+    if not isinstance(got, dict):
+        return None
+    out = {}
+    for k in ("builds", "cards", "ok", "no", "retired"):
+        try:
+            out[k] = int(got.get(k) or 0)
+        except (TypeError, ValueError):
+            out[k] = 0
+    return out if out["builds"] > 0 else None
+
+
+def _day_key(t, key, is_today):
+    """The label for a line that names the day: the today form when the digest day is the current date."""
+    return t[key + "_today"] if is_today else t[key]
+
+
 def _brain_outages(conn, lo, hi, now=None):
     """Minutes the brain could not be called during the day: brain_outages rows overlapping [lo, hi), an open row counting
     up to now. Returns {"minutes", "kinds"} or None when zero."""
@@ -546,6 +584,8 @@ def build_digest(cfg, day):
     open_, moves, dossier = {"total": 0, "rows": []}, [], {"opened": 0, "rewritten": 0, "bounced": 0, "total": 0, "names": {}}
     outages = None
     edits = None
+    brief = None
+    is_today = (day == dt.date.today())
     if state.is_file():
         conn = _ro(state)
         try:
@@ -556,23 +596,26 @@ def build_digest(cfg, day):
             dossier = _dossier(conn, lo, hi)
             outages = _brain_outages(conn, lo, hi)
             edits = _edits(conn, day)
+            brief = _brief(conn, day)
         finally:
             conn.close()
     facts = _facts(cfg, day)
     health = _health(cfg, day, state.is_file())
     health["brain_down"] = outages
     health["edits"] = edits
+    health["brief"] = brief
+    brief_line = [t["brief"] % (brief["builds"], brief["cards"], brief["ok"], brief["no"], brief["retired"])] if brief else []
     empty = (inbound["gate"] == 0 and runs["total"] == 0 and open_["total"] == 0 and not moves and dossier["total"] == 0)
     date_s = day.isoformat()
     header = t["header"] % date_s
     health_line = _fmt_health(health, facts, cfg, day, lang)
     b5 = _block_facts(facts, lang)
     data = {"date": date_s, "lang": lang, "inbound": inbound, "runs": runs, "open": open_, "stage_moves": moves,
-            "dossier": dossier, "facts": facts, "health": health}
+            "dossier": dossier, "facts": facts, "health": health, "is_today": is_today}
     accept = _acceptance_block(cfg, day, lang)
     if empty:
         wal_s = health["wal_age_hours"] if health["wal_age_hours"] is not None else "?"
-        lines = [header, t["quiet"] % wal_s] + b5 + [health_line] + accept
+        lines = [header, _day_key(t, "quiet", is_today) % wal_s] + b5 + [health_line] + brief_line + accept
         out = {"date": date_s, "text": "\n".join(lines), "lines": lines, "empty": True, "data": data}
         out["text_short"] = compact_text(out, cfg, day)
         return out
@@ -580,13 +623,13 @@ def build_digest(cfg, day):
     b1 = []
     if inbound["gate"] or runs["total"] or inbound["saved"]:
         fail = "%d" % runs["failed"] + (t["unfinished"] % runs["unfinished"] if runs["unfinished"] else "")
-        line = t["volume"] % (inbound["gate"], runs["total"], runs["ok"], fail, inbound["saved"])
+        line = _day_key(t, "volume", is_today) % (inbound["gate"], runs["total"], runs["ok"], fail, inbound["saved"])
         kinds = runs.get("by_kind") or {}
         if set(kinds) - {"triage"}:
             line += "; " + " · ".join("%s %d" % (t["kinds"].get(k, k), n) for k, n in sorted(kinds.items(), key=lambda kv: -kv[1]))
         b1 = [line]
     b4 = [t["notes"] % (dossier["opened"], dossier["rewritten"], dossier["bounced"])] if dossier["total"] else []
-    fixed = 1 + len(b1) + len(b4) + len(b5) + 1
+    fixed = 1 + len(b1) + len(b4) + len(b5) + 1 + len(brief_line)
     keep2, keep3 = min(MAX_OPEN, open_["total"]), len(moves)
 
     def total_lines():
@@ -599,7 +642,7 @@ def build_digest(cfg, day):
         keep2 -= 1
     b2, drop2 = _block_open(open_["rows"], keep2, lang)
     b3, drop3 = _block_moves(moves, keep3, cfg, lang)
-    lines = [header] + b1 + b2 + b3 + b4 + b5 + [health_line] + accept
+    lines = [header] + b1 + b2 + b3 + b4 + b5 + [health_line] + brief_line + accept
     data["trimmed"] = {"open_dropped": drop2, "moves_dropped": drop3}
     out = {"date": date_s, "text": "\n".join(lines), "lines": lines, "empty": False, "data": data}
     out["text_short"] = compact_text(out, cfg, day)
@@ -619,7 +662,7 @@ def compact_text(d, cfg=None, day=None):
     mm_dd = date_s[5:].replace("-", "/") if len(date_s) >= 10 else date_s
     blocks = []
     if d.get("empty"):
-        blocks.append("<b>📋 WhatsApp Live · %s</b>\n%s" % (E(mm_dd), E(t["s_quiet"])))
+        blocks.append("<b>📋 WhatsApp Live · %s</b>\n%s" % (E(mm_dd), E(_day_key(t, "s_quiet", bool(x.get("is_today"))))))
     else:
         fail = runs.get("failed") or 0
         blocks.append("<b>📋 WhatsApp Live · %s</b>\n%s" % (E(mm_dd), E(t["s_volume"] % (
@@ -660,12 +703,15 @@ def compact_text(d, cfg=None, day=None):
         hp.append(t["s_edits"] % (h["edits"]["seen"], h["edits"]["reread"]))
     if h.get("brain_down"):
         hp.append(t["s_brain_down"] % h["brain_down"]["minutes"])
+    if h.get("brief"):
+        hp.append(t["s_brief"] % (h["brief"]["builds"], h["brief"]["cards"]))
     blocks.append("<b>%s</b>\n%s" % (E(t["s_health"]), E(" · ".join(str(p) for p in hp))))
     q = _acceptance_block(cfg, day, lang) if (cfg is not None and day is not None) else []
     if q:
         blocks.append("<b>%s</b>\n%s" % (E(t["s_accept"]), E(q[1])))
     board_on = bool(((cfg or {}).get("board") or {}).get("enabled", True))
-    blocks.append("<i>%s</i>" % E(t["s_footer_board"] if board_on else (t["s_footer_file"] % date_s)))
+    # the board titles that card 昨天 / Yesterday only for yesterday's digest, otherwise 日报 / Digest
+    blocks.append("<i>%s</i>" % E(_day_key(t, "s_footer_board", bool(x.get("is_today"))) if board_on else (t["s_footer_file"] % date_s)))
     return "\n\n".join(blocks)
 
 
@@ -725,8 +771,12 @@ def send_digest(cfg, d):
 # ---------------------------------------------------------------- selftest
 
 def _selftest():
+    import types
     check = W._Checks("wa_digest")
     tmp = Path(tempfile.mkdtemp(prefix="wa_digest_selftest."))
+    _missing = object()
+    saved_wt = sys.modules.get("wa_today", _missing)
+    sys.modules["wa_today"] = None          # the brief module stays out until the brief checks put a fake one in
     try:
         live = tmp / "home" / "live"
         live.mkdir(parents=True)
@@ -845,6 +895,58 @@ def _selftest():
         o5 = build_digest(cfg, "2026-09-05")
         check(any(x.endswith("脑叫不动 30 分钟 (auth)") for x in o5["lines"]), "brain outage: an open row counts up to now (here the end of the day)")
 
+        # brief line: numbers from wa_today.yesterday_line_data; a fake module stands in for it here
+        brief_calls = []
+
+        def fake_line(conn, day_s):
+            brief_calls.append(day_s)
+            conn.execute("SELECT 1").fetchone()
+            return {"builds": 4, "cards": 6, "ok": 3, "no": 1, "retired": 2, "read_tokens": 1200} if day_s == D else None
+        sys.modules["wa_today"] = types.SimpleNamespace(yesterday_line_data=fake_line)
+        b = build_digest(cfg, day)
+        hi_ = [i for i, x in enumerate(b["lines"]) if x.startswith("健康")]
+        check(bool(hi_) and b["lines"][hi_[0] + 1] == "简报: 重算 4 次 · 卡 6 张 (好 3 · 不用 1 · 收起 2)" and brief_calls[-1] == D
+              and "简报 4/6" in b["text_short"] and b["data"]["health"]["brief"]["cards"] == 6,
+              "brief line: its own line right after the health line, numbers of the digest day, short form builds/cards")
+        bq = build_digest(cfg, "2026-09-01")
+        check(not any(x.startswith("简报") for x in bq["lines"]) and "简报" not in bq["text_short"], "brief line: absent on a day without a build")
+        sys.modules["wa_today"] = types.SimpleNamespace(yesterday_line_data=lambda conn, day_s: {"builds": 0, "cards": 0})
+        b0 = build_digest(cfg, day)
+        sys.modules["wa_today"] = types.SimpleNamespace(yesterday_line_data=lambda conn, day_s: 1 / 0)
+        bx = build_digest(cfg, day)
+        sys.modules["wa_today"] = None
+        bn = build_digest(cfg, day)
+        check(not any(x.startswith("简报") for x in b0["lines"] + bx["lines"] + bn["lines"]) and bn["lines"][1] == L[1],
+              "brief line: absent at zero builds, when the module raises, and when wa_today is missing (the digest still builds)")
+        en_b = W.load_config(live / "config.json")
+        en_b["board"]["lang"] = "en"
+        sys.modules["wa_today"] = types.SimpleNamespace(yesterday_line_data=fake_line)
+        eb = build_digest(en_b, day)
+        sys.modules["wa_today"] = None
+        check("Brief: rebuilt 4 times · 6 cards (OK 3 · No 1 · retired 2)" in eb["lines"] and "brief 4/6" in eb["text_short"],
+              "brief line in the English table, short form")
+
+        # --for <today>: every line that names the day says today
+        today_d = dt.date.today()
+        quiet_cfg = dict(cfg, state_db=str(tmp / "no-state-yet.sqlite"))
+        tq = build_digest(quiet_cfg, today_d)
+        en_t = W.load_config(live / "config.json")
+        en_t["board"]["lang"] = "en"
+        tqe = build_digest(dict(en_t, state_db=str(tmp / "no-state-yet.sqlite")), today_d)
+        check(tq["empty"] and tq["lines"][1].startswith("今天安静, daemon 活着") and "今天安静" in tq["text_short"] and "昨天" not in tq["text"] + tq["text_short"]
+              and tqe["lines"][1].startswith("Quiet today, daemon alive") and "Quiet today" in tqe["text_short"]
+              and "yesterday" not in (tqe["text"] + tqe["text_short"]).lower() and "「日报」格" in tq["text_short"],
+              "today: a quiet digest for the current date says today (long and short forms, both languages)")
+        c = sqlite3.connect(str(live / "state.sqlite"))
+        c.executemany("INSERT INTO inbound_log(seen_at, decision) VALUES (?, ?)", [(today_d.isoformat() + "T00:00:01", "pass:all")] * 2)
+        c.commit()
+        c.close()
+        tb = build_digest(cfg, today_d)
+        tbe = build_digest(en_t, today_d)
+        check(not tb["empty"] and tb["lines"][1].startswith("今天 2 封进闸 · ") and tbe["lines"][1].startswith("Today 2 messages through the gate · ")
+              and "昨天" not in tb["text"] and build_digest(cfg, day)["lines"][1].startswith("昨天 4 封进闸"),
+              "today: the volume line for the current date says today; an earlier day still says yesterday")
+
         en_cfg = W.load_config(live / "config.json")
         en_cfg["board"]["lang"] = "en"
         en_cfg["digest"]["push"] = False
@@ -872,6 +974,10 @@ def _selftest():
         src = Path(__file__).read_text(encoding="utf-8")
         check(chr(0x2014) not in src and chr(0x2013) not in src, "no em dash or en dash in this file")
     finally:
+        if saved_wt is _missing:
+            sys.modules.pop("wa_today", None)
+        else:
+            sys.modules["wa_today"] = saved_wt
         shutil.rmtree(str(tmp), ignore_errors=True)
     return check.done()
 

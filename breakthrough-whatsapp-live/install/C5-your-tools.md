@@ -8,7 +8,7 @@ HOME_DIR="<paths.home from the progress file header>"
 LIVE="$HOME_DIR/live"
 PY=/usr/bin/python3
 LABEL="<launchd.label from the progress file header>"
-ILABEL="$LABEL.intake"
+ILABEL="<launchd.intake_label from the progress file header>"
 PORT="<board.port from the progress file header>"
 ```
 
@@ -22,7 +22,7 @@ One question at a time, each with its cost said plainly, and the owner's answer 
 4. **When something breaks, where should the alert reach you?** Station O4, push outlet: `telegram` (a bot of the owner's own; alert text passes through Telegram's servers), `command` (any command that reads the text on stdin, such as a macOS notification or an ntfy call), or `none` (the log only). No model usage. What each alert carries, by `notify.mode`: `references/privacy.md`.
 5. **Which folder should get a copy of the daemon's state every night?** Station O5, nightly backup: a folder in iCloud Drive, Google Drive or Dropbox, or an external disk. Cost: an unencrypted copy of the state database, drafts, summaries and three versions of every person note in that folder; a cloud folder puts all of it with that provider; seven nights are kept.
 6. **When should the morning digest arrive, and should it be pushed?** Station O6. The digest is already on (08:00, written to `live/digest/`, pushed once an outlet exists); it is the one scheduled push, and on a quiet day it still arrives, which is how silence stays trustworthy. No model usage.
-7. **Should things people ask of you be caught into an intake buffer in your vault**, and placed by saying "intake"? Station O7, which needs the vault and adds command-base patches 2 and 3. Cost: up to two captures a run, each with a verbatim quote of up to 200 characters, written into the vault; an optional evening push makes one model call on nights when entries are open.
+7. **Should things people ask of you be caught into an intake buffer in your vault**, and placed by saying "intake"? Station O7, which needs the vault and adds command-base patches 2 and 3. Cost: up to two captures a run, each with a verbatim quote of up to 200 characters, written into the vault; the optional Today brief on the board makes one extra model call, at most every 30 minutes, only when its inputs changed (today's judgments, the open intake entries, a source you took out of a project, or your replies in conversations its cards cover), and reads a few vault files.
 8. **Should drafts learn from what you actually send?** Station O8, voice loop, already on. Cost: pairs of the brain's draft and the text the owner sent, kept in `live/voice-pairs.jsonl` (the owner's words only, no names), and a few of them added to every judgment's prompt.
 9. **Should the conversations that were never judged get a starting summary now?** Station O9, summary backfill, run once when started. Cost: the heaviest single use of the model in the kit: a month of every chat with at least ten messages that the gate passes, ten chats per call (with a gate that passes no chat there is nothing to backfill, unless `backfill.respect_gate` is re-ruled). In return, the brain has a memory of each chat from its first run instead of building one run by run.
 10. **Is there a second Mac that could take over if this one dies?** Station O10, standby machine: a written cold start and one rehearsal. ⛔ Never two daemons at once.

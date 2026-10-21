@@ -12,7 +12,7 @@ HOME_DIR="<paths.home from the progress file header>"
 LIVE="$HOME_DIR/live"
 PY=/usr/bin/python3
 LABEL="<launchd.label from the progress file header>"
-ILABEL="$LABEL.intake"
+ILABEL="<launchd.intake_label from the progress file header>"
 PORT="<board.port from the progress file header>"
 case "$HOME_DIR $LABEL $PORT" in *"<"*|"~"*) echo "fill in HOME_DIR, LABEL and PORT first (HOME_DIR as an absolute path)" >&2; exit 1;; esac
 WADB="$HOME/Library/Group Containers/group.net.whatsapp.WhatsApp.shared/ChatStorage.sqlite"
@@ -328,7 +328,36 @@ sqlite3 -readonly "$LIVE/state.sqlite" "select id, started_at, ok, error from ru
 - `reader failed for <name> (<jid>): <error>` or `empty reading pack for <name> (<jid>)`: that conversation's reading pack failed, as in "Runs are stuck with zero output" (a voice-heavy chat: warm the cache with `prewarm-30.json` first).
 - A failed row in `runs` with an empty `error` is a bug, never expected: checklist row K254 is the check.
 
-## The evening intake push does not arrive
+## The brief is empty or stale
+
+The board's Today page says no brief yet today, shows yesterday's under a banner, or has not moved for hours.
+
+```sh
+"$PY" "$KIT/daemon/wa_setup.py" doctor --config "$LIVE/config.json" | grep today
+sqlite3 -readonly "$LIVE/state.sqlite" "select date, built_at, run_dir from today_brief order by built_at desc limit 3"
+curl -s "http://127.0.0.1:$PORT/api/today" | "$PY" -c 'import json, sys; d = json.load(sys.stdin); print(d.get("date"), d.get("built_at"), d.get("empty"), d.get("stale"), d.get("status"))'
+ls -td "$LIVE"/runs/*-today/ | head -3
+```
+
+Go down the list; the first one that holds is the cause.
+
+- **The brief part did not start.** Every `/api/today` route answers `503` with an error, while the rest of the board works: the start lines of the log say why (a module that failed to load, a state table it could not create).
+- **Off.** `doctor` says `today: off`, the board has no Today button, and every `POST /api/today/...` answers `"reason": "disabled"`: `today.enabled` is false. Station O7 question 5 turns it on (config edit ritual, then `wa_setup.py restart`).
+- **Dry run.** The daemon's start line says the brief never calls the model under `--dry-run`, and a refresh answers `"reason": "dry_run"`. By design: a dry run daemon never builds a brief.
+- **No judgment today.** The brief is built from today's judgments and the open intake entries. At start, and again at midnight, the daemon records the current inputs as seen and waits for the first change, so a quiet morning shows yesterday's brief (`"stale": true`) until a conversation is judged, an entry lands, or you press refresh.
+- **Inputs unchanged.** An automatic rebuild happens only when something it reads changed: a new judgment, an entry added or placed, a reply of yours in a conversation its cards cover, a source you took out of a project. Nothing changed: nothing to rebuild, and no model call is spent.
+- **Too soon.** Automatic rebuilds come at most every `today.every_minutes` (30). A refresh within `today.manual_min_gap_seconds` (60) of the last build answers `already` and shows the latest.
+- **Queued or busy.** While `debounce.global_concurrency` triage runs are going, the build waits for the next minute; a build already running answers `already`.
+- **Breaker open.** A refresh answers `"reason": "brain_down"` with the breaker's state, and the board shows the brain banner: the brief waits like every other run (`references/operating.md`, "When the brain cannot be called").
+- **Vault path.** `today.enabled` with `paths.vault` empty is a `check-config` error, and a vault folder that moved leaves the project index empty: everything lands in the unassigned block. Check `paths.vault` in the config, then `"$PY" "$KIT/daemon/wa_today.py" --config "$LIVE/config.json" --build --dry-run | head -40`, which prints the prompt with the projects it found and never calls the model.
+- **Doctrine unreadable.** When `paths.doctrine` cannot be read, the brief uses five default task statuses and says so in its notes (the board shows them under the brief); point `paths.doctrine` at your structure law to fix it.
+- **A build failed.** A failed build logs one line with the reason and pushes once (at most every six hours), then waits `today.every_minutes` before it tries again on its own; a refresh (board button or `today-now.json`) still works at once. The run folder holds `prompt.md` and the model's answer. `no_json` means the answer held no JSON object the program could read; `model_error` means the call itself failed. Proposals the program refused are counted in the brief's `rejected` list, each with its reason (no source, a task file that does not exist, a seed inside a project block, and the like).
+
+To force a build now, the same as the board's refresh: `echo '{}' > "$LIVE/commands/today-now.json"`, then the log line answering it (`started`, `already`, `queued`, `skipped`, `brain_down`, `disabled`). The run folders are `"$LIVE"/runs/<YYYYmmdd-HHMMSS>-today/`, and the brief of each day is `"$LIVE/today/<date>.json"`.
+
+### An evening job kept from an earlier release
+
+The evening push is retired in v1.3.0, and no new install has it. An owner who said no when `install/update.md` offered to remove it keeps a working job; when its push stops arriving:
 
 ```sh
 "$PY" "$KIT/daemon/wa_intake.py" --config "$LIVE/config.json" --evening-status
@@ -336,11 +365,7 @@ tail -5 "$LIVE/intake-evening.log"
 launchctl print gui/$(id -u)/$ILABEL | grep -E "state = |runs = "
 ```
 
-- `"run": false` with a `why`: `intake.enabled is false, evening push skipped`, `intake.evening_push is false, evening push skipped`, `intake.buffer is not set, evening push skipped`, `intake buffer not found: <path>`, or `notify.outlet is none or notify.mode is off, evening push skipped`.
-- `open entries: 0, nothing sent`: nothing was open; by design.
-- `push: notify: not sent (<why>)`: the outlet refused it; see "Pushes are not arriving".
-- `pre-sort unusable, sending the raw list:`: the model's answer could not be read, so the plain list went out instead.
-- No service: the job was never installed, or `intake.evening_at` changed without `render-launchd --intake` and `install-launchd --intake`.
+`"run": false` with a `why` names the switch that stopped it; `push: notify: not sent (<why>)` is the outlet ("Pushes are not arriving"). The job cannot be rendered or installed again, so a changed time or a broken script is not repaired: remove it with `wa_setup.py uninstall-launchd --intake --config "$LIVE/config.json"` and use the Today brief instead.
 
 ## Cage breach
 
@@ -358,7 +383,7 @@ grep -e "CAGE BREACH" -e "claude-settings.json" "$LIVE/wa_live.log" | tail -5
 
 ## MEMORY LOADED in the log
 
-A warning `MEMORY LOADED: 这个 run 载入了 Claude 记忆 (<paths>), 环境变数没生效; 丢 commands/probe-claude.json 查` (a triage run loaded Claude memory: the environment variables did not take), `MEMORY LOADED (档案 run): …` (the same for a person note run), or `MEMORY LOADED: the pre-sort run loaded Claude memory` in `intake-evening.log` means the Claude Code on this Mac ignored `CLAUDE_CODE_DISABLE_AUTO_MEMORY` or `CLAUDE_CODE_DISABLE_CLAUDE_MDS`, most likely after a Claude Code update renamed or dropped one of them (`references/pitfalls.md`, pit 14). Runs still happen, but your memory index and `CLAUDE.md` files ride along in each one and can push it to the turn limit.
+A warning `MEMORY LOADED: 这个 run 载入了 Claude 记忆 (<paths>), 环境变数没生效; 丢 commands/probe-claude.json 查` (a triage run loaded Claude memory: the environment variables did not take), `MEMORY LOADED (档案 run): …` (the same for a person note run), or `MEMORY LOADED: the pre-sort run loaded Claude memory` in `intake-evening.log` (only from an evening job kept from an earlier release) means the Claude Code on this Mac ignored `CLAUDE_CODE_DISABLE_AUTO_MEMORY` or `CLAUDE_CODE_DISABLE_CLAUDE_MDS`, most likely after a Claude Code update renamed or dropped one of them (`references/pitfalls.md`, pit 14). Runs still happen, but your memory index and `CLAUDE.md` files ride along in each one and can push it to the turn limit.
 
 ```sh
 grep "MEMORY LOADED" "$LIVE/wa_live.log" | tail -3
@@ -375,7 +400,7 @@ A minute later: `grep "probe-claude: " "$LIVE/wa_live.log" | tail -1`, and `clau
 
 What this version does not do, so nobody hunts for a bug that is a boundary.
 
-- **Usage from two paths is not in the `runs` table**: the evening intake pre-sort's model call, and `wa_backfill.py --run` from the terminal. A terminal backfill also rewrites `live/summaries.md` without the gate filter until the daemon's next run rewrites it. Use the `backfill-summaries.json` command file instead.
+- **Usage from two paths is not in the `runs` table**: the Today brief's builds (their usage is in the `today_brief` table, the digest's brief line and `today-stats.json`), and `wa_backfill.py --run` from the terminal. A terminal backfill also rewrites `live/summaries.md` without the gate filter until the daemon's next run rewrites it. Use the `backfill-summaries.json` command file instead.
 - **`live/runs/` is never cleaned**, and neither are `<home>/runs-work/`, `<home>/transcripts-cache/` and `<home>/doc-text-cache/` (`references/operating.md`, "Housekeeping").
 - **Nothing technical stops two Macs from running at once.** The rule lives in the runbook and in `uninstall-launchd`; a standby that was installed and not uninstalled comes back at its next login.
 - **The board has no login.** The tailnet is its only lock; anyone in the tailnet can open it (`references/privacy.md`).
@@ -394,5 +419,6 @@ What this version does not do, so nobody hunts for a bug that is a boundary.
 - **`check-config` knows your own adapter by name only**: it accepts `facts.source`, `second_source.source` or `calendar.destination` naming a file in `live/adapters/`, but reports a config block the example does not list (such as `facts.<name>`) as an unknown key; and `wa_calendar.py --probe` accepts only the shipped destinations (`references/interfaces.md`, "Where a new implementation lives").
 - **A side stage should keep the key `parked`**: the judgment rules, the time rule and the person note writer honor `side: true` on another key, but `check-config` asks for a stage keyed `parked` while `stage_rules.parked_after_days` is above 0, and the board draws only `parked` as the gray side stage.
 - **Probing `claude` over ssh gives a false `Not logged in`**; every claude probe runs on the Mac itself.
-- **The circuit breaker holds only the daemon's own model calls.** The evening intake job is a separate launchd job: on an expired login or a reached limit its pre-sort fails on its own, outside the breaker.
+- **The circuit breaker holds only the daemon's own model calls.** An evening intake job kept from an earlier release is a separate launchd job: on an expired login or a reached limit its pre-sort fails on its own, outside the breaker.
+- **The Today brief writes nothing into the vault.** OK on a card is a note to your own session; placing happens in the intake mode. There is no button that writes a card into the vault.
 - **Board search reads only what WhatsApp Desktop keeps on this Mac**: message text and file names, never voice transcripts or document text, and never status or broadcast chats.

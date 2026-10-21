@@ -5,7 +5,7 @@ status: active
 confirmed_by_owner: false
 tags: []
 ---
-<!-- seed: breakthrough-whatsapp-live playbooks/whatsapp-live-triage/standby-machine-runbook.md v1.0.1 -->
+<!-- seed: breakthrough-whatsapp-live playbooks/whatsapp-live-triage/standby-machine-runbook.md v1.1.0 -->
 
 # 常驻机躺了怎么办 (WhatsApp Live 冷启动程序)
 
@@ -24,7 +24,7 @@ KIT="$HOME/.claude/skills/breakthrough-whatsapp-live"
 WL="<config paths.home, 绝对路径>"      # config paths.home
 L="$WL/live"                         # config paths.live_dir
 LABEL="<config launchd.label>"       # config launchd.label
-ILABEL="$LABEL.intake"               # config launchd.intake_label, 永远是 label 加 .intake
+ILABEL="<config launchd.intake_label>"   # config launchd.intake_label, 照 config 抄, 不要自己从 label 拼
 PORT="<config board.port>"           # config board.port
 PRIMARY="<常驻机的 ssh 别名>"          # ~/.ssh/config 里给常驻机取的 Host 名
 RL="<常驻机上的 live 夹, 相对常驻机的家目录>"   # 例: paths.home 是家目录下的 X 夹, 就写 X/live
@@ -106,7 +106,7 @@ ls -L "$HOME/.claude/skills/breakthrough-whatsapp-read/SKILL.md" "$HOME/.claude/
 # ⛔ 先不要 install-launchd: live/ 夹还没放回备份
 ```
 
-**晚间进料口那支现在就决定。** 常驻机若开着晚间推播 (`intake.enabled` 与 `intake.evening_push` 都是 true), 它是另一支 launchd (`$ILABEL`), 每天 `intake.evening_at` 推一则。决定接手期间备援机要不要也跑它: 它只推给你自己, 不跑的代价是接手期间每晚少一则整理提醒; 要跑, 第 3 步上线时照 `install/O7-intake.md` 装它那支, 第 4 步交回时一起停。选哪个, 写进 `$WL/INSTALL-PROGRESS.md` 或登记簿里备援机那一行。
+**晚间进料口那支不用决定: 它退役了。** 晚间推播在 v1.3.0 退役, 由板上的今日简报取代; `render-launchd --intake` 与 `install-launchd --intake` 都会拒绝, 所以备援机上永远不会有 `$ILABEL` 那支。常驻机若还留着早期版本装的那支, 那是常驻机自己的事, 接手不用管它。今日简报跟着放回来的 config 走: `today.enabled` 是 true, 备援机上线后照样有, 读的是备援机上同步好的 vault。
 
 ## 第 3 步: 拉昨晚备份, 放回 live/
 
@@ -159,7 +159,7 @@ echo '{}' > "$L/commands/probe-claude.json"                  # log 里 probe 几
 sqlite3 -readonly "$L/state.sqlite" "SELECT decision, COUNT(*) FROM inbound_log GROUP BY 1;"   # 首跑之后只该有 skip:before_install, 加上之后真的新进来的
 ```
 
-晚间进料口那支若决定要跑, 这时照 `install/O7-intake.md` 装上。
+今日简报 (`today.enabled` 是 true 时) 上线后不会自己补算: 它等第一个变化 (一次判断、一条进料、你的一次回覆) 才算第一份; 想马上看, 丢 `echo '{}' > "$L/commands/today-now.json"` (一次模型呼叫)。
 
 ## 第 4 步: ⛔ 绝不两台同跑
 
@@ -173,7 +173,7 @@ launchctl print "gui/$(id -u)/$LABEL"              # 要回找不到这个 servi
 ls "$HOME/Library/LaunchAgents/$LABEL.plist"       # 要回 No such file
 ```
 
-⭐ **停 = bootout 加上 plist 离开 `~/Library/LaunchAgents/`。** 只 bootout 的话, 备援机下一次登入或重开机, launchd 会把 LaunchAgents 里的 plist 全部载回, 你就在不知情下两台同跑。`uninstall-launchd` 先停 python (TERM, 过了 ExitTimeOut 还活着就 KILL), 再 bootout、disable、删掉 LaunchAgents 里那份 plist; render 出来的那份留在 `$WL/launchd/`, 之后 `install-launchd` 就从那里装回。上面 `ls` 若还看得到 plist, 就重跑 `uninstall-launchd` 看它印的 `ERROR` 行, ⛔ 不改用手动 `launchctl bootout`: 它只停 node 家长, 卡住的 python 会变成孤儿继续占着端口。晚间进料口那支 (`$ILABEL`) 若也装了, 用同一行加 `--intake` 停。
+⭐ **停 = bootout 加上 plist 离开 `~/Library/LaunchAgents/`。** 只 bootout 的话, 备援机下一次登入或重开机, launchd 会把 LaunchAgents 里的 plist 全部载回, 你就在不知情下两台同跑。`uninstall-launchd` 先停 python (TERM, 过了 ExitTimeOut 还活着就 KILL), 再 bootout、disable、删掉 LaunchAgents 里那份 plist; render 出来的那份留在 `$WL/launchd/`, 之后 `install-launchd` 就从那里装回。上面 `ls` 若还看得到 plist, 就重跑 `uninstall-launchd` 看它印的 `ERROR` 行, ⛔ 不改用手动 `launchctl bootout`: 它只停 node 家长, 卡住的 python 会变成孤儿继续占着端口。晚间进料口那支已退役, 备援机上装不上, 所以这里没有它要停。
 
 ⚠️ 常驻机停电前 daemon 是常驻的 (KeepAlive), 1f 那格若是 `autorestart 1`, 它会**自己开机、自己起来**。也就是说常驻机一有电, daemon 可能已经在跑了, 备援机那份多活一分钟就多一分钟双跑。所以备援机上要盯的是 `tailscale status` 里常驻机一出现就停, 而不是等常驻机上什么都对了才停。
 
@@ -197,7 +197,7 @@ ssh "$PRIMARY" "tail -5 $RL/wa_live.log"
 
 人物档走你 vault 的同步, 两台本来就是同一份, 不用搬; 备援机接手期间开的档已经在 vault 里。
 
-最后, 收尾两件: 手机 WhatsApp 的 Linked devices 里决定要不要把备援机踢掉 (留着 = 下次再躺不用重新 link, 代价是占一格 device, 而且备援机本机一直在同步一份聊天库); 在你的常驻物登记簿里备援机那一段登记一行「装过又停了, plist 搬到哪、live/ 留着或删了、晚间那支装了没」, 别让下一次的人以为备援机上什么都没有。
+最后, 收尾两件: 手机 WhatsApp 的 Linked devices 里决定要不要把备援机踢掉 (留着 = 下次再躺不用重新 link, 代价是占一格 device, 而且备援机本机一直在同步一份聊天库); 在你的常驻物登记簿里备援机那一段登记一行「装过又停了, plist 搬到哪、live/ 留着或删了」, 别让下一次的人以为备援机上什么都没有。
 
 ## 这页没写的
 

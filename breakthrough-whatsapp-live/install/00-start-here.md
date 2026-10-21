@@ -60,7 +60,7 @@ HOME_DIR="<paths.home from the progress file header>"
 LIVE="$HOME_DIR/live"
 PY=/usr/bin/python3
 LABEL="<launchd.label from the progress file header>"
-ILABEL="$LABEL.intake"
+ILABEL="<launchd.intake_label from the progress file header>"
 PORT="<board.port from the progress file header>"
 ```
 
@@ -69,7 +69,7 @@ PORT="<board.port from the progress file header>"
   ```sh
   case "$HOME_DIR $LABEL $PORT" in *"<"*|"~"*) echo "fill in HOME_DIR, LABEL and PORT first (HOME_DIR as an absolute path)" >&2; exit 1;; esac
   ```
-- `paths.home` is recorded as an absolute path, because a `~` inside quotes is not expanded. `ILABEL` is always the label with `.intake` added. A header written by an earlier version of this wizard says `home:`, `label:`, `intake_label:` and `port:`: same values; fill `HOME_DIR` with its home written out as a full path.
+- `paths.home` is recorded as an absolute path, because a `~` inside quotes is not expanded. `ILABEL` is `launchd.intake_label` as the header (and the config) records it; never build it from the label, since an install may carry another value. A header written by an earlier version of this wizard says `home:`, `label:`, `intake_label:` and `port:`: same values; fill `HOME_DIR` with its home written out as a full path.
 - `KIT` is the folder this wizard was read from. A project level install sits under that project's `.claude/skills/` instead.
 - Claude Code keeps no shell variables between commands: start every command with the lines it needs from this block.
 - An owner with a my-second-brain vault carries its frontmatter guard, which refuses any shell command that pairs `cp`, or `cat`, `tee`, `printf` or `echo` with a `>` redirect, with a path ending in `.md`. The blocks here keep those apart: create or copy a `.md` file with the Write tool, and run a command that writes and a check that names a `.md` file as two separate commands.
@@ -96,7 +96,7 @@ kit_version: <VERSION from daemon/wa_live.py>
 mac: <the Mac's name, from scutil --get ComputerName>
 paths.home: <absolute path of the working folder>
 launchd.label: <the label>
-launchd.intake_label: <the label>.intake
+launchd.intake_label: <the intake label, as written into the config>
 board.port: <the port>
 vault: <absolute path, or none>
 started: <YYYY-MM-DD>

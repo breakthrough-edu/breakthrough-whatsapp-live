@@ -315,7 +315,7 @@ Before patching:
 
 ### Patch 2 · "intake"
 
-**What it does.** Lists the open intake entries, proposes one place for each, writes only on the owner's yes, and marks each entry placed.
+**What it does.** Lists the open intake entries with the board's Today brief cards under each (when the brief is on), proposes one place for each, writes only on the owner's yes, and marks each entry placed. Then it handles the brief's cards that have no entry, and settles each.
 
 **Description.** Add "intake" and the owner's own word for placing captured items.
 
@@ -330,10 +330,11 @@ Before patching:
 **`<command base>/references/intake.md`** (the owner's command-base skill folder again), from this outline:
 
 1. **The file.** `<intake.buffer>`, no front matter, open entries above the placed heading; five kinds only (a request with a date, something the owner promised and has not delivered, an appointment, money, a decision the other side stated); the entry shape is proposal c.
-2. **List.** `$PY <KIT>/daemon/wa_intake.py --config <live>/config.json --list-open` prints the open entries numbered from 1, each followed by a line `    key: <12 hex>`, the entry's key (`--list-open --json` gives full keys; `--list-placed [--json]` lists the placed zone, read only). Zero open: say so in one line and stop.
+2. **List.** `$PY <KIT>/daemon/wa_intake.py --config <live>/config.json --list-open` prints the open entries numbered from 1, each followed by a line `    key: <12 hex>`, the entry's key (`--list-open --json` gives full keys; `--list-placed [--json]` lists the placed zone, read only). Zero open and no card from step 5c: say so in one line and stop.
+   **With the Today brief on** (`today.enabled`), list with the board's cards instead: `$PY <KIT>/daemon/wa_intake.py --config <live>/config.json --list-open --with-brief http://127.0.0.1:<board.port>/api/today`. Under each entry it prints the cards whose evidence holds that entry: `    board: <project> · <kind> <task> · <status>`, then `      proposal: <what the card proposes>`, the owner's note on the board when there is one (`      your note: …`), and a line when the card was partly placed, answered by a reply, or closed by one. An entry with no card gets `    board: no card, judge it as before`. When the board cannot be read it says so in one line (`board: could not read the brief (<reason>); judging entry by entry as before`) and lists as usual. `--json` with `--with-brief` prints one object, `{"entries", "k_cards", "brief"}`, instead of the plain list (without `--with-brief`, `--json` is unchanged). **Read the cards before proposing anything**, as a starting point, not an answer: the card saw the day's conversations together and the project's tasks, while the entry saw one run; the owner's OK or No on the board says which way they lean, and the place is still ruled here, entry by entry.
    **Read the quote mark of each entry** before proposing anything. 🗣, 🎙 and 📄: the words are the person's own (from the message, its voice transcript, or a document's text), and a date, amount or place in them can be used as written. ≈ `gist, not verbatim` (`大意, 非逐字`): the words are the brain's summary; check a date, amount or place against the chat before it goes into a task or the calendar. ≈ `not checked` (`未核对`): nobody looked the words up; treat them as a gist.
    **A ✏️ entry is a correction**: the person edited a message after an earlier entry was written from it. The ✏️ entry replaces the older one: place the ✏️ entry, and merge the older entry into the same place or drop it (its `before the edit` line names the old words). When the older entry was already placed, update what it became (a task's date, a calendar event) to the new words, on the owner's yes.
-3. **Propose, one line per entry**, in file order, taking the entry's machine guess as a starting point, never as the answer:
+3. **Propose, one line per entry**, in file order, taking the entry's machine guess and the board's card (step 2) as starting points, never as the answer:
    **task**: a `cb: task` in a project's `Tasks/` folder with every key section 8 requires; when no project fits, propose opening one first.
    **calendar**: only when `calendar.destination` is not `none`, created through the calendar destination with title, date and time (ask for a missing piece rather than guessing). `wa_calendar.create_event(cfg, title, date, time, duration_min, place, note, idempotency_key=<the entry heading>)` returns `ok` and a `url`; for `ics` the file is `<live>/calendar/<key>.ics` and opening it imports the event. The board's calendar button does the same.
    **decision**: through the "log a decision" row, with its active-set check first.
@@ -342,11 +343,11 @@ Before patching:
    **drop**: nothing written; say why in a few words.
 4. **Write only on a yes**, entry by entry. A numbered answer ("1 task, 2 drop, 3 calendar Friday 3pm") is a yes for each number.
 5. **Mark placed** right after each write, by key: `wa_intake.py --config <live>/config.json --mark-placed-key KEY --to "<where it went>"`, where KEY is a full key or a unique prefix of at least 8 hex. It prints the same confirmation as `--mark-placed` (`placed → <where>` and the moved title). It is the safe way to place several entries in a row: numbers shift after every move and when a correction or a new capture lands while the owner decides, keys do not. Refusals: `key <p> matches <n> entries (run --list-open again)` (use more of the key), `entry <k> is already placed → <where>` (an earlier mark did it: say so and go on), `entry <k> (number <n>) is not open, it cannot be placed`, `no entry with key <k> (run --list-open again)`. `--mark-placed <n>` still works; with numbers, mark from the highest number down, or list again between marks.
-6. **Done.** One line: "placed N, still open M".
+   A card whose entries are all placed retires by itself within a minute (the daemon checks the buffer's keys at its next minute tick, whichever way the entry was marked); a card with some of its entries placed loses those entries, or, when the owner already pressed OK, records them. Nothing to settle by hand for these.
+5c. **The cards with no entry.** After the entries, `--with-brief` lists the board's cards that cite no intake entry (a proposal built from a conversation alone), oldest first: `The board has N more card(s) with no intake entry (oldest MM-DD):`, then `K1. MM-DD · <project> · <kind> <task> · <status> · id <8 hex> rev <n>` with the same body lines. Handle each like an entry (propose, write on a yes), then settle it so it leaves the board: `$PY <KIT>/daemon/wa_intake.py --config <live>/config.json --settle-card <id> --rev <n> --to "<where it went>" --with-brief http://127.0.0.1:<board.port>/api/today`. A drop is settled too, with `--to "drop"`. It prints `settled` and exits 0, or `refused: <reason>: …` and exits 1: `rev` means the card changed since it was listed (the line says to run `--list-open --with-brief` again: read it afresh, never retry with a new number blindly); `keys` means the card cites entries and retires by itself when they are placed; `status` means the card is no longer live; `not_found` or `ambiguous` means the id is wrong or too short (use the 8 hex shown). The URL must end in `/api/today`; anything else is refused before any request.
+6. **Done.** One line: "placed N, settled K, still open M".
 
 Rules that do not bend: never place anything at boot; never edit an entry's text or its machine guess (what the machine thought is part of the record); open entries are never cleared by compile, and a pile of them is information for the owner, not a mess to tidy.
-
-When the evening push is on (`intake.evening_push`), set `intake.rules_file` to this `<command base>/references/intake.md`, so the evening sort suggests the same places the mode offers.
 
 ### Patch 3 · the morning intake line
 
@@ -407,17 +408,9 @@ stop (add): set bin.claude back to its previous value (recorded at install, usua
 rollback (add): bin.claude back to its previous value, render-launchd and follow its next: line, delete <home>/secrets/claude-bot.env and <home>/bin/claude-bot, revoke the token from the Claude account
 ```
 
-### The evening intake job (`<intake_label>`), installed only when `intake.evening_push` is true
+### The evening intake job (`<intake_label>`): retired
 
-```
-Mac: <the Mac's name> · plist ~/Library/LaunchAgents/<intake_label>.plist · node runs <home>/launchd/intake-evening.mjs once a day at intake.evening_at
-read: the intake buffer · <live>/config.json (intake, notify, brain) · <live>/claude-settings.json · intake.rules_file when set
-write: nothing in the vault · one push through notify.outlet · its own log line
-limits: once a day · no model call and no push when nothing is open, when intake.enabled or intake.evening_push is false, or when notify is off · one model call, read only tools, 4 turns, 300 s · a list of at most 12 entries
-stop: set intake.evening_push to false (the job reads config and exits); to remove it, launchctl bootout gui/$(id -u)/<intake_label> and move the plist out of ~/Library/LaunchAgents/ · RunAtLoad is false, so a restart never fires it by itself
-proof: with one open test entry, launchctl kickstart -k gui/$(id -u)/<intake_label> adds a line to <live>/intake-evening.log and delivers the list to the phone · with none open, the log says why nothing was sent and no push arrives · the buffer's md5 is unchanged either way
-rollback: nothing to roll back in the vault · remove the plist and <home>/launchd/intake-evening.mjs
-```
+No install writes this entry any more: the evening push is retired and the board's Today brief replaces it. A registry that holds this entry from an earlier release keeps it while the job stays installed (an owner who said no at `install/update.md`), and its stop cell still holds: `wa_setup.py uninstall-launchd --intake --config <live>/config.json` removes the job across a reboot. When the job is removed, the session that removed it marks the entry retired in the same act, with the date and the proof (`launchctl print gui/$(id -u)/<intake_label>` finds nothing, and no plist is left in `~/Library/LaunchAgents/`).
 
 ### The person note writer (inside the daemon; no launchd entry of its own), written under the daemon's entry
 
@@ -445,4 +438,5 @@ Under the daemon's entry, one short block per station, as it connects: what it n
 | O5 backup | `<live>/` | `<backup.dest>/<date>/` | `backup.enabled` | `<live>/backup-last.json` shows `"ok": true` |
 | O6 digest | The state database, `<live>/` | `<live>/digest/`, one push | `digest.enabled`, `digest.push` | The digest arrives, even on a quiet day |
 | O7 intake | The brain's captures | The intake buffer | `intake.enabled` | `wa_intake.py --count-open` rises after a run with a capture |
+| O7 Today brief | Today's judgments, the open entries, the briefs and task lists of candidate projects, at most `today.max_reads` vault files, the owner's replies after a judgment | Three tables in `state.sqlite`, `<live>/today/`, a run folder per build; nothing in the vault; one extra model call at most every `today.every_minutes`, only when its inputs changed (today's judgments, the open intake entries, a source you took out of a project, or your replies in conversations its cards cover) | `today.enabled` | `curl -s http://127.0.0.1:<port>/api/today` shows `built_at` today and `empty` false |
 | O9 backfill | Chats the gate passes | Summaries in the state database | Only runs when started | `wa_backfill.py --list` shows no skipped groups |

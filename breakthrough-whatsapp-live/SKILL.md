@@ -7,7 +7,7 @@ description: "Live WhatsApp triage for the owner's personal number on an always-
 
 Read this file first, every time. It routes and it forbids. Procedures live in the files it points at; when one of them disagrees with this file, the specific file wins and this one gets fixed in the same session.
 
-What the owner ends up with: every inbound message on their own WhatsApp number wakes a daemon on their always-on Mac. A rule gate (no model call) decides whether the burst is worth a run. One headless `claude -p` run reads the conversation, judges it (which world, which stage, how urgent, whose move it is) and writes a draft. A board served on `127.0.0.1` and put on the owner's tailnet with `tailscale serve` shows text, photos, videos, voice transcripts, the three chips and the draft, with a button that opens WhatsApp prefilled. Around that core: person notes in the owner's second-brain vault, and the optional blocks the owner picks at station C5.
+What the owner ends up with: every inbound message on their own WhatsApp number wakes a daemon on their always-on Mac. A rule gate (no model call) decides whether the burst is worth a run. One headless `claude -p` run reads the conversation, judges it (which world, which stage, how urgent, whose move it is) and writes a draft. A board served on `127.0.0.1` and put on the owner's tailnet with `tailscale serve` shows text, photos, videos, voice transcripts, the three chips and the draft, with a button that opens WhatsApp prefilled. Around that core: person notes in the owner's second-brain vault, and the optional blocks the owner picks at station C5, among them the board's Today brief (per project, what today's conversations mean, proposed as cards and never pushed; it replaces the retired evening intake push).
 
 ## The rules
 
@@ -67,7 +67,7 @@ With the defaults (`~/WhatsApp-Live`, label `local.whatsapp-live`); a second ins
         adapters/                                     the owner's own interface implementations, kept through updates
         state.sqlite  summaries.md  facts.json  voice-pairs.jsonl  backup-last.json  second-source-last.json
         digest/  runs/  commands/  dossier-backups/  variants/  calendar/  wa_live.log  stderr.log
-~/Library/LaunchAgents/<launchd.label>.plist     default local.whatsapp-live; <launchd.intake_label>.plist only with the evening push
+~/Library/LaunchAgents/<launchd.label>.plist     default local.whatsapp-live; <launchd.intake_label>.plist only when an earlier release's evening job was kept (retired)
 ~/.cache/whisper-models/<model>/                 the whisper model copy, outside Documents on purpose
 <vault>/                                         People room, playbook folders, intake buffer, Decisions, registry entries,
                                                  every one of them through references/vault-proposals.md

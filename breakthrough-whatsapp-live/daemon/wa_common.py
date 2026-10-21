@@ -13,7 +13,7 @@ wa_common.py · the shared base every WhatsApp Live module imports (contracts: r
   files         now_iso · read_json · write_json_atomic · repair_inner_quotes
   push outlet   notify_wanted · notify_send · notify_deliver
 
-`load_config` is the one place defaults are filled: every module, the daemon, the CLIs and the evening job see the
+`load_config` is the one place defaults are filled: every module, the daemon and the CLIs see the
 same values for the same file. Values keep the owner's key names; `<home>` `<live>` `<payload>` `<vault>` and `~`
 are resolved, `<auto>` binaries are looked up. Derived keys added at load (never written back): `config_path`,
 `live_dir`, `state_db`, `sweep_work_dir`, `_load_warnings`.
@@ -151,8 +151,9 @@ DEFAULTS = {
     "calendar": {"destination": "none", "lark": {"calendar_id": ""}},
     "backup": {"enabled": False, "dest": "", "require_process": "", "at": "03:30", "keep": 7},
     "digest": {"enabled": True, "at": "08:00", "push": True},
-    "intake": {"enabled": False, "buffer": "", "evening_push": False, "evening_at": "20:00", "rules_file": "",
-               "verify_quotes": True},
+    "intake": {"enabled": False, "buffer": "", "rules_file": "", "verify_quotes": True},
+    "today": {"enabled": False, "model": "claude-sonnet-5", "every_minutes": 30, "manual_min_gap_seconds": 60,
+              "max_reads": 6, "quote_min_chars": 6, "extra_rules": ""},
     "voice": {"enabled": True, "examples": 12, "pairs": "<live>/voice-pairs.jsonl"},
     "backfill": {"days": 30, "min_msgs": 10, "batch_size": 10, "respect_gate": True, "max_turns": 20, "max_images": 4},
     "launchd": {"label": "local.whatsapp-live", "intake_label": "local.whatsapp-live.intake"},
@@ -160,7 +161,12 @@ DEFAULTS = {
 }
 
 # Keys whose string values are owner text, never paths: placeholders and ~ are not touched inside them.
-_TEXT_KEYS = {"vocab", "group_policies", "my_names", "owner_label", "owner_marker", "my_phone", "ignored_jids"}
+_TEXT_KEYS = {"vocab", "group_policies", "my_names", "owner_label", "owner_marker", "my_phone", "ignored_jids", "today"}
+
+# today.* whole number ranges (inclusive). A value of the wrong type or outside its range is read as the default, with a
+# load warning, so the daemon never starts the Today brief on a value it cannot use; check-config names it as an error.
+TODAY_RANGES = {"every_minutes": (5, 1440), "manual_min_gap_seconds": (10, 3600), "max_reads": (0, 20), "quote_min_chars": (2, 40)}
+TODAY_EXTRA_RULES_MAX = 2000
 
 BIN_NAMES = {"claude": "claude", "python": "python3", "node": "node", "ffmpeg": "ffmpeg",
              "whisperkit": "whisperkit-cli", "lark_cli": "lark-cli", "tailscale": "tailscale", "sqlite3": "sqlite3"}
@@ -238,6 +244,32 @@ def _initials(label):
         m = ""
     m = m.upper()
     return m if len(m) >= 2 else "ME"
+
+
+def _coerce_today(t, warnings):
+    """today.* values the Today brief cannot use go back to the default, one warning each (never an exception)."""
+    d = DEFAULTS["today"]
+    if not isinstance(t.get("enabled"), bool):
+        warnings.append("today.enabled should be true or false; the default (false) was used")
+        t["enabled"] = d["enabled"]
+    if not (isinstance(t.get("model"), str) and t["model"].strip()):
+        warnings.append("today.model should be a model name; the default was used")
+        t["model"] = d["model"]
+    for k, (lo, hi) in TODAY_RANGES.items():
+        v = t.get(k)
+        ok = isinstance(v, (int, float)) and not isinstance(v, bool) and v == int(v) and lo <= v <= hi
+        if not ok:
+            warnings.append("today.%s should be a whole number %d to %d; the default (%d) was used" % (k, lo, hi, d[k]))
+            t[k] = d[k]
+        else:
+            t[k] = int(v)
+    er = t.get("extra_rules")
+    if not isinstance(er, str):
+        warnings.append("today.extra_rules should be text; the default (empty) was used")
+        t["extra_rules"] = d["extra_rules"]
+    elif len(er) > TODAY_EXTRA_RULES_MAX:
+        warnings.append("today.extra_rules is longer than %d characters; the default (empty) was used" % TODAY_EXTRA_RULES_MAX)
+        t["extra_rules"] = d["extra_rules"]
 
 
 def apply_defaults(cfg, config_path=None):
@@ -338,6 +370,7 @@ def apply_defaults(cfg, config_path=None):
 
     if cfg["board"].get("lang") not in ("zh", "en"):
         warnings.append("board.lang should be zh or en")
+    _coerce_today(cfg["today"], warnings)
 
     cfg["config_path"] = str(cp) if cp is not None else str(cfg.get("config_path") or "")
     cfg["live_dir"] = str(live)
@@ -1371,6 +1404,28 @@ def _selftest():
               "defaults: debounce and brain filled")
         check(cfg["edit_watch"] == {"enabled": True, "minutes": 30} and cfg["intake"]["verify_quotes"] is True,
               "defaults: edit_watch on for 30 minutes, intake.verify_quotes on")
+        check(cfg["today"] == {"enabled": False, "model": "claude-sonnet-5", "every_minutes": 30, "manual_min_gap_seconds": 60,
+                               "max_reads": 6, "quote_min_chars": 6, "extra_rules": ""},
+              "defaults: the today block (off, claude-sonnet-5, every 30 minutes, gap 60 s, 6 reads, quotes from 6, no extra rules)")
+        check("evening_push" not in DEFAULTS["intake"] and "evening_at" not in DEFAULTS["intake"]
+              and "evening_push" not in cfg["intake"] and "evening_at" not in cfg["intake"],
+              "defaults: the retired intake.evening_push and intake.evening_at are not filled")
+        kept = apply_defaults({"intake": {"evening_push": True, "evening_at": "21:15"}}, None)
+        check(kept["intake"].get("evening_push") is True and kept["intake"].get("evening_at") == "21:15",
+              "a config that still sets the retired evening keys keeps their values (a kept evening job reads them)")
+        bad_t = apply_defaults({"today": {"enabled": "yes", "model": " ", "every_minutes": 2, "manual_min_gap_seconds": 99999,
+                                          "max_reads": 2.5, "quote_min_chars": True, "extra_rules": "x" * 2001}}, None)
+        check(bad_t["today"] == DEFAULTS["today"] and sum(1 for w in bad_t["_load_warnings"] if w.startswith("today.")) == 7,
+              "today: every bad value goes back to its default with one warning each, no exception")
+        good_t = apply_defaults({"today": {"enabled": True, "every_minutes": 1440.0, "max_reads": 0, "quote_min_chars": 40,
+                                           "manual_min_gap_seconds": 10, "extra_rules": "~/not a path <home>"}}, None)
+        check(good_t["today"]["every_minutes"] == 1440 and isinstance(good_t["today"]["every_minutes"], int)
+              and good_t["today"]["max_reads"] == 0 and good_t["today"]["enabled"] is True
+              and good_t["today"]["extra_rules"] == "~/not a path <home>" and not good_t["_load_warnings"],
+              "today: edge values kept, extra_rules is owner text (no placeholder or ~ resolved)")
+        notdict = apply_defaults({"today": "on"}, None)
+        check(notdict["today"] == DEFAULTS["today"] and any(w.startswith("today ") for w in notdict["_load_warnings"]),
+              "today: not an object means the defaults, with a warning")
         check(cfg["paths"]["home"] == str(tmp / "home") and cfg["paths"]["live_dir"] == str(live),
               "defaults: home is the parent of live/, live_dir is the config folder")
         check(cfg["state_db"] == str(live / "state.sqlite") and cfg["live_dir"] == str(live), "derived: state_db and live_dir")

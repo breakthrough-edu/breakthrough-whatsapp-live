@@ -52,7 +52,14 @@
       linear-gradient(160deg,#f7f6f3 0%,#eef0f4 55%,#e8ebf1 100%)}
   /* Glass: only the three panes */
   .glass{background:var(--glass);backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);box-shadow:var(--ring),var(--shadow);border-radius:var(--r3);min-width:0;min-height:0;height:100%}
-  .app{display:grid;grid-template-columns:300px minmax(520px,1fr) minmax(380px,.8fr);gap:var(--s2);padding:var(--s2);flex:1 1 auto;min-height:0;width:100%}
+  /* Wide screens: rail, grip, middle, grip, chat. A grip is the 10px gap made draggable; --w-rail and --w-chat are set by the
+     script from a drag (kept in localStorage), unset means the default widths. Under 1100px the grips are hidden and the
+     breakpoint rules below take over. */
+  .app{display:grid;grid-template-columns:var(--w-rail,300px) var(--s2) minmax(440px,1fr) var(--s2) var(--w-chat,minmax(380px,.8fr));gap:var(--s2);column-gap:0;padding:var(--s2);flex:1 1 auto;min-height:0;width:100%}
+  .grip{position:relative;cursor:col-resize;touch-action:none;min-width:0}
+  .grip::after{content:"";position:absolute;top:50%;left:50%;width:4px;height:44px;margin:-22px 0 0 -2px;border-radius:2px;background:rgba(0,0,0,.14);opacity:0;transition:opacity .2s var(--ease)}
+  .grip:hover::after,.grip.drag::after{opacity:1}
+  body.resizing{cursor:col-resize;user-select:none;-webkit-user-select:none}
   /* Pane header shared by all three panes: same height, same hairline */
   .hdr{min-height:var(--hdr);padding:calc(var(--s2) + env(safe-area-inset-top)) var(--s3) var(--s2);display:flex;align-items:center;gap:var(--s2);border-bottom:1px solid var(--hair)}
   .hdr .lbl{font-size:var(--f1);font-weight:700;letter-spacing:.12em;color:var(--muted)}
@@ -63,8 +70,12 @@
   .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
   /* ===== Left: list ===== */
   .rail{display:flex;flex-direction:column;overflow:hidden}
-  h1{font-size:var(--f4);margin:0;font-weight:700;letter-spacing:-.01em;flex:1;min-width:0}
-  .meta{font-size:var(--f1);color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:55%;font-family:var(--mono);font-variant-numeric:tabular-nums}
+  h1{font-size:var(--f4);margin:0;font-weight:700;letter-spacing:-.01em;flex:0 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* Rail header: title and the Today button on line one, the status (freshness, waiting, running) on its own line under
+     them, so the button never squeezes it; a long status wraps instead of being cut */
+  .rhdr{flex-wrap:wrap;row-gap:2px}
+  .rhdr .tbtn{margin-left:auto}
+  .meta{flex:1 0 100%;min-width:0;font-size:var(--f1);line-height:1.5;color:var(--faint);white-space:normal;overflow-wrap:anywhere;font-family:var(--mono);font-variant-numeric:tabular-nums}
   .meta.bad{color:var(--red);font-weight:600}
   .counts{display:flex;gap:var(--s1);padding:var(--s2) var(--s3);border-bottom:1px solid var(--hair);overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
   .counts::-webkit-scrollbar{display:none}
@@ -76,10 +87,10 @@
   .chip.on b{color:var(--accent-ink)}
   .list{overflow-y:auto;-webkit-overflow-scrolling:touch;flex:1;min-height:0;padding:var(--s1) var(--s1) calc(var(--s3) + env(safe-area-inset-bottom))}
   .sub{padding:var(--s4) var(--s2) var(--s1);color:var(--faint)}
-  .row{display:grid;grid-template-columns:1fr auto auto;gap:0 var(--s2);padding:var(--s2);border-radius:var(--r2);cursor:pointer;transition:background .2s var(--ease),transform .18s var(--ease);position:relative}
+  .row{display:grid;grid-template-columns:34px minmax(0,1fr) auto auto;gap:0 var(--s2);padding:var(--s2);border-radius:var(--r2);cursor:pointer;transition:background .2s var(--ease),transform .18s var(--ease);position:relative}
   /* One tap done, three ways: hover shows the check (desktop), D on the selected row (keyboard), swipe left (phone).
-     The check pins to row 1 column 3: with a row alone, grid placement would put it in column 1 and push the name right */
-  .row .ck{grid-row:1;grid-column:3;align-self:center;width:26px;height:26px;border-radius:999px;border:1px solid var(--hair);background:#fff;color:var(--green,#10794c);font-size:13px;font-weight:700;line-height:24px;text-align:center;padding:0;cursor:pointer;opacity:0;transition:opacity .15s var(--ease)}
+     The check pins to row 1 column 4: with a row alone, grid placement would put it in column 2 and push the name right */
+  .row .ck{grid-row:1;grid-column:4;align-self:center;width:26px;height:26px;border-radius:999px;border:1px solid var(--hair);background:#fff;color:var(--green,#10794c);font-size:13px;font-weight:700;line-height:24px;text-align:center;padding:0;cursor:pointer;opacity:0;transition:opacity .15s var(--ease)}
   .row.sel .ck,.row .ck:focus-visible{opacity:1}
   @media (hover:hover){ .row:hover .ck{opacity:1} }
   @media (hover:hover){ .row .ck:hover{background:var(--green-bg,rgba(47,180,107,.15))} .row:hover{background:rgba(255,255,255,.45)} }
@@ -97,9 +108,19 @@
   .row.needs.pr-hot .name::before{background:var(--red);box-shadow:0 0 0 3px var(--red-bg)}
   .row.needs.pr-warm .name::before{background:var(--amber-dot);box-shadow:0 0 0 3px var(--amber-bg)}
   .row .when{font-size:var(--f1);color:var(--faint);font-family:var(--mono);font-variant-numeric:tabular-nums;align-self:center;white-space:nowrap}
-  .row .snip{grid-column:1/4;font-size:var(--f2);color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.45}
+  /* The summary line is clamped to two lines; the script marks a row whose text is cut (can-more) and a More button in the
+     pills line expands that row only (open-more) */
+  .row .snip{grid-column:2/5;font-size:var(--f2);color:var(--muted);overflow:hidden;line-height:1.45;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow-wrap:anywhere}
+  .row.open-more .snip{display:block;-webkit-line-clamp:unset}
   .row .snip.me::before{content:var(--t-you,"");color:var(--faint)}
-  .row .pills{grid-column:1/4;display:flex;gap:var(--s2);align-items:center;margin-top:var(--s1);min-height:20px}
+  .row .pills{grid-column:2/5;display:flex;gap:var(--s2);align-items:center;margin-top:var(--s1);min-height:20px}
+  .row .more{display:none;margin-left:auto;appearance:none;border:0;background:transparent;padding:0 var(--s1);height:24px;font:inherit;font-size:var(--f1);font-weight:600;color:var(--accent-ink);cursor:pointer;align-items:center;touch-action:manipulation}
+  .row.can-more .more,.row.open-more .more{display:inline-flex}
+  /* Avatar: an initials circle (two letters at most, one CJK character), a group glyph for groups, color from the chat id */
+  .row .av{grid-row:1/span 2;grid-column:1;align-self:start;margin-top:2px;width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:var(--f2);font-weight:700;letter-spacing:0;color:#fff;background:var(--gray-dot);line-height:1;user-select:none}
+  .row .av svg{width:18px;height:18px;fill:currentColor}
+  .row .av.a0{background:var(--rose-dot)} .row .av.a1{background:var(--blue-dot)} .row .av.a2{background:var(--violet-dot)}
+  .row .av.a3{background:var(--teal-dot)} .row .av.a4{background:var(--amber-dot)} .row .av.a5{background:var(--green-dot)}
   .row .unread{font-family:var(--mono);font-size:var(--f1);font-weight:700;background:var(--accent);color:#fff;border-radius:var(--pill);padding:0 6px;line-height:18px}
   .row.dim{opacity:.55}
   .tagword{font-size:var(--f1);font-weight:600;letter-spacing:.04em;color:var(--faint);white-space:nowrap}
@@ -235,8 +256,11 @@
   .alt .prose{font-size:var(--f2);line-height:1.6;color:var(--ink2);white-space:pre-wrap}
   .alt .actions{margin-top:var(--s1)}
   .alt .btn.quiet{margin-left:0;padding:0;height:auto;font-size:var(--f2);color:var(--accent-ink)}
-  .actions{display:flex;gap:var(--s2);margin-top:var(--s2);align-items:center}
-  .btn{appearance:none;border:0;background:rgba(255,255,255,.7);box-shadow:var(--ring);color:var(--ink);border-radius:var(--r1);padding:0 var(--s4);height:44px;font:inherit;font-size:var(--f3);font-weight:600;text-decoration:none;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex:0 1 auto;min-width:220px;transition:transform .2s var(--ease),background .2s var(--ease)}
+  /* The row wraps at every width: the draft row (WhatsApp, calendar, take to Claude Code, done) needs about 600px and the
+     middle pane is narrower than that at common desktop widths */
+  .actions{display:flex;flex-wrap:wrap;gap:var(--s1) var(--s2);margin-top:var(--s2);align-items:center}
+  .draftbox .actions .btn.quiet{margin-left:0}   /* wrapped lines read left to right; auto margins scattered them */
+  .btn{appearance:none;border:0;background:rgba(255,255,255,.7);box-shadow:var(--ring);color:var(--ink);border-radius:var(--r1);padding:0 var(--s4);height:44px;font:inherit;font-size:var(--f3);font-weight:600;text-decoration:none;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex:0 1 auto;min-width:min(220px,100%);max-width:100%;transition:transform .2s var(--ease),background .2s var(--ease)}
   .btn.wa{background:var(--wa);color:var(--wa-ink);font-weight:700;white-space:nowrap;box-shadow:inset 0 1px 0 rgba(255,255,255,.4),0 8px 20px -12px rgba(37,211,102,.8)}
   /* The label table's spaces ("Open in " + WhatsApp, "在 " + WhatsApp + " 打开") sit at the edge of a flex item, where
      normal white space is trimmed; pre keeps them */
@@ -336,10 +360,87 @@
   .sbody.ctx .thread{flex:1;min-height:0}
   .msg.hit-msg{box-shadow:0 0 0 2px var(--accent),0 0 0 6px var(--accent-soft)}
   .msg .hitlbl{font-size:var(--f1);font-weight:700;letter-spacing:.08em;color:var(--accent-ink);margin-bottom:2px;white-space:normal}
+  /* ===== List tools: the search box and the sort toggle share one line under the rail header ===== */
+  .tools{flex:none;display:flex;align-items:center;gap:var(--s1);margin:var(--s2) var(--s3) 0}
+  .tools .sopen{flex:1 1 auto;min-width:0;margin:0}
+  .sortbtn{flex:none;appearance:none;border:0;height:34px;padding:0 var(--s2);border-radius:var(--r1);background:rgba(255,255,255,.6);box-shadow:inset 0 0 0 1px var(--line);color:var(--muted);font:inherit;font-size:var(--f1);font-weight:700;letter-spacing:.04em;cursor:pointer;white-space:nowrap;touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+  .sortbtn.on{background:var(--accent-soft);color:var(--accent-ink);box-shadow:inset 0 0 0 1px rgba(224,106,18,.4)}
+  /* ===== Today brief (only when ui.features.today): a rail header button switches the middle pane to the brief ===== */
+  .tbtn{flex:none;appearance:none;border:0;height:32px;padding:0 var(--s2);border-radius:var(--pill);background:var(--accent-soft);color:var(--accent-ink);box-shadow:inset 0 0 0 1px rgba(224,106,18,.35);font:inherit;font-size:var(--f2);font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:var(--s1);white-space:nowrap;touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+  .tbtn[hidden]{display:none}
+  .tbtn b{font-family:var(--mono);font-variant-numeric:tabular-nums;font-weight:700;min-width:18px;height:18px;line-height:18px;padding:0 5px;border-radius:var(--pill);background:var(--accent);color:#fff;font-size:var(--f1);text-align:center}
+  .tbtn b:empty{display:none}
+  .tbtn.on{background:var(--accent);color:#fff}
+  .tbtn.on b{background:#fff;color:var(--accent-ink)}
+  .tback{display:none}
+  .btn.trf{min-width:0;height:32px;padding:0 var(--s3);font-size:var(--f2);flex:none;border-radius:var(--pill)}
+  .btn.trf.busy{background:var(--amber-bg);color:var(--amber);box-shadow:none;cursor:progress}
+  .tbody{gap:0}
+  .tinfo{font-family:var(--mono);font-size:var(--f1);color:var(--faint);line-height:1.7}
+  .tbar{margin:var(--s2) 0 0;padding:var(--s1) var(--s2);border-radius:var(--r1);font-size:var(--f2);line-height:1.55}
+  .tbar.stale{background:var(--amber-bg);color:var(--amber)}
+  .tbar.err{background:var(--red-bg);color:var(--red)}
+  .tbar.busy{background:var(--accent-soft);color:var(--accent-ink)}
+  .tshort{font-size:var(--f4);font-weight:700;line-height:1.45;margin:var(--s2) 0 0;letter-spacing:-.01em}
+  .tone{list-style:none;margin:var(--s2) 0 0;padding:0}
+  .tone li{font-size:var(--f3);line-height:1.6;padding:2px 0;color:var(--ink2)}
+  .tone li b{color:var(--ink);margin-right:var(--s1)}
+  .tblock{margin-top:var(--s4);padding-top:var(--s3);border-top:1px solid var(--hair)}
+  .tbh{display:flex;align-items:center;flex-wrap:wrap;gap:var(--s1) var(--s2)}
+  .tbn{font-size:var(--f4);font-weight:700;letter-spacing:-.01em;min-width:0;overflow-wrap:anywhere}
+  .tstat{font-size:var(--f1);font-weight:700;letter-spacing:.04em;border-radius:var(--pill);padding:0 var(--s2);line-height:22px;white-space:nowrap;background:rgba(0,0,0,.05);color:var(--muted)}
+  .tstat.st-stuck{background:var(--red-bg);color:var(--red)}
+  .tstat.st-ball{background:var(--amber-bg);color:var(--amber)}
+  .tstat.st-move{background:var(--green-bg);color:var(--green)}
+  .tstat.st-seed{background:rgba(79,123,214,.14);color:#2f5bb5}
+  .tmean{margin:var(--s1) 0 0;font-size:var(--f3);line-height:1.7;color:var(--ink)}
+  .thap{list-style:none;margin:var(--s1) 0 0;padding:0}
+  .thap li{display:flex;flex-wrap:wrap;align-items:center;gap:0 var(--s2);font-size:var(--f2);line-height:1.55;color:var(--ink2);padding:2px 0}
+  .thap .at{font-family:var(--mono);font-size:var(--f1);color:var(--faint)}
+  .tlink,.tun{appearance:none;border:0;background:transparent;padding:0;font:inherit;cursor:pointer;display:inline-flex;align-items:center;touch-action:manipulation}
+  .tlink{font-weight:600;color:var(--accent-ink)}
+  .tun{font-size:var(--f1);color:var(--faint);text-decoration:underline;text-underline-offset:2px;margin-left:auto}
+  .tun:hover{color:var(--ink)}
+  .tcard{margin-top:var(--s2);padding:var(--s2) var(--s3);border-radius:var(--r2);background:var(--glass-hi);box-shadow:var(--ring)}
+  .tcard.s-ok{box-shadow:inset 3px 0 0 var(--green-dot),var(--ring)}
+  .tcard.s-no,.tcard.s-superseded,.tcard.s-expired{background:var(--glass-lo)}
+  .tcard.s-superseded .tnow,.tcard.s-expired .tnow,.tcard.s-no .tnow{color:var(--muted)}
+  .tch{display:flex;align-items:baseline;flex-wrap:wrap;gap:2px var(--s2)}
+  .tkind{font-size:var(--f1);font-weight:700;letter-spacing:.06em;color:var(--accent-ink);white-space:nowrap}
+  .ttask{font-family:var(--mono);font-size:var(--f2);color:var(--ink2);overflow-wrap:anywhere;min-width:0}
+  .tst{margin-left:auto;font-size:var(--f1);font-weight:700;letter-spacing:.04em;color:var(--muted);white-space:nowrap}
+  .tcard.s-ok .tst{color:var(--green)}
+  .tnow{margin:var(--s1) 0 0;font-size:var(--f3);line-height:1.65;color:var(--ink)}
+  .fms{display:flex;flex-wrap:wrap;gap:var(--s1);margin-top:var(--s1)}
+  .fm{font-family:var(--mono);font-size:var(--f1);padding:0 var(--s1);border-radius:var(--pill);box-shadow:inset 0 0 0 1px var(--line);line-height:20px;color:var(--ink2);overflow-wrap:anywhere}
+  details.tev{margin-top:var(--s1)}
+  details.tev summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:var(--s1);font-size:var(--f1);font-weight:700;letter-spacing:.08em;color:var(--muted)}
+  details.tev summary::-webkit-details-marker{display:none}
+  details.tev summary::after{content:var(--t-expand,"");font-weight:500;letter-spacing:.02em;color:var(--accent-ink)}
+  details.tev[open] summary::after{content:var(--t-collapse,"")}
+  details.tev ul{list-style:none;margin:var(--s1) 0 0;padding:0}
+  details.tev li{font-size:var(--f2);line-height:1.6;color:var(--ink2);padding:2px 0 2px var(--s2);border-left:2px solid var(--hair);margin-bottom:2px}
+  .tn{margin-top:var(--s1);font-size:var(--f2);line-height:1.55;color:var(--muted)}
+  .tn.tnewer{color:var(--accent-ink);font-weight:600}
+  .tact{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s1);margin-top:var(--s2)}
+  .tact .btn{min-width:0;height:36px;padding:0 var(--s3);font-size:var(--f2);flex:0 0 auto}
+  .tact .btn.ok{background:var(--green-bg);color:var(--green)}
+  .tact .btn[disabled]{opacity:.5;cursor:progress}
+  .tact input{flex:1 1 180px;min-width:0;height:36px;font:inherit;font-size:var(--f2);color:var(--ink);background:#fff;border:0;border-radius:var(--r1);padding:0 var(--s2);box-shadow:inset 0 0 0 1px var(--line);outline:none;-webkit-appearance:none;appearance:none}
+  .tact input:focus{box-shadow:inset 0 0 0 1.5px var(--accent),0 0 0 3px var(--accent-soft)}
+  details.trej{margin-top:var(--s4);border-top:1px solid var(--hair)}
+  details.trej summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:var(--s2);padding:var(--s2) 0;font-size:var(--f1);font-weight:700;letter-spacing:.08em;color:var(--faint)}
+  details.trej summary::-webkit-details-marker{display:none}
+  details.trej summary::after{content:var(--t-expand,"");font-weight:500;letter-spacing:.02em;color:var(--accent-ink);margin-left:auto}
+  details.trej[open] summary::after{content:var(--t-collapse,"")}
+  details.trej li,.ttail li{font-size:var(--f2);line-height:1.6;color:var(--muted)}
+  .ttail{margin:var(--s4) 0 0;padding:0 0 0 var(--s3)}
   /* Breakpoints 1100 and 860: the script's wide() and the phone check use the same two numbers, change both together */
   @media (max-width:1099px){
-    .app{grid-template-columns:300px minmax(0,1fr)}
+    .app{grid-template-columns:300px minmax(0,1fr);column-gap:var(--s2)}
+    .grip{display:none}
     .chat{display:none}
+    .tback{display:inline-block}
   }
   @media (max-width:860px){
     .app{grid-template-columns:1fr;gap:0;padding:0}
@@ -359,6 +460,11 @@
     .down{margin:0;border-radius:0;padding-top:calc(var(--s2) + env(safe-area-inset-top))}
     .search{padding:0;background:transparent}
     .spanel{max-width:none;border-radius:0;box-shadow:none;background:rgba(250,250,252,.97)}
+    /* Phone tap targets: at least 44px for everything this release adds */
+    .tbtn,.sortbtn,.btn.trf,.tact .btn,.tact input{height:44px}
+    .tools .sopen{height:44px}
+    .tlink,.tun,.row .more,details.tev summary,.back.tback{min-height:44px}
+    .tact input{font-size:16px}
   }
 </style>
 </head>
@@ -366,13 +472,15 @@
 <div class="down" id="down" role="status" hidden></div>
 <div class="app" id="app">
   <section class="rail glass">
-    <div class="hdr"><h1 id="title">WhatsApp Live</h1><span class="meta" id="meta"></span></div>
-    <button class="sopen" id="sopen" type="button"><span aria-hidden="true">⌕</span><span id="sopen-lbl"></span><kbd>/</kbd></button>
+    <div class="hdr rhdr"><h1 id="title">WhatsApp Live</h1><button class="tbtn" id="todaybtn" type="button" hidden><span id="today-lbl"></span><b id="today-n"></b></button><span class="meta" id="meta"></span></div>
+    <div class="tools"><button class="sopen" id="sopen" type="button"><span aria-hidden="true">⌕</span><span id="sopen-lbl"></span><kbd>/</kbd></button><button class="sortbtn" id="sortbtn" type="button"></button></div>
     <div class="counts" id="chips"></div>
     <div class="list" id="list"></div>
     <div class="foot" id="foot"></div>
   </section>
+  <div class="grip" id="grip-rail" data-grip="rail" role="separator" aria-orientation="vertical"></div>
   <section class="mid glass" id="mid"><div class="placeholder"></div></section>
+  <div class="grip" id="grip-chat" data-grip="chat" role="separator" aria-orientation="vertical"></div>
   <section class="chat glass" id="chat"><div class="hdr"><span class="lbl" id="chat-lbl"></span></div><div class="thread" id="chat-thread"><div class="chatnote"></div></div><details class="digest" id="digest" hidden><summary><span id="digest-title"></span><span class="r" id="digest-date"></span></summary><div class="lines" id="digest-lines"></div></details></section>
 </div>
 <div class="search" id="search" role="dialog" aria-modal="true" hidden>
@@ -543,7 +651,58 @@ const TEXT = {
     searchBack: '‹ 结果',
     searchFile: '档名',
     searchHitLabel: '搜到的这条',
-    ctxFailed: '拿不到这一段对话'
+    ctxFailed: '拿不到这一段对话',
+    sortPri: '↕ 优先',
+    sortNew: '↕ 最新',
+    sortTipPri: '现在按优先排; 点一下改成最新讯息在上',
+    sortTipNew: '现在按最新讯息排; 点一下改回优先',
+    more: '更多',
+    groupAvatar: '群组',
+    gripTip: '拖动调整栏宽, 双击还原',
+    todayBtn: '今日',
+    todayBtnTip: n => '今日简报 · ' + n + ' 张卡待你看',
+    todayTitle: '今日简报',
+    todayBack: '‹ 返回',
+    todayRefresh: '重算',
+    todayBuilding: '整理中…',
+    todayBuildingBar: '正在整理今天的简报, 每 3 秒看一次, 好了会自己出来',
+    todayBuiltAt: a => '整理于 ' + a,
+    todayEvery: n => '有变化时自己重算, 最多每 ' + n + ' 分钟一次',
+    todayStale: '这是昨天的简报; 今天第一个变化之后会出新的',
+    todayEmpty: '今天还没有简报; 今天第一次判断之后才会整理',
+    todayLoading: '简报载入中…',
+    todayLoadFailed: '拿不到简报',
+    todayLoadFailedCode: code => '拿不到简报 (daemon 回 ' + code + ')',
+    todayJustBuilt: '刚整理过, 显示最新的',
+    todayQueued: '排上了, 判断有空位就整理',
+    todayDisabled: '简报没开 (config 的 today.enabled)',
+    todayDryRun: 'dry run: 简报不叫模型',
+    todayBrainDown: title => '没整理: ' + title,
+    todaySkipped: why => '这次没整理 (' + why + ')',
+    todayDone: '简报更新了',
+    todayTimeout: '整理超过 5 分钟还没好, 不再自动检查; 等一下再按重算或重新载入',
+    todayLastError: e => '上次整理出错: ' + e,
+    todayOne: '一句话',
+    todayRejected: n => '脑提了 ' + n + ' 条, 程式挡下 (没有来源或格式不对)',
+    todayHappen: '今天的对话',
+    stat_move: '推进', stat_ball: '等你', stat_stuck: '卡住', stat_quiet: '顺利', stat_seed: '还没 Project 在管',
+    kind_update: '更新任务', kind_create: '新任务', kind_seed: '新项目', kind_drop: '不用记',
+    unassigned: '没归项目',
+    notThisProject: '不是这个项目',
+    unassignDone: '好, 下次整理不再归到这里',
+    st_pending: '待你定', st_ok: '你按了好', st_no: '你按了不用', st_superseded: '已收起', st_expired: '过期了',
+    cardOk: '好', cardNo: '不用', cardUndo: '收回',
+    cardNotePh: '给自己留一句 (归位时看得到)',
+    cardNoteSave: '存备注',
+    cardEvidence: n => '证据 · ' + n,
+    cardNewer: '脑有更新的版本',
+    cardNewerNow: s => '脑有更新的版本: ' + s,
+    cardChanged: '这张卡变了, 再看一次',
+    cardOkDone: '记下了: 好',
+    cardNoDone: '记下了: 不用',
+    cardUndone: '收回了, 又是待定',
+    noteSavedToast: '备注存了',
+    cardStatusFailed: '这张卡已经不能按了 (可能刚被收起)'
   },
   en: {
     loading: 'Loading…',
@@ -699,7 +858,58 @@ const TEXT = {
     searchBack: '‹ Results',
     searchFile: 'File',
     searchHitLabel: 'Search hit',
-    ctxFailed: 'Could not load this part of the chat'
+    ctxFailed: 'Could not load this part of the chat',
+    sortPri: '↕ Priority',
+    sortNew: '↕ Newest',
+    sortTipPri: 'Sorted by priority; tap for newest message first',
+    sortTipNew: 'Sorted by newest message; tap for priority order',
+    more: 'More',
+    groupAvatar: 'Group',
+    gripTip: 'Drag to resize, double-click to reset',
+    todayBtn: 'Today',
+    todayBtnTip: n => "Today's brief · " + n + (Number(n) === 1 ? ' card' : ' cards') + ' for you',
+    todayTitle: "Today's brief",
+    todayBack: '‹ Back',
+    todayRefresh: 'Refresh',
+    todayBuilding: 'Building…',
+    todayBuildingBar: "Building today's brief; checking every 3 seconds, it appears on its own",
+    todayBuiltAt: a => 'built ' + a,
+    todayEvery: n => 'Rebuilt on its own at most every ' + n + ' min, only when something changed',
+    todayStale: "Yesterday's brief; today's will appear after the first change",
+    todayEmpty: "No brief yet today; it is built after today's first judgment",
+    todayLoading: 'Loading the brief…',
+    todayLoadFailed: 'Could not load the brief',
+    todayLoadFailedCode: code => 'Could not load the brief (daemon answered ' + code + ')',
+    todayJustBuilt: 'Just built, showing the latest',
+    todayQueued: 'Queued, it builds when a judgment slot frees up',
+    todayDisabled: 'The brief is off (today.enabled in the config)',
+    todayDryRun: 'Dry run: the brief never calls the model',
+    todayBrainDown: title => 'Not built: ' + title,
+    todaySkipped: why => 'Not rebuilt this time (' + why + ')',
+    todayDone: 'Brief updated',
+    todayTimeout: 'Still building after 5 minutes; stopped checking. Press Refresh or reload later',
+    todayLastError: e => 'The last build failed: ' + e,
+    todayOne: 'In one line',
+    todayRejected: n => n + (Number(n) === 1 ? ' proposal' : ' proposals') + ' set aside by the program (no source or wrong shape)',
+    todayHappen: "Today's conversations",
+    stat_move: 'moving', stat_ball: 'your move', stat_stuck: 'stuck', stat_quiet: 'quiet', stat_seed: 'no project yet',
+    kind_update: 'Update task', kind_create: 'New task', kind_seed: 'New project', kind_drop: 'Nothing to file',
+    unassigned: 'No project',
+    notThisProject: 'Not this project',
+    unassignDone: 'OK, it will not be filed here next time',
+    st_pending: 'waiting for you', st_ok: 'you said OK', st_no: 'you said No', st_superseded: 'retired', st_expired: 'expired',
+    cardOk: 'OK', cardNo: 'No', cardUndo: 'Take back',
+    cardNotePh: 'A line for yourself (shown when placing)',
+    cardNoteSave: 'Save note',
+    cardEvidence: n => 'Evidence · ' + n,
+    cardNewer: 'The brain has a newer version',
+    cardNewerNow: s => 'The brain has a newer version: ' + s,
+    cardChanged: 'This card changed, look again',
+    cardOkDone: 'Noted: OK',
+    cardNoDone: 'Noted: No',
+    cardUndone: 'Taken back, waiting again',
+    noteSavedToast: 'Note saved',
+    cardStatusFailed: 'This card can no longer be pressed (it may have just been retired)'
   }
 };
 
@@ -734,6 +944,10 @@ function touchBusy(){ return touchDown || Date.now() - lastTouchEnd < 350 || Dat
 let digest = null, digestOpen = false;   // GET /api/digest answer {date, text, lines}; null hides the cell
 let calOpen = null;                      // jid whose calendar form is open; renderMid leaves it alone unless forced
 const calDoneLocal = {};                 // jid -> {at, url, title}: shown as created until calendar_done comes back from the daemon
+// Today brief (ui.features.today): view says what the middle pane shows; TD is the last GET /api/today answer
+let view = 'chat', TD = null, tdErr = '', tdSig = '', tdEditing = false;
+const tdNote = {};                       // card id -> note typed but not saved yet (survives a redraw)
+const TR = {polling: false, building: false, timer: null, until: 0, before: '', err0: '', gaveUp: null, timedOut: false};
 // Load ordering: a board answer whose request started before a local change landed is dropped (it would undo the change on screen)
 let loadSeq = 0, shownSeq = 0, staleBefore = 0;
 const saveTimers = {}; const threads = {}; const threadErr = {};
@@ -790,7 +1004,8 @@ function setupUi(p){
     showUsd: ui.show_usd === true,
     calendar: typeof ui.calendar === 'string' && ui.calendar ? ui.calendar : 'none',
     calendarLabel: ui.calendar_label ? String(ui.calendar_label) : '',
-    features: {dossier: f.dossier === true, digest: f.digest !== false},   // intake and voice have no board element
+    features: {dossier: f.dossier === true, digest: f.digest !== false, today: f.today === true},   // intake and voice have no board element
+    today: {every: num((ui.today || {}).every_minutes, 0), gap: num((ui.today || {}).manual_min_gap_seconds, 0)},
     ownerLabel: ui.owner_label ? String(ui.owner_label) : '',
     vaultName: ui.vault_name ? String(ui.vault_name) : '',
     contextDays: num(ui.context_days, 0), groupContextDays: num(ui.group_context_days, 0),
@@ -819,6 +1034,9 @@ function applyStatic(){
   $('#sq').placeholder = t('searchPh'); $('#sq').setAttribute('aria-label', t('searchBox'));
   $('#sgo').textContent = t('searchGo'); $('#sclose').title = t('searchClose'); $('#sclose').setAttribute('aria-label', t('searchClose'));
   $('#search').setAttribute('aria-label', t('searchBox'));
+  document.querySelectorAll('.grip').forEach(g => { g.title = t('gripTip'); g.setAttribute('aria-label', t('gripTip')); });
+  if(!UI.features.today && view === 'today') view = 'chat';
+  renderSortBtn(); renderTodayBtn(); tdSig = '';
   downSig = null; if(data) renderDown();
   const ph = $('#mid .placeholder'); if(ph) ph.textContent = t('pickLeft');
   const cn = $('#chat-thread .chatnote'); if(cn && !selected) cn.textContent = t('pickLeft');
@@ -939,36 +1157,83 @@ function stripOf(r){
   return `<div class="strip"><div class="sigs">${worldChip(r)}${stageChip(r)}${priorityChip(r)}</div><div class="stamp">${conf}${at ? `<span>${esc(t('judgedAgo', ago(at)))}</span>` : ''}${r.last_in_at ? `<span>${esc(t('lastIn', dayOf(r.last_in_at) + ' ' + hm(r.last_in_at)))}</span>` : ''}${dos}</div></div>`;
 }
 
+// ===== List: avatars, sort by last message, two line summary with More =====
+// Avatar: first letters of the name (two at most; one character when the name starts with a CJK character), parentheses
+// dropped ("Sam (new number)" gives S); a group gets a group glyph. The color comes from the chat id, so it never moves.
+const CJK_RE = /[\u3400-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]/;
+const LETTER_RE = /[\p{L}\p{N}]/u;
+const GROUP_GLYPH = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.4"/><circle cx="16.5" cy="9" r="2.8"/><path d="M2.5 19c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6v.8h-13z"/><path d="M15.2 13.4c3.3-.4 6.3 1.7 6.3 5.2v1.2h-4.6v-.8c0-2.2-.6-4.1-1.7-5.6z"/></svg>';
+function initials(name){
+  const s = String(name || '').replace(/[(（\[【][^)）\]】]*[)）\]】]/g, ' ').trim();
+  const words = s.split(/\s+/).filter(w => LETTER_RE.test(w));
+  if(!words.length) return '?';
+  const firstOf = w => Array.from(w).find(ch => LETTER_RE.test(ch)) || '';
+  const a = firstOf(words[0]);
+  if(CJK_RE.test(a)) return a;
+  const b = words.length > 1 ? firstOf(words[words.length - 1]) : '';
+  return (a + (b && !CJK_RE.test(b) ? b : '')).toUpperCase();
+}
+function avatarHtml(r){
+  let h = 0; const id = String(r.jid || r.name || '');
+  for(let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  if(r.kind === 'group') return `<span class="av a${h % 6}" role="img" aria-label="${esc(t('groupAvatar'))}">${GROUP_GLYPH}</span>`;
+  return `<span class="av a${h % 6}" aria-hidden="true">${esc(initials(r.name))}</span>`;
+}
+// Sort: 'pri' keeps the daemon's order (priority), 'new' puts the newest message first (last_in_at or last_out_at, others last_at)
+let sortMode = 'pri';
+const expanded = new Set();   // rows whose summary is open past two lines
+function lsGet(key){ try{ return window.localStorage.getItem(key); }catch(e){ return null; } }
+function lsSet(key, val){ try{ if(val == null) window.localStorage.removeItem(key); else window.localStorage.setItem(key, val); }catch(e){} }
+sortMode = lsGet('wa-board-sort') === 'new' ? 'new' : 'pri';
+function lastMsgMs(r){ let best = 0; [r.last_in_at, r.last_out_at, r.last_at].forEach(x => { const n = x ? new Date(x).getTime() : NaN; if(isFinite(n) && n > best) best = n; }); return best; }
+function sorted(list){ return sortMode === 'new' ? list.slice().sort((a, b) => lastMsgMs(b) - lastMsgMs(a)) : list; }
+function renderSortBtn(){
+  const b = $('#sortbtn'); if(!b || !UI) return;
+  b.textContent = sortMode === 'new' ? t('sortNew') : t('sortPri');
+  b.title = sortMode === 'new' ? t('sortTipNew') : t('sortTipPri'); b.setAttribute('aria-label', b.title);
+  b.className = 'sortbtn' + (sortMode === 'new' ? ' on' : ''); b.setAttribute('aria-pressed', sortMode === 'new' ? 'true' : 'false');
+}
+function toggleSort(){ sortMode = sortMode === 'new' ? 'pri' : 'new'; lsSet('wa-board-sort', sortMode === 'new' ? 'new' : null); renderSortBtn(); renderList(); $('#list').scrollTop = 0; }
+function moreBtn(jid){ const open = expanded.has(jid); return `<button type="button" class="more" data-more="${esc(jid)}" aria-expanded="${open ? 'true' : 'false'}">${esc(open ? t('collapse') : t('more'))}</button>`; }
+// After a redraw (or a resize): a row whose two line summary is cut gets can-more, which shows its More button
+function markClamped(){
+  document.querySelectorAll('#list .row').forEach(row => {
+    if(row.classList.contains('open-more')) return;
+    const sn = row.querySelector('.snip');
+    row.classList.toggle('can-more', !!sn && sn.scrollHeight > sn.clientHeight + 1);
+  });
+}
 function renderList(){
   const rows = data.rows || [];
   const allOthers = data.others || [];
   const keys = ['open', 'needs', 'waiting', 'fyi', 'noise', 'closed', 'all'];
   const chipsHtml = keys.map(kk => { const n = kk === 'all' ? rows.length + allOthers.length : rows.filter(r => inBucket(r, kk)).length; return `<span class="chip${filter === kk ? ' on' : ''}" data-f="${kk}">${esc(t('bucket_' + kk))}<b>${n}</b></span>`; }).join('');
   if(chipsHtml !== chipsSig){ $('#chips').innerHTML = chipsHtml; chipsSig = chipsHtml; }
-  const shown = rows.filter(matches);
-  const others = filter === 'all' ? allOthers : [];
+  const shown = sorted(rows.filter(matches));
+  const others = filter === 'all' ? sorted(allOthers) : [];
   const runningSet = new Set(((data.status || {}).running_jids) || []);
   const list = $('#list');
   const capped = UI.othersLimit && allOthers.length >= UI.othersLimit ? t('othersCapped', UI.othersLimit) : '';
   const othersHtml = others.length ? `<div class="sub kick">${esc(t('othersHead'))}<span class="r">${esc(t('othersSub', UI.othersDays, others.length) + capped)}</span></div>` + others.map(o => `
-    <div class="row other${selected === o.jid ? ' sel' : ''}" data-open="${esc(o.jid)}">
-      <span class="name">${esc(o.name)}</span><span class="when">${ago(o.last_at)}</span>
+    <div class="row other${selected === o.jid ? ' sel' : ''}${expanded.has(o.jid) ? ' open-more' : ''}" data-open="${esc(o.jid)}">
+      ${avatarHtml(o)}<span class="name">${esc(o.name)}</span><span class="when">${ago(o.last_at)}</span>
       <span class="snip${o.last_from_me ? ' me' : ''}">${esc(o.snippet || '')}</span>
-      <span class="pills"><span class="tagword">${esc(o.kind === 'group' ? t('group') : t('direct'))}</span>${o.unread ? `<span class="unread">${esc(o.unread)}</span>` : ''}${runningSet.has(o.jid) ? `<span class="tagword busy">${esc(t('judging'))}</span>` : ''}</span>
+      <span class="pills"><span class="tagword">${esc(o.kind === 'group' ? t('group') : t('direct'))}</span>${o.unread ? `<span class="unread">${esc(o.unread)}</span>` : ''}${runningSet.has(o.jid) ? `<span class="tagword busy">${esc(t('judging'))}</span>` : ''}${moreBtn(o.jid)}</span>
     </div>`).join('') : '';
   const listHtml = (shown.length || others.length) ? shown.map(r => { const open = isOpen(r), p = priorityInfo(r.priority); return `
-    <div class="row${r.needs_me && open ? ' needs' : ''}${p ? ' pr-' + p.tone : ''}${open ? '' : ' dim'}${selected === r.jid ? ' sel' : ''}" data-open="${esc(r.jid)}">
-      <span class="name">${esc(r.name)}</span><span class="when">${ago(judgedAt(r))}</span>${open ? `<button class="ck" data-done="${esc(r.jid)}" title="${esc(t('doneTip'))}" aria-label="${esc(t('doneWord'))}">✓</button>` : '<span></span>'}
+    <div class="row${r.needs_me && open ? ' needs' : ''}${p ? ' pr-' + p.tone : ''}${open ? '' : ' dim'}${selected === r.jid ? ' sel' : ''}${expanded.has(r.jid) ? ' open-more' : ''}" data-open="${esc(r.jid)}">
+      ${avatarHtml(r)}<span class="name">${esc(r.name)}</span><span class="when">${ago(judgedAt(r))}</span>${open ? `<button class="ck" data-done="${esc(r.jid)}" title="${esc(t('doneTip'))}" aria-label="${esc(t('doneWord'))}">✓</button>` : '<span></span>'}
       <span class="snip">${esc(r.situation || '')}</span>
-      <span class="pills">${worldChip(r, true)}${stageChip(r, true)}${open ? (r.waiting ? `<span class="tagword">${esc(t('bucket_waiting'))}</span>` : '') : `<span class="tagword">${esc(tagWord(r.tag))}</span>`}</span>
+      <span class="pills">${worldChip(r, true)}${stageChip(r, true)}${open ? (r.waiting ? `<span class="tagword">${esc(t('bucket_waiting'))}</span>` : '') : `<span class="tagword">${esc(tagWord(r.tag))}</span>`}${moreBtn(r.jid)}</span>
     </div>`; }).join('') + othersHtml : `<div class="empty">${esc(t('emptyBucket'))}</div>`;
   // Touch accuracy: never redraw an unchanged list; while a finger is down (or just lifted, or the list just scrolled) wait and retry
   if(listHtml !== listSig){
     if(touchBusy()){ clearTimeout(listRetry); listRetry = setTimeout(renderList, 400); }
-    else { const st0 = list.scrollTop; list.innerHTML = listHtml; listSig = listHtml; list.scrollTop = st0; }
+    else { const st0 = list.scrollTop; list.innerHTML = listHtml; listSig = listHtml; list.scrollTop = st0; markClamped(); }
   }
   const st = data.status || {};
   $('#meta').textContent = t('metaUpdated', ago(data.generated_at)) + (st.pending ? t('metaPending', st.pending) : '') + (st.running ? t('metaRunning', st.running) : '');
+  $('#meta').title = $('#meta').textContent;
   $('#meta').className = 'meta' + (st.wal_age_hours != null && st.wal_age_hours > UI.staleHours ? ' bad' : '');
   const tk = st.tokens_today || {};
   const b = x => '<b>' + esc(x) + '</b>';
@@ -1128,6 +1393,7 @@ function brainAlt(r){
 }
 
 function renderMid(force){
+  if(view === 'today' && UI.features.today){ renderToday(force); return; }
   const r = rowOf(selected);
   const mid = $('#mid');
   if(calOpen && calOpen === selected && !force) return;   // calendar form open: wait for create or cancel
@@ -1190,6 +1456,230 @@ function renderMid(force){
   document.querySelectorAll('textarea.draft').forEach(autosize);
   mid.scrollTop = st0;
 }
+// ===== Today brief (read only proposals; the board never writes into the vault) =====
+// GET /api/today: the brief JSON plus ok, empty, stale and status {enabled, building, building_since, last_built, last_error,
+// brain_down, every_minutes, manual_min_gap_seconds, dry_run}. POST /api/today/refresh, /decide {id, rev, action, note?},
+// /unassign {key, project}. A card is LIVE while its status is pending or ok.
+function tdBlocks(){ return (TD && Array.isArray(TD.projects)) ? TD.projects : []; }
+function tdProps(){ const out = []; tdBlocks().forEach(b => (Array.isArray(b.props) ? b.props : []).forEach(p => out.push(p))); return out; }
+function tdLive(){ return tdProps().filter(p => p && (p.status === 'pending' || p.status === 'ok')).length; }
+function tdFind(id){ return tdProps().find(p => p && p.id === id) || null; }
+function tdReplace(id, cur){ tdBlocks().forEach(b => { if(!Array.isArray(b.props)) return; const i = b.props.findIndex(p => p && p.id === id); if(i >= 0) b.props[i] = cur; }); }
+function renderTodayBtn(){
+  const b = $('#todaybtn'); if(!b || !UI) return;
+  if(!UI.features.today){ b.hidden = true; return; }
+  const n = tdLive();
+  $('#today-lbl').textContent = TR.building ? t('todayBuilding') : t('todayBtn');
+  $('#today-n').textContent = n ? String(n) : '';
+  b.title = t('todayBtnTip', n); b.setAttribute('aria-label', b.title);
+  b.classList.toggle('on', view === 'today'); b.setAttribute('aria-pressed', view === 'today' ? 'true' : 'false');
+  b.hidden = false;
+}
+async function loadToday(){
+  if(!UI || !UI.features.today) return null;
+  try{
+    const res = await fetch('/api/today', {cache: 'no-store'});
+    let j = null; try{ j = await res.json(); }catch(e){}
+    if(!res.ok || !j || j.ok === false){ tdErr = (j && j.error) ? t('todayLoadFailed') + ': ' + j.error : t('todayLoadFailedCode', res.status); }
+    else { TD = j; tdErr = ''; }
+  }catch(e){ tdErr = t('daemonMissed'); }
+  // A build the daemon started on its own is followed with the same bounded poll (once per build)
+  const st = (TD && TD.status) || {};
+  if(st.building && !TR.polling && TR.gaveUp !== (st.building_since || 'x')) startPoll();
+  renderTodayBtn(); if(view === 'today') renderMid();
+  return TD;
+}
+function openToday(){
+  if(!UI.features.today) return;
+  view = 'today'; tdSig = ''; calOpen = null;
+  $('#app').classList.add('show-detail');
+  renderTodayBtn(); renderMid(true); $('#mid').scrollTop = 0;
+  loadToday();
+}
+function closeToday(){
+  view = 'chat'; midSig = ''; tdSig = '';
+  if(window.innerWidth <= 860 || !selected) $('#app').classList.remove('show-detail');
+  renderTodayBtn(); render();
+}
+function downTitleOf(bd){ const kind = bd && bd.kind; return kind === 'auth' ? t('downAuthTitle') : (kind === 'limit' ? t('downLimitTitle') : t('downOtherTitle')); }
+// Refresh: started means the page polls GET /api/today every 3 seconds until building is false and built_at moved,
+// or 5 minutes pass. The button shows building only while that poll runs; every exit of the poll clears it.
+async function refreshToday(){
+  if(TR.polling){ toast(t('todayBuilding')); return; }
+  let j = null;
+  try{
+    const res = await fetch('/api/today/refresh', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'});
+    try{ j = await res.json(); }catch(e){}
+  }catch(e){ toast(t('daemonMissed')); return; }
+  if(!j){ toast(t('daemonMissed')); return; }
+  if(j.ok && j.started){ startPoll(); return; }
+  if(j.ok && j.already){ toast(t('todayJustBuilt'), 2000); await loadToday(); return; }
+  if(j.ok && j.queued){ toast(t('todayQueued'), 2600); return; }
+  if(j.ok && j.skipped){ toast(t('todaySkipped', j.skipped), 2400); return; }
+  if(j.reason === 'brain_down'){ toast(t('todayBrainDown', downTitleOf(j.brain_down)), 4200); load(); return; }
+  if(j.reason === 'disabled'){ toast(t('todayDisabled'), 2600); return; }
+  if(j.reason === 'dry_run'){ toast(t('todayDryRun'), 2600); return; }
+  toast(j.error || j.reason || t('daemonMissed'), 2400);
+}
+function startPoll(){
+  const st = (TD && TD.status) || {};
+  TR.polling = true; TR.building = true; TR.timedOut = false;
+  TR.before = TD ? String(TD.built_at || '') : ''; TR.err0 = String(st.last_error || ''); TR.since = st.building_since || '';
+  TR.until = Date.now() + 300000;
+  clearTimeout(TR.timer); TR.timer = setTimeout(pollToday, 3000);
+  renderTodayBtn(); if(view === 'today'){ tdSig = ''; renderMid(true); }
+}
+function stopPoll(){ TR.polling = false; TR.building = false; clearTimeout(TR.timer); TR.timer = null; }
+async function pollToday(){
+  if(!TR.polling) return;
+  let j = null;
+  try{ const res = await fetch('/api/today', {cache: 'no-store'}); if(res.ok) j = await res.json(); }catch(e){}
+  if(j && j.ok !== false){ TD = j; tdErr = ''; }
+  const st = (j && j.status) || {};
+  if(j && !st.building && String(j.built_at || '') !== TR.before){ stopPoll(); toast(t('todayDone')); }
+  else if(j && !st.building && st.last_error && String(st.last_error) !== TR.err0){ stopPoll(); toast(t('todayLastError', st.last_error), 4200); }
+  else if(Date.now() >= TR.until){ stopPoll(); TR.timedOut = true; TR.gaveUp = TR.since || 'x'; toast(t('todayTimeout'), 4200); }
+  else { TR.timer = setTimeout(pollToday, 3000); }
+  renderTodayBtn(); if(view === 'today'){ tdSig = ''; renderMid(true); }
+}
+function tdStatWord(b){ return b.statL || (L['stat_' + b.stat] !== undefined ? t('stat_' + b.stat) : String(b.stat || '')); }
+function tdKindWord(p){ return p.kindL || (L['kind_' + p.kind] !== undefined ? t('kind_' + p.kind) : String(p.kind || '')); }
+function tdStatusWord(st){ return L['st_' + st] !== undefined ? t('st_' + st) : String(st || ''); }
+function cardHtml(p){
+  if(!p || typeof p !== 'object') return '';
+  const st = String(p.status || 'pending'), live = st === 'pending' || st === 'ok';
+  const fm = p.fm_set && typeof p.fm_set === 'object' ? Object.keys(p.fm_set) : [];
+  const fms = fm.length ? `<div class="fms">${fm.map(k => `<span class="fm">${esc(k)}: ${esc(p.fm_set[k])}</span>`).join('')}</div>` : '';
+  const ev = Array.isArray(p.ev) ? p.ev : [];
+  const evs = ev.length ? `<details class="tev"><summary>${esc(t('cardEvidence', ev.length))}</summary><ul>${ev.map(x => `<li>${esc(x)}</li>`).join('')}</ul></details>` : '';
+  const notes = ['retired_note', 'placed_note', 'replied_note', 'close_note'].filter(k => p[k]).map(k => `<div class="tn n-${k.split('_')[0]}">${esc(p[k])}</div>`).join('');
+  const nw = p.newer;
+  const newer = nw ? `<div class="tn tnewer">${esc(nw && typeof nw === 'object' && nw.now ? t('cardNewerNow', nw.now) : t('cardNewer'))}</div>` : '';
+  const id = esc(p.id);
+  let act = '';
+  if(st === 'pending') act = `<button type="button" class="btn ok" data-tdecide="ok" data-card-id="${id}">${esc(t('cardOk'))}</button><button type="button" class="btn" data-tdecide="no" data-card-id="${id}">${esc(t('cardNo'))}</button>`;
+  else if(st === 'ok' || st === 'no') act = `<button type="button" class="btn" data-tdecide="pending" data-card-id="${id}">${esc(t('cardUndo'))}</button>`;
+  const noteVal = tdNote[p.id] !== undefined ? tdNote[p.id] : (p.note || '');
+  const noteRow = (live || st === 'no') ? `<input type="text" maxlength="500" data-tnote="${id}" value="${esc(noteVal)}" placeholder="${esc(t('cardNotePh'))}" aria-label="${esc(t('cardNotePh'))}"><button type="button" class="btn" data-tdecide="note" data-card-id="${id}">${esc(t('cardNoteSave'))}</button>` : '';
+  return `<article class="tcard s-${esc(st)}" data-card="${id}" data-rev="${esc(p.rev)}">
+    <div class="tch"><span class="tkind">${esc(tdKindWord(p))}</span>${p.task ? `<span class="ttask">${esc(p.task)}</span>` : ''}<span class="tst">${esc(tdStatusWord(st))}</span></div>
+    ${p.now ? `<p class="tnow">${esc(p.now)}</p>` : ''}${fms}${newer}${notes}${evs}
+    ${act || noteRow ? `<div class="tact">${act}${noteRow}</div>` : ''}
+  </article>`;
+}
+// happen[].at is "HH:MM" for a conversation, a date for an intake entry, or an ISO stamp; each is shown short
+function atText(x){ const s = String(x || ''); if(/^\d{4}-\d\d-\d\dT\d\d:\d\d/.test(s)) return hm(s); if(/^\d{4}-\d\d-\d\d$/.test(s)) return dayOf(s); return s.slice(0, 16); }
+function blockHtml(b){
+  if(!b || typeof b !== 'object') return '';
+  const pid = String(b.id || ''), isUn = !pid || pid === 'unassigned' || pid.indexOf('seed:') === 0;
+  const name = b.name || (pid === 'unassigned' || !pid ? t('unassigned') : pid.replace(/^seed:/, ''));
+  const hap = Array.isArray(b.happen) ? b.happen : [];
+  const hapHtml = hap.length ? `<ul class="thap">${hap.map(h => {
+    const key = String(h.key || ''), known = !!rowOf(key);
+    const who = known ? `<button type="button" class="tlink" data-tjid="${esc(key)}">${esc(h.name || key)}</button>` : `<b>${esc(h.name || key)}</b>`;
+    const un = (!isUn && key) ? `<button type="button" class="tun" data-unassign="${esc(key)}" data-project="${esc(pid)}">${esc(t('notThisProject'))}</button>` : '';
+    return `<li>${who}<span>${esc(h.line || '')}</span>${h.at ? `<span class="at">${esc(atText(h.at))}</span>` : ''}${un}</li>`; }).join('')}</ul>` : '';
+  const props = (Array.isArray(b.props) ? b.props : []).map(cardHtml).join('');
+  return `<section class="tblock" data-block="${esc(pid)}"><div class="tbh"><span class="tbn">${esc(name)}</span>${b.lane ? `<span class="kind">${esc(b.lane)}</span>` : ''}<span class="tstat st-${esc(b.stat || 'quiet')}">${esc(tdStatWord(b))}</span></div>${b.mean ? `<p class="tmean">${esc(b.mean)}</p>` : ''}${hapHtml}${props}</section>`;
+}
+function renderToday(force){
+  const mid = $('#mid');
+  if(tdEditing && !force) return;   // a note is being typed: wait for save or blur
+  const sig = JSON.stringify([TD, tdErr, TR.building, TR.timedOut, UI.lang, uiSig, ((data && data.rows) || []).map(x => x.jid).join('|')]);
+  if(sig === tdSig && !force) return;
+  const st0 = midSig === 'today' ? mid.scrollTop : 0;
+  tdSig = sig; midSig = 'today'; midJid = null;
+  const busy = TR.building;
+  const head = `<div class="dhead hdr"><button class="back tback" id="tback" type="button">${esc(t('todayBack'))}</button><span class="dname">${esc(t('todayTitle'))}</span><button type="button" class="btn trf${busy ? ' busy' : ''}" id="trefresh" aria-busy="${busy ? 'true' : 'false'}">${esc(busy ? t('todayBuilding') : t('todayRefresh'))}</button></div>`;
+  let body = '';
+  if(busy) body += `<div class="tbar busy" data-today-building="1">${esc(t('todayBuildingBar'))}</div>`;
+  if(tdErr) body += `<div class="tbar err">${esc(tdErr)}</div>`;
+  const stl = (TD && TD.status) || {};
+  if(!busy && stl.last_error) body += `<div class="tbar err">${esc(t('todayLastError', stl.last_error))}</div>`;
+  if(!TD){ body += tdErr ? '' : `<div class="empty">${esc(t('todayLoading'))}</div>`; }
+  else if(TD.empty){ body += `<div class="empty" data-today-empty="1">${esc(t('todayEmpty'))}</div>`; }
+  else {
+    if(TD.stale) body += `<div class="tbar stale" data-today-stale="1">${esc(t('todayStale'))}</div>`;
+    const info = [TD.built_at ? t('todayBuiltAt', whenText(TD.built_at)) : '', UI.today.every ? t('todayEvery', UI.today.every) : ''].filter(Boolean).join(' · ');
+    if(info) body += `<div class="tinfo">${esc(info)}</div>`;
+    if(TD.short) body += `<p class="tshort">${esc(TD.short)}</p>`;
+    const one = Array.isArray(TD.one) ? TD.one : [];
+    if(one.length) body += `<ul class="tone" aria-label="${esc(t('todayOne'))}">${one.map(x => Array.isArray(x) ? `<li><b>${esc(x[0])}</b>${esc(x[1])}</li>` : `<li>${esc(x)}</li>`).join('')}</ul>`;
+    body += tdBlocks().map(blockHtml).join('');
+    const tail = Array.isArray(TD.tail) ? TD.tail : [];
+    if(tail.length) body += `<ul class="ttail">${tail.map(x => `<li>${esc(x)}</li>`).join('')}</ul>`;
+    const rej = Array.isArray(TD.rejected) ? TD.rejected : [];
+    if(rej.length) body += `<details class="trej"><summary>${esc(t('todayRejected', rej.length))}</summary><ul class="ttail">${rej.map(x => `<li>${esc([x.kind, x.task, x.why].filter(Boolean).join(' · '))}${x.now ? ': ' + esc(x.now) : ''}</li>`).join('')}</ul></details>`;
+  }
+  mid.innerHTML = head + `<div class="dbody tbody">${body}</div>`;
+  mid.scrollTop = st0;
+}
+async function decideCard(id, action, btn){
+  const p = tdFind(id); if(!p) return;
+  const body = {id: p.id, rev: p.rev, action: action};
+  if(action === 'note'){ const inp = document.querySelector(`input[data-tnote="${CSS.escape(id)}"]`); body.note = inp ? inp.value.trim() : String(tdNote[id] || ''); }
+  const card = btn && btn.closest('.tcard'); if(card) card.querySelectorAll('button').forEach(b => { b.disabled = true; });
+  let j = null;
+  try{
+    const res = await fetch('/api/today/decide', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    try{ j = await res.json(); }catch(e){}
+  }catch(e){ j = null; }
+  tdEditing = false;
+  if(j && j.ok){
+    if(action === 'note'){ p.note = body.note; delete tdNote[id]; toast(t('noteSavedToast')); }
+    else { p.status = action; toast(action === 'ok' ? t('cardOkDone') : (action === 'no' ? t('cardNoDone') : t('cardUndone'))); }
+    tdSig = ''; renderTodayBtn(); renderMid(true); loadToday(); return;
+  }
+  if(j && j.reason === 'rev' && j.current && typeof j.current === 'object'){
+    tdReplace(id, j.current); delete tdNote[id]; tdSig = ''; renderTodayBtn(); renderMid(true); toast(t('cardChanged'), 2600); return;
+  }
+  if(card) card.querySelectorAll('button').forEach(b => { b.disabled = false; });
+  if(j && j.reason === 'disabled') toast(t('todayDisabled'), 2400);
+  else if(j && j.reason === 'status'){ toast(t('cardStatusFailed'), 2600); loadToday(); }
+  else toast((j && (j.error || j.reason)) || t('daemonMissed'), 2400);
+}
+async function unassignSource(key, project){
+  let j = null;
+  try{ const res = await fetch('/api/today/unassign', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({key: key, project: project})}); try{ j = await res.json(); }catch(e){} }catch(e){}
+  if(j && j.ok){ toast(t('unassignDone'), 2200); loadToday(); return; }
+  toast(j && j.reason === 'disabled' ? t('todayDisabled') : ((j && (j.error || j.reason)) || t('daemonMissed')), 2400);
+}
+
+// ===== Resizable columns (wide screens): drag a grip, double-click resets that side; widths kept in localStorage =====
+const COLS = {rail: 0, chat: 0};
+(function(){ try{ const c = JSON.parse(lsGet('wa-board-cols') || '{}'); if(c && typeof c === 'object'){ COLS.rail = Number(c.rail) || 0; COLS.chat = Number(c.chat) || 0; } }catch(e){} })();
+function applyCols(){
+  const app = $('#app');
+  if(COLS.rail) app.style.setProperty('--w-rail', COLS.rail + 'px'); else app.style.removeProperty('--w-rail');
+  if(COLS.chat) app.style.setProperty('--w-chat', COLS.chat + 'px'); else app.style.removeProperty('--w-chat');
+}
+function saveCols(){ lsSet('wa-board-cols', (COLS.rail || COLS.chat) ? JSON.stringify({rail: COLS.rail, chat: COLS.chat}) : null); }
+(function(){
+  const MID_MIN = 440, GRIP = 10;
+  let drag = null;
+  function measure(){ const app = $('#app'), cs = getComputedStyle(app); const rail = app.querySelector('.rail').getBoundingClientRect(), chat = $('#chat').getBoundingClientRect(), box = app.getBoundingClientRect(); return {left: box.left + parseFloat(cs.paddingLeft), right: box.right - parseFloat(cs.paddingRight), rail: rail.width, chat: chat.width}; }
+  function clamp(v, lo, hi){ return Math.max(lo, Math.min(hi, v)); }
+  document.querySelectorAll('.grip').forEach(g => {
+    g.addEventListener('pointerdown', ev => {
+      if(!wide() || ev.button !== 0) return;
+      ev.preventDefault();
+      drag = {side: g.dataset.grip, g: g, m: measure()};
+      try{ g.setPointerCapture(ev.pointerId); }catch(e){}
+      g.classList.add('drag'); document.body.classList.add('resizing');
+    });
+    g.addEventListener('pointermove', ev => {
+      if(!drag || drag.g !== g) return;
+      const m = drag.m, total = m.right - m.left - 2 * GRIP;
+      if(drag.side === 'rail') COLS.rail = Math.round(clamp(ev.clientX - m.left, 220, Math.min(520, total - MID_MIN - m.chat)));
+      else COLS.chat = Math.round(clamp(m.right - ev.clientX, 300, Math.min(760, total - MID_MIN - m.rail)));
+      applyCols();
+    });
+    const end = ev => { if(!drag || drag.g !== g) return; try{ g.releasePointerCapture(ev.pointerId); }catch(e){} g.classList.remove('drag'); document.body.classList.remove('resizing'); drag = null; saveCols(); midSig = ''; threadSig = ''; render(); };
+    g.addEventListener('pointerup', end); g.addEventListener('pointercancel', end);
+    g.addEventListener('dblclick', () => { COLS[g.dataset.grip] = 0; applyCols(); saveCols(); midSig = ''; render(); });
+  });
+  applyCols();
+})();
 // ===== Brain down banner: status.brain_down {kind: auth|limit, since, minutes, detail, next_probe_at} or null =====
 function durText(min){ const m = Math.max(0, Math.round(Number(min) || 0)); return m < 60 ? t('durMin', m) : t('durHourMin', Math.floor(m / 60), m % 60); }
 function whenText(iso){ if(!iso) return ''; return (String(iso).slice(0, 10) === localDay(0) ? '' : dayOf(iso) + ' ') + hm(iso); }
@@ -1221,6 +1711,7 @@ function renderDown(){
 function render(){ if(!data) return; renderDown(); if(editing) return; renderList(); renderMid(); renderThread(); }
 function select(jid){
   if(calOpen !== jid) calOpen = null;   // another chat closes the calendar form
+  if(view === 'today'){ view = 'chat'; tdEditing = false; renderTodayBtn(); }
   selected = jid; midSig = ''; threadSig = '';
   railScroll = $('#list').scrollTop;   // phone: the hidden list forgets its scroll, the back button puts it back
   $('#app').classList.add('show-detail'); render(); $('#mid').scrollTop = 0;
@@ -1272,7 +1763,7 @@ async function load(){
     shownSeq = seq;
     if(data){ for(const nr of j.rows.concat(j.others || [])){ if(editing === nr.jid || unsaved[nr.jid]) nr.draft = draftOf(nr.jid); } }
     data = j;
-    if(setupUi(j)){ applyStatic(); midSig = ''; threadSig = ''; listSig = ''; chipsSig = ''; if(UI.features.digest) loadDigest(); }
+    if(setupUi(j)){ applyStatic(); midSig = ''; threadSig = ''; listSig = ''; chipsSig = ''; if(UI.features.digest) loadDigest(); if(UI.features.today) loadToday(); }
     render();
   }
   catch(e){ fetchWorks = false; if(!data){ $('#meta').textContent = t('offline'); $('#meta').className = 'meta bad'; } }
@@ -1291,7 +1782,11 @@ document.addEventListener('input', ev => {
   clearTimeout(saveTimers[jid]); saveTimers[jid] = setTimeout(() => saveDraft(jid), 800);
 });
 document.addEventListener('change', ev => { const sel = ev.target.closest && ev.target.closest('select.picker'); if(sel) saveField(sel); });
-document.addEventListener('focusin', ev => { const ta = ev.target.closest && ev.target.closest('textarea.draft'); if(ta){ editing = ta.dataset.jid; autosize(ta); } });
+document.addEventListener('focusin', ev => { const ta = ev.target.closest && ev.target.closest('textarea.draft'); if(ta){ editing = ta.dataset.jid; autosize(ta); } if(ev.target.closest && ev.target.closest('input[data-tnote]')) tdEditing = true; });
+// A card note being typed: kept across redraws, and the brief is not redrawn under the cursor (tdEditing)
+document.addEventListener('input', ev => { const n = ev.target.closest && ev.target.closest('input[data-tnote]'); if(n) tdNote[n.dataset.tnote] = n.value; });
+document.addEventListener('focusout', ev => { if(ev.target.closest && ev.target.closest('input[data-tnote]')){ tdEditing = false; setTimeout(() => { if(!tdEditing && view === 'today') renderMid(); }, 300); } });
+document.addEventListener('keydown', ev => { const n = ev.target.closest && ev.target.closest('input[data-tnote]'); if(n && ev.key === 'Enter'){ ev.preventDefault(); const b = n.parentNode.querySelector('[data-tdecide="note"]'); if(b) decideCard(n.dataset.tnote, 'note', b); } });
 document.addEventListener('focusout', ev => { const ta = ev.target.closest && ev.target.closest('textarea.draft'); if(ta){ editing = null; clearTimeout(saveTimers[ta.dataset.jid]); saveDraft(ta.dataset.jid); } });
 // A loaded image makes its bubble taller: a chat that was at the bottom follows it down so the newest message stays in view
 document.addEventListener('load', ev => { const im = ev.target; if(!(im && im.classList && im.classList.contains('pic'))) return; const el = im.closest('.thread'); if(el && el.closest('#search')){ const h = el.querySelector('.msg.hit-msg'); if(h) h.scrollIntoView({block: 'center'}); return; } if(el && el.scrollHeight - el.scrollTop - el.clientHeight < 600) el.scrollTop = el.scrollHeight; }, true);
@@ -1329,7 +1824,7 @@ async function queueNote(jid){
 // Keyboard: with a judged open row selected, a plain D marks it done (not with Cmd, Ctrl or Alt, not inside a field)
 document.addEventListener('keydown', ev => {
   if(ev.key !== 'd' && ev.key !== 'D') return;
-  if(ev.metaKey || ev.ctrlKey || ev.altKey || ev.repeat || S.open) return;   // the search panel is open: D does nothing underneath it
+  if(ev.metaKey || ev.ctrlKey || ev.altKey || ev.repeat || S.open || view === 'today') return;   // search panel or brief open: D does nothing underneath it
   const tg = ev.target; if(tg && (tg.tagName === 'INPUT' || tg.tagName === 'TEXTAREA' || tg.tagName === 'SELECT' || tg.isContentEditable)) return;
   if(!selected) return; const r = rowOf(selected); if(!isJudged(r) || !isOpen(r)) return;
   ev.preventDefault(); dismissJid(selected);
@@ -1363,7 +1858,7 @@ document.addEventListener('keydown', ev => {
     target.classList.remove('swiping', 'press'); target.style.transform = '';
     if(horiz){ if(dx < -72){ const r = rowOf(target.dataset.open); if(isJudged(r) && isOpen(r)) dismissJid(target.dataset.open); } return; }
     if(e.type !== 'touchend' || moved || wasScrolling || Date.now() - st > 600) return;
-    if(e.target.closest && e.target.closest('[data-done]')) return;   // the check button still goes through click
+    if(e.target.closest && e.target.closest('[data-done],[data-more]')) return;   // the check and More buttons still go through click
     if(e.cancelable) e.preventDefault();   // the list hides after opening; without this the late click lands on a middle pane button
     tapOpened = {jid: target.dataset.open, at: Date.now()};
     select(target.dataset.open);
@@ -1376,6 +1871,14 @@ document.addEventListener('keydown', ev => {
 document.addEventListener('click', ev => { if(tapOpened && Date.now() - tapOpened.at < 700){ ev.preventDefault(); ev.stopPropagation(); } }, true);
 document.addEventListener('click', async ev => {
   const chip = ev.target.closest('.chip'); if(chip){ filter = chip.dataset.f; renderList(); return; }
+  const mo = ev.target.closest('[data-more]'); if(mo){ ev.preventDefault(); const jid = mo.dataset.more; if(expanded.has(jid)) expanded.delete(jid); else expanded.add(jid); renderList(); return; }
+  if(ev.target.closest('#sortbtn')){ toggleSort(); return; }
+  if(ev.target.closest('#todaybtn')){ if(view === 'today') closeToday(); else openToday(); return; }
+  if(ev.target.closest('#tback')){ closeToday(); return; }
+  if(ev.target.closest('#trefresh')){ ev.preventDefault(); await refreshToday(); return; }
+  const td = ev.target.closest('[data-tdecide]'); if(td){ ev.preventDefault(); if(!td.disabled) await decideCard(td.dataset.cardId, td.dataset.tdecide, td); return; }
+  const tun = ev.target.closest('[data-unassign]'); if(tun){ ev.preventDefault(); await unassignSource(tun.dataset.unassign, tun.dataset.project); return; }
+  const tj = ev.target.closest('[data-tjid]'); if(tj){ ev.preventDefault(); select(tj.dataset.tjid); return; }
   if(ev.target.closest('[data-done]')){ await dismissJid(ev.target.closest('[data-done]').dataset.done); return; }
   const cg = ev.target.closest('[data-cal-go]'); if(cg){ ev.preventDefault(); if(!cg.disabled) await submitCal(cg.dataset.calGo, cg); return; }
   const cc = ev.target.closest('[data-cal-cancel]'); if(cc){ ev.preventDefault(); closeCal(); return; }
@@ -1513,15 +2016,16 @@ applyStatic();
 if(data){ if(window.innerWidth > 860 && data.rows.length && !selected){ selected = data.rows[0].jid; loadThread(selected); } render(); }
 load();
 if(UI.features.digest) loadDigest();
+if(UI.features.today) loadToday();
 // Every 30 seconds: refresh (redraws only what changed). With fetch blocked, reload the page instead, but never while a draft
 // is being edited, a draft has not reached the daemon, or the calendar form is open.
 setInterval(() => {
-  if(fetchWorks){ load(); if(selected && !editing) loadThread(selected); }
+  if(fetchWorks){ load(); if(selected && !editing) loadThread(selected); if(UI.features.today && !TR.polling) loadToday(); }
   else if(!editing && !calOpen && !Object.keys(unsaved).length) location.reload();
 }, 30000);
 setInterval(() => { if(fetchWorks && UI.features.digest) loadDigest(); }, 300000);   // the digest cell checks every five minutes
-document.addEventListener('visibilitychange', () => { if(!document.hidden){ load(); if(selected) loadThread(selected); if(UI.features.digest) loadDigest(); } });
-window.addEventListener('resize', () => { midSig = ''; threadSig = ''; if(window.innerWidth > 860 && data && data.rows.length && !selected && !editing){ selected = data.rows[0].jid; loadThread(selected); } if(!editing) render(); });
+document.addEventListener('visibilitychange', () => { if(!document.hidden){ load(); if(selected) loadThread(selected); if(UI.features.digest) loadDigest(); if(UI.features.today && !TR.polling) loadToday(); } });
+window.addEventListener('resize', () => { markClamped(); midSig = ''; threadSig = ''; tdSig = ''; if(window.innerWidth > 860 && data && data.rows.length && !selected && !editing){ selected = data.rows[0].jid; loadThread(selected); } if(!editing) render(); });
 </script>
 </body>
 </html>

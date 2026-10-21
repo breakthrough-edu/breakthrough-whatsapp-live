@@ -12,12 +12,16 @@ It renders files, checks them and reports. It never judges a message and never s
   doctor                read only prerequisite report: macOS, WhatsApp Desktop database present, fresh and readable,
                         node, python, claude, tailscale, ffmpeg, whisperkit and its model, lark-cli when chosen.
                         Counts and ages only, never message text or names. Always exits 0 with one verdict line.
-  check-config          unknown keys, bad values, vocabulary keys that do not exist, enabled stations without paths.
-  render-launchd        write <home>/launchd/run.mjs and <home>/launchd/<label>.plist from the templates
-                        (--intake: the evening intake job instead).
+  check-config          unknown keys, bad values, vocabulary keys that do not exist, enabled stations without paths;
+                        retired keys still set (intake.evening_push, intake.evening_at) are warnings, never errors.
+  render-launchd        write <home>/launchd/run.mjs and <home>/launchd/<label>.plist from the templates.
+                        --intake is refused: the evening intake job is retired, the board's Today brief replaces it.
   install-launchd       copy the rendered plist into ~/Library/LaunchAgents, enable it and bootstrap it (a loaded daemon
                         is booted out first, then any python of it left running is stopped, as restart does).
+                        --intake is refused, as for render-launchd.
   uninstall-launchd     bootout, stop any python left running as restart does, disable, and remove the plist.
+                        --intake removes an evening job installed before v1.3.0 (its LaunchAgents plist, and its script
+                        and rendered plist under <home>/launchd/); it needs only launchd.intake_label, no template.
   restart               restart the daemon so it loads new code or settings: SIGTERM the python child, SIGKILL it
                         when it has not exited after ExitTimeOut (a frozen one never does), let launchd start a fresh
                         one, then prove exactly one python of this install runs and holds board.port.
@@ -633,7 +637,20 @@ ENUMS = {
 GROUP_POLICIES = ("all", "mention", "skip")
 FREE_MAPS = ("group_policies", "facts.csv.columns", "facts.floor", "second_source.world_by_chat", "second_source.world_keywords")   # keys chosen by the owner, not by the kit
 LIST_OR_STRING = ("facts.csv.path",)                                 # one source or a list of them
-TIME_KEYS = ("dossier.nightly_at", "facts.at", "second_source.at", "backup.at", "digest.at", "intake.evening_at")
+TIME_KEYS = ("dossier.nightly_at", "facts.at", "second_source.at", "backup.at", "digest.at")
+# Keys a release retired: still read where an older install needs them, never an unknown key error, one warning each.
+RETIRED_KEYS = {
+    "intake.evening_push": "retired in v1.3.0: the board's Today brief replaces the evening push; install/update.md removes "
+                           "an installed evening job and this key on your yes",
+    "intake.evening_at": "retired in v1.3.0: the board's Today brief replaces the evening push; install/update.md removes "
+                         "an installed evening job and this key on your yes",
+}
+# today.* whole number ranges (inclusive), the same as wa_common's
+TODAY_RANGES = {"today.every_minutes": (5, 1440), "today.manual_min_gap_seconds": (10, 3600), "today.max_reads": (0, 20),
+                "today.quote_min_chars": (2, 40)}
+TODAY_EXTRA_RULES_MAX = 2000
+EVENING_RETIRED = ("refused: the evening intake job is retired; the board's Today brief replaces it "
+                   "(see install/O7-intake.md)")
 VOCAB_ENTRY_KEYS = {"worlds": ("key", "label", "label_en", "business", "criteria"), "stages": ("key", "label", "label_en", "criteria", "side"),
                     "priorities": ("key", "label", "label_en", "criteria")}
 
@@ -756,7 +773,7 @@ def check_config(raw, cfg, payload=None, user_home=None):
         if isinstance(name, str) and name and live_here and (Path(expand(live_here)) / "adapters" / ("%s%s.py" % (prefix, name))).is_file():
             owner_blocks.append("%s.%s" % (sect, name))
     for key in unknown_keys(raw, known_tree(payload)):
-        if any(key == b or key.startswith(b + ".") for b in owner_blocks):
+        if any(key == b or key.startswith(b + ".") for b in owner_blocks) or key in RETIRED_KEYS:
             continue
         add("error", key, "unknown key (not in config.example.json); a typo is silently ignored by the daemon")
     for key, msg in type_issues(raw, example):
@@ -784,6 +801,20 @@ def check_config(raw, cfg, payload=None, user_home=None):
         v = dget(eff, key)
         if not (isinstance(v, str) and re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", v)):
             add("error", key, "should be a 24 hour time like 03:00, is %r" % (v,))
+    for key, why in RETIRED_KEYS.items():
+        sect, leaf = key.split(".", 1)
+        if isinstance(raw.get(sect), dict) and leaf in raw[sect]:
+            add("warning", key, why)
+    for key, (lo, hi) in TODAY_RANGES.items():
+        v = dget(raw, key)
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and (v != int(v) or not lo <= v <= hi):
+            add("error", key, "should be a whole number %d to %d, is %r" % (lo, hi, v))
+    tm = dget(raw, "today.model")
+    if isinstance(tm, str) and not tm.strip():
+        add("error", "today.model", "is empty; name the model the brief runs on")
+    er = dget(raw, "today.extra_rules")
+    if isinstance(er, str) and len(er) > TODAY_EXTRA_RULES_MAX:
+        add("error", "today.extra_rules", "is %d characters, at most %d" % (len(er), TODAY_EXTRA_RULES_MAX))
 
     phone = str(eff.get("my_phone") or "")
     if not phone:
@@ -925,11 +956,16 @@ def check_config(raw, cfg, payload=None, user_home=None):
             add("error", "intake.buffer", "folder not found: %s" % tilde(buf.parent))
         elif not buf.is_file():
             add("warning", "intake.buffer", "file not there yet: %s (created with your yes in station O7)" % tilde(buf))
-    elif dget(eff, "intake.evening_push") is True:
-        add("warning", "intake.evening_push", "true while intake.enabled is false; the evening job stays off")
     ib, pb = str(dget(raw, "intake.buffer") or ""), str(dget(raw, "paths.intake_buffer") or "")
     if ib and pb and ib != pb:
         add("warning", "paths.intake_buffer", "differs from intake.buffer; intake.buffer is the one used")
+
+    if dget(eff, "today.enabled") is True:
+        if path_of(eff, "paths.vault") is None:
+            add("error", "paths.vault", "is empty while today.enabled is true; the brief reads your projects from the vault")
+        if dget(eff, "intake.enabled") is not True:
+            add("warning", "today.enabled", "true while intake.enabled is false; the brief still works from the judgments, "
+                                            "without intake entries")
 
     if dget(eff, "facts.enabled") is True:
         src = dget(eff, "facts.source")
@@ -1008,6 +1044,7 @@ def cmd_check_config(args):
 # ---------------------------------------------------------------- launchd (render, install, uninstall)
 
 LAUNCHCTL = "/bin/launchctl"
+EVENING_SCRIPT = "intake-evening.mjs"   # the retired evening job's installed script name (uninstall-launchd --intake removes it)
 NOT_LOADED_CODES = (3, 36, 113)   # "No such process", "Operation now in progress" style answers for a missing service
 
 
@@ -1031,22 +1068,17 @@ def refuse_reason(label, plist_label=None):
     return ""
 
 
-def parse_hhmm(text, default=(20, 0)):
-    m = re.fullmatch(r"([01]?\d|2[0-3]):([0-5]\d)", str(text or ""))
-    return (int(m.group(1)), int(m.group(2))) if m else default
-
-
-def launchd_values(cfg, config_path, intake=False, payload=None, user_home=None):
+def launchd_values(cfg, config_path, payload=None, user_home=None):
+    """Placeholder values for daemon.plist and run.mjs (the only launchd job this release renders)."""
     payload = Path(payload) if payload else PAYLOAD
     home, live = home_dir(cfg), live_dir(cfg)
     ld = home / "launchd"
-    hour, minute = parse_hhmm(dget(cfg, "intake.evening_at"))
-    log = str(live / ("intake-evening.log" if intake else "stderr.log"))
-    script = str(ld / ("intake-evening.mjs" if intake else "run.mjs"))
+    log = str(live / "stderr.log")
+    script = str(ld / "run.mjs")
     user = str(user_home or Path.home())
     return {
         # daemon.plist
-        "LABEL": label_for(cfg, intake),
+        "LABEL": label_for(cfg, False),
         "NODE": resolve_bin(cfg, "node"),
         "RUN_MJS": script,
         "PYTHON": resolve_bin(cfg, "python") or "/usr/bin/python3",
@@ -1055,23 +1087,18 @@ def launchd_values(cfg, config_path, intake=False, payload=None, user_home=None)
         "WORKDIR": str(ld),
         "STDERR_LOG": log,
         "PATH_ENV": str(dget(cfg, "bin.path_env") or ":".join(STANDARD_PATH)),
-        # intake-evening.plist and intake-evening.mjs (HOME_DIR is the account home: that plist sets HOME from it)
+        # spare names for templates written later (HOME_DIR is the account home)
         "SCRIPT": script,
         "HOME_DIR": user,
         "LOG": log,
-        "HOUR": hour,
-        "MINUTE": minute,
         "DAEMON_DIR": str(payload / "daemon"),
-        # spare names for templates written later
         "HOME": user,
         "WA_HOME": str(home),
         "LIVE_DIR": str(live),
         "PAYLOAD": str(payload),
         "STDOUT_LOG": log,
-        "INTAKE_MJS": str(ld / "intake-evening.mjs"),
         "WA_INTAKE": str(payload / "daemon" / "wa_intake.py"),
         "CLAUDE": resolve_bin(cfg, "claude"),
-        "EVENING_AT": "%02d:%02d" % (hour, minute),
     }
 
 
@@ -1093,21 +1120,21 @@ def write_if_changed(path, data, mode, rep, note=""):
 
 
 def do_render_launchd(cfg, config_path, rep, intake=False, payload=None, user_home=None):
+    if intake:     # retired in v1.3.0: no new install renders the evening job
+        rep.error(EVENING_RETIRED)
+        rep.data["refused"] = True
+        return rep
     payload = Path(payload) if payload else PAYLOAD
     templates = payload / TEMPLATES_REL
-    what = "evening intake job" if intake else "daemon"
-    rep.line("render-launchd: %s%s" % (what, "  (dry run, nothing is written)" if rep.dry_run else ""))
-    values = launchd_values(cfg, config_path, intake, payload, user_home)
+    rep.line("render-launchd: daemon%s" % ("  (dry run, nothing is written)" if rep.dry_run else ""))
+    values = launchd_values(cfg, config_path, payload, user_home)
     label = values["LABEL"]
-    if intake and not (dget(cfg, "intake.enabled") is True and dget(cfg, "intake.evening_push") is True):
-        rep.warn("intake.enabled and intake.evening_push are not both true: rendered anyway, "
-                 "install-launchd --intake will refuse until they are")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", label):
         rep.error("launchd label %r is not a valid label" % label)
     if not values["NODE"]:
         rep.error("node not found: install node, or set bin.node to its absolute path (that binary needs Full Disk Access)")
-    plist_tmpl = templates / ("intake-evening.plist" if intake else "daemon.plist")
-    mjs_tmpl = templates / ("intake-evening.mjs" if intake else "run.mjs")
+    plist_tmpl = templates / "daemon.plist"
+    mjs_tmpl = templates / "run.mjs"
     for t in (plist_tmpl, mjs_tmpl):
         if not t.is_file():
             rep.error("template %s/%s is not in the payload" % (TEMPLATES_REL, t.name))
@@ -1116,7 +1143,7 @@ def do_render_launchd(cfg, config_path, rep, intake=False, payload=None, user_ho
         rep.error("working folder %s is inside %s; move paths.home out of it" % (tilde(values["WORKDIR"]), tilde(prot)))
     if rep.errors:
         return rep
-    script = values["WA_INTAKE"] if intake else values["WA_LIVE"]
+    script = values["WA_LIVE"]
     if not Path(script).is_file():
         rep.warn("%s is not in the payload" % tilde(script))
     for key in ("CONFIG",):
@@ -1140,16 +1167,9 @@ def do_render_launchd(cfg, config_path, rep, intake=False, payload=None, user_ho
         problems.append("Label is %r" % pl.get("Label"))
     if not args or args[0] != values["NODE"]:
         problems.append("the program is not node")
-    if not intake:
-        want = {"KeepAlive": True, "RunAtLoad": True, "ThrottleInterval": 10, "ExitTimeOut": 90,
-                "StandardOutPath": "/dev/null", "WorkingDirectory": values["WORKDIR"]}
-        problems += ["%s is %r, expected %r" % (k, pl.get(k), v) for k, v in want.items() if pl.get(k) != v]
-    else:
-        when = {"Hour": values["HOUR"], "Minute": values["MINUTE"]}
-        if pl.get("StartCalendarInterval") != when:
-            problems.append("StartCalendarInterval is %r, expected %r" % (pl.get("StartCalendarInterval"), when))
-        if pl.get("RunAtLoad") is True or pl.get("KeepAlive"):
-            problems.append("an evening job must not run at load or stay alive")
+    want = {"KeepAlive": True, "RunAtLoad": True, "ThrottleInterval": 10, "ExitTimeOut": 90,
+            "StandardOutPath": "/dev/null", "WorkingDirectory": values["WORKDIR"]}
+    problems += ["%s is %r, expected %r" % (k, pl.get(k), v) for k, v in want.items() if pl.get(k) != v]
     if under_protected(pl.get("WorkingDirectory") or "", user_home):
         problems.append("WorkingDirectory is inside a privacy protected folder")
     if problems:
@@ -1178,7 +1198,7 @@ def do_render_launchd(cfg, config_path, rep, intake=False, payload=None, user_ho
         if same:
             rep.line("next: nothing to reinstall, the installed LaunchAgent already matches this plist")
         else:
-            rep.line("next: wa_setup.py install-launchd%s --config %s" % (" --intake" if intake else "", tilde(values["CONFIG"])))
+            rep.line("next: wa_setup.py install-launchd --config %s" % tilde(values["CONFIG"]))
     return rep
 
 
@@ -1190,7 +1210,11 @@ def _launchd_targets(cfg, intake, launch_agents):
 
 
 def do_install_launchd(cfg, rep, intake=False, runner=None, launch_agents=None, wait_seconds=15, kill=None, sleep=None):
-    label, domain, target, dest, staged = _launchd_targets(cfg, intake, launch_agents)
+    if intake:     # retired in v1.3.0: no new install gets the evening job
+        rep.error(EVENING_RETIRED)
+        rep.data["refused"] = True
+        return rep
+    label, domain, target, dest, staged = _launchd_targets(cfg, False, launch_agents)
     rep.line("install-launchd: %s%s" % (label, "  (dry run, nothing runs)" if rep.dry_run else ""))
     staged_label = None
     if staged.is_file():
@@ -1204,11 +1228,8 @@ def do_install_launchd(cfg, rep, intake=False, runner=None, launch_agents=None, 
         rep.error("refused: " + why)
         rep.data["refused"] = True
         return rep
-    if intake and not (dget(cfg, "intake.enabled") is True and dget(cfg, "intake.evening_push") is True):
-        rep.error("refused: intake.enabled and intake.evening_push must both be true before the evening job is installed")
-        return rep
     if staged_label is None:
-        rep.error("%s not found; run wa_setup.py render-launchd%s first" % (tilde(staged), " --intake" if intake else ""))
+        rep.error("%s not found; run wa_setup.py render-launchd first" % tilde(staged))
         return rep
     if staged_label != label:
         rep.error("%s has Label %s but the config says %s; run render-launchd again" % (tilde(staged), staged_label, label))
@@ -1250,12 +1271,11 @@ def do_install_launchd(cfg, rep, intake=False, runner=None, launch_agents=None, 
         deadline = time.time() + wait_seconds
         while time.time() < deadline and run([LAUNCHCTL, "print", target])[0] == 0:
             (sleep or time.sleep)(0.5)
-        if not intake:
-            # bootout stops the node parent; a frozen python never runs its stop handler and stays, holding the port
-            _, _, ok = stop_daemon_pythons(cfg, cfg.get("config_path"), rep, run, kill or os.kill, sleep or time.sleep,
-                                           int(pl.get("ExitTimeOut") or 90), None)
-            if not ok:
-                return rep
+        # bootout stops the node parent; a frozen python never runs its stop handler and stays, holding the port
+        _, _, ok = stop_daemon_pythons(cfg, cfg.get("config_path"), rep, run, kill or os.kill, sleep or time.sleep,
+                                       int(pl.get("ExitTimeOut") or 90), None)
+        if not ok:
+            return rep
     rc, out, err = run([LAUNCHCTL, "bootstrap", domain, str(dest)])
     if rc != 0:
         rep.error("launchctl bootstrap exit %d: %s" % (rc, (err or out).strip()[-300:]))
@@ -1265,12 +1285,8 @@ def do_install_launchd(cfg, rep, intake=False, runner=None, launch_agents=None, 
     for ln in out.splitlines():
         if re.match(r"\s*(state|pid|program|last exit code) = ", ln):
             rep.line("  " + ln.strip())
-    if intake:
-        rep.line("proof: with one open entry in the buffer, launchctl kickstart -k %s; %s/intake-evening.log gets a line "
-                 "and one push arrives (station O7)" % (target, tilde(live_dir(cfg))))
-    else:
-        rep.line("proof: the daemon log says it started, and %s/commands/probe-claude.json gets an answer (station C2)"
-                 % tilde(live_dir(cfg)))
+    rep.line("proof: the daemon log says it started, and %s/commands/probe-claude.json gets an answer (station C2)"
+             % tilde(live_dir(cfg)))
     return rep
 
 
@@ -1287,15 +1303,22 @@ def do_uninstall_launchd(cfg, rep, intake=False, runner=None, launch_agents=None
         rep.error("refused: " + why)
         rep.data["refused"] = True
         return rep
+    # the retired evening job: its script and rendered plist under <home>/launchd/ go too (nothing renders them again)
+    extra = [staged, home_dir(cfg) / "launchd" / EVENING_SCRIPT] if intake else []
     plan = ["%s bootout %s" % (LAUNCHCTL, target),
             "%s disable %s (stays off after a restart until install-launchd enables it)" % (LAUNCHCTL, target),
             "remove %s%s" % (tilde(dest), "" if dest.exists() else " (not there)")]
+    plan += ["remove %s%s" % (tilde(x), "" if x.exists() else " (not there)") for x in extra]
     if rep.dry_run:
         for step in plan:
             rep.line("  would " + step)
-        rep.line("  the rendered copy %s and everything in %s stay" % (tilde(staged), tilde(live_dir(cfg))))
+        if intake:
+            rep.line("  everything in %s stays" % tilde(live_dir(cfg)))
+        else:
+            rep.line("  the rendered copy %s and everything in %s stay" % (tilde(staged), tilde(live_dir(cfg))))
         return rep
-    if _SELFTEST["active"]:
+    # inside the selftest only the evening job may run, and only with a fake runner (the default runner refuses launchctl)
+    if _SELFTEST["active"] and (runner is None or not intake):
         rep.error("refused: the selftest never runs launchctl")
         rep.data["refused"] = True
         return rep
@@ -1323,10 +1346,19 @@ def do_uninstall_launchd(cfg, rep, intake=False, runner=None, launch_agents=None
         rep.did("disable", target)
     else:
         rep.warn("launchctl disable exit %d: %s" % (rc, (err or out).strip()[-200:]))
-    if dest.exists():
-        dest.unlink()
-        rep.did("remove", dest)
-    rep.line("kept: %s and %s (state, logs, config)" % (tilde(staged), tilde(live_dir(cfg))))
+    removed = []
+    for x in [dest] + extra:
+        if x.is_file() or x.is_symlink():
+            x.unlink()
+            rep.did("remove", x)
+            removed.append(x)
+    if intake:
+        rep.line("removed: %s" % (", ".join(tilde(x) for x in removed) if removed else "nothing, no evening job files were there"))
+        rep.line("kept: %s (state, logs, config); the retired intake.evening_push and intake.evening_at can leave the config"
+                 % tilde(live_dir(cfg)))
+    else:
+        rep.line("kept: %s and %s (state, logs, config)" % (tilde(staged), tilde(live_dir(cfg))))
+    rep.data["removed"] = [str(x) for x in removed]
     return rep
 
 
@@ -2406,6 +2438,13 @@ class DoctorContext(object):
         self.tailscale_app = tailscale_app
 
 
+def today_line(cfg):
+    """The doctor's line for the board's Today brief."""
+    if dget(cfg, "today.enabled") is not True:
+        return "today: off"
+    return "today: on (model %s, every %s min)" % (dget(cfg, "today.model") or "?", dget(cfg, "today.every_minutes"))
+
+
 def doctor(ctx, out=say):
     st = {"blockers": [], "notes": [], "cfg": None, "raw": None}
     now = time.time()
@@ -2481,6 +2520,7 @@ def doctor(ctx, out=say):
         out("  check-config: %d error(s), %d warning(s)" % (n_err, len(issues) - n_err))
         if n_err:
             note("check-config reports %d error(s); run wa_setup.py check-config for the list" % n_err)
+        out("  " + today_line(st["cfg"]))
 
     def s_whatsapp():
         root = ctx.wa_root
@@ -2692,10 +2732,9 @@ def doctor(ctx, out=say):
         out("  label: %s" % label)
         out("  rendered plist: %s" % ("present" if staged.is_file() else "not rendered yet"))
         out("  run.mjs: %s" % ("present" if (home_dir(cfg) / "launchd" / "run.mjs").is_file() else "not rendered yet"))
-        if dget(cfg, "intake.enabled") is True and dget(cfg, "intake.evening_push") is True:
-            ilabel = label_for(cfg, True)
-            out("  evening intake job %s: %s" % (ilabel, "installed" if (ctx.launch_agents / (ilabel + ".plist")).is_file()
-                                                 else "not installed (install-launchd --intake)"))
+        ilabel = label_for(cfg, True)
+        if ilabel and (ctx.launch_agents / (ilabel + ".plist")).is_file():
+            out("  evening intake job %s: still installed (retired; update.md removes it on your yes)" % ilabel)
         if not installed.is_file():
             out("  LaunchAgents plist: not installed (station C2)")
             return
@@ -2838,9 +2877,7 @@ def selftest():
         real_t = PAYLOAD / TEMPLATES_REL
         for name in ("config.example.json", "topic-map.example.json", "daemon.plist", "run.mjs"):
             shutil.copyfile(str(real_t / name), str(tdir / name))
-        for name in ("intake-evening.plist", "intake-evening.mjs"):
-            if (real_t / name).is_file():
-                shutil.copyfile(str(real_t / name), str(tdir / name))
+        # the evening job's templates are never copied: render, install and uninstall --intake must not need them
         stamp = "<!-- seed: breakthrough-whatsapp-live %s v%s -->\n"
         for name in PROMPT_SEEDS:
             (tdir / name).write_text(stamp % (TEMPLATES_REL + "/" + name, "1.0.0") + "# fake %s for {OWNER_LABEL}\n" % name,
@@ -2971,23 +3008,13 @@ def selftest():
               (home / "launchd" / "run.mjs").read_bytes() == (tdir / "run.mjs").read_bytes())
         rr2 = do_render_launchd(cfg, cfg_file, Report(quiet=True), payload=payload, user_home=uhome)
         check("a second render leaves both files unchanged", not rr2.done and not rr2.errors, rr2.done)
-        if (tdir / "intake-evening.plist").is_file() and (tdir / "intake-evening.mjs").is_file():
-            ri = do_render_launchd(cfg, cfg_file, Report(quiet=True), intake=True, payload=payload, user_home=uhome)
-            ipl = {}
-            try:
-                ipl = plistlib.loads((home / "launchd" / "local.whatsapp-live.intake.plist").read_bytes())
-            except Exception as e:
-                ipl = {"error": str(e)}
-            mjs_installed = home / "launchd" / "intake-evening.mjs"
-            mjs_text = mjs_installed.read_text(encoding="utf-8") if mjs_installed.is_file() else ""
-            check("render-launchd --intake renders a valid evening plist and fills the script's config and daemon paths",
-                  not ri.errors and ipl.get("Label") == "local.whatsapp-live.intake"
-                  and (ipl.get("ProgramArguments") or [])[:2] == [str(bindir / "node"), str(mjs_installed)]
-                  and ipl.get("StartCalendarInterval") == {"Hour": 20, "Minute": 0} and ipl.get("RunAtLoad") is not True
-                  and ("'%s'" % cfg_file) in mjs_text and ("'%s'" % (payload / "daemon")) in mjs_text
-                  and "'{CONFIG}'" not in mjs_text and "'{DAEMON_DIR}'" not in mjs_text, ri.errors or ipl)
-        else:
-            say("  skip  render-launchd --intake (intake-evening templates are not in the payload yet)")
+        ri = do_render_launchd(cfg, cfg_file, Report(quiet=True), intake=True, payload=payload, user_home=uhome)
+        ri_dry = do_render_launchd(cfg, cfg_file, Report(dry_run=True, quiet=True), intake=True, payload=payload, user_home=uhome)
+        check("render-launchd --intake is refused with one line naming the Today brief and install/O7-intake.md, nothing written",
+              ri.errors == [EVENING_RETIRED] and len(ri.lines) == 1 and ri_dry.errors == [EVENING_RETIRED]
+              and "Today brief" in EVENING_RETIRED and "install/O7-intake.md" in EVENING_RETIRED
+              and not (home / "launchd" / "local.whatsapp-live.intake.plist").exists()
+              and not (home / "launchd" / EVENING_SCRIPT).exists(), ri.lines)
 
         say("[install and uninstall refusals]")
         calls = []
@@ -3027,6 +3054,35 @@ def selftest():
         except Refused:
             guarded = True
         check("the command runner itself refuses launchctl inside the selftest", guarded)
+        ii = do_install_launchd(cfg, Report(quiet=True), intake=True, runner=rec_runner, launch_agents=agents)
+        ii_dry = do_install_launchd(cfg, Report(dry_run=True, quiet=True), intake=True, runner=rec_runner, launch_agents=agents)
+        check("install-launchd --intake is refused with the same one line, even in a dry run, and runs nothing",
+              ii.errors == [EVENING_RETIRED] and len(ii.lines) == 1 and ii.data.get("refused")
+              and ii_dry.errors == [EVENING_RETIRED] and not calls and not list(agents.iterdir()), ii.lines)
+        check("the selftest payload has no evening templates (uninstall --intake below runs without them)",
+              not (tdir / "intake-evening.plist").exists() and not (tdir / EVENING_SCRIPT).exists())
+        ilabel = dget(cfg, "launchd.intake_label")
+        ev_files = [agents / (ilabel + ".plist"), home / "launchd" / (ilabel + ".plist"), home / "launchd" / EVENING_SCRIPT]
+        for f_ in ev_files:
+            f_.parent.mkdir(parents=True, exist_ok=True)
+            f_.write_bytes(plistlib.dumps({"Label": ilabel, "ProgramArguments": ["/bin/true"]}) if f_.suffix == ".plist" else b"// old\n")
+        ud = do_uninstall_launchd(cfg, Report(dry_run=True, quiet=True), intake=True, runner=rec_runner, launch_agents=agents)
+        check("uninstall-launchd --intake --dry-run plans the bootout and the removal of all three evening files, touches nothing",
+              not ud.errors and all(("would remove %s" % tilde(f_)) in ud.text() for f_ in ev_files)
+              and all(f_.exists() for f_ in ev_files) and not calls, ud.text())
+        uu = do_uninstall_launchd(cfg, Report(quiet=True), intake=True, runner=rec_runner, launch_agents=agents)
+        target_i = "gui/%d/%s" % (os.getuid(), ilabel)
+        check("uninstall-launchd --intake (fake launchctl) boots out and disables the evening label, removes its LaunchAgents "
+              "plist, its script and its rendered plist, and says what it removed",
+              not uu.errors and calls == [[LAUNCHCTL, "bootout", target_i], [LAUNCHCTL, "disable", target_i]]
+              and not any(f_.exists() for f_ in ev_files) and sorted(uu.data.get("removed") or []) == sorted(str(f_) for f_ in ev_files)
+              and any(ln.startswith("removed: ") and tilde(ev_files[0]) in ln for ln in uu.lines)
+              and (home / "launchd" / "local.whatsapp-live.plist").is_file(), (uu.errors, uu.lines, calls))
+        del calls[:]
+        u0 = do_uninstall_launchd(cfg, Report(quiet=True), intake=True, runner=rec_runner, launch_agents=agents)
+        check("uninstall-launchd --intake with no evening job left says nothing was there and still works",
+              not u0.errors and "removed: nothing, no evening job files were there" in u0.lines, u0.lines)
+        del calls[:]
 
         say("[restart]")
 
@@ -3405,6 +3461,80 @@ def selftest():
         check("init creates doc-text-cache and secrets, both 0700",
               mode_of(home / "doc-text-cache") == 0o700 and mode_of(home / "secrets") == 0o700)
 
+        say("[config keys: today.*, the retired evening keys]")
+        today_want = {"enabled": False, "model": "claude-sonnet-5", "every_minutes": 30, "manual_min_gap_seconds": 60,
+                      "max_reads": 6, "quote_min_chars": 6, "extra_rules": ""}
+        check("config.example.json and wa_common.DEFAULTS carry the same today block; neither has the two evening keys",
+              exd.get("today") == today_want and WC.DEFAULTS.get("today") == today_want
+              and not any(k in (exd.get("intake") or {}) or k in WC.DEFAULTS["intake"] for k in ("evening_push", "evening_at"))
+              and "intake.evening_at" not in TIME_KEYS, (exd.get("today"), WC.DEFAULTS.get("today")))
+
+        def cc(patch_today=None, vault=None, intake_on=None, intake_extra=None):
+            c = copy.deepcopy(raw)
+            if patch_today is not None:
+                c["today"] = dict(today_want, **patch_today)
+            if vault is not None:
+                c["paths"]["vault"] = vault
+            if intake_on is not None or intake_extra:
+                c["intake"] = dict(c.get("intake") or {}, **dict(intake_extra or {}, **({} if intake_on is None else {"enabled": intake_on})))
+            return check_config(c, WC.apply_defaults(copy.deepcopy(c), cfg_file), payload, uhome)
+        t_bad = {}
+        for label, patch in (("em_low", {"every_minutes": 4}), ("em_high", {"every_minutes": 1441}), ("em_half", {"every_minutes": 2.5}),
+                             ("gap_low", {"manual_min_gap_seconds": 9}), ("gap_high", {"manual_min_gap_seconds": 3601}),
+                             ("reads_high", {"max_reads": 21}), ("quote_low", {"quote_min_chars": 1}), ("quote_high", {"quote_min_chars": 41}),
+                             ("model", {"model": " "}), ("rules", {"extra_rules": "r" * 2001}), ("enabled", {"enabled": "yes"}),
+                             ("model_type", {"model": 5})):
+            t_bad[label] = [(k, m) for level, k, m in cc(patch) if level == "error" and k.startswith("today.")]
+        expect = {"em_low": "today.every_minutes", "em_high": "today.every_minutes", "em_half": "today.every_minutes",
+                  "gap_low": "today.manual_min_gap_seconds", "gap_high": "today.manual_min_gap_seconds",
+                  "reads_high": "today.max_reads", "quote_low": "today.quote_min_chars", "quote_high": "today.quote_min_chars",
+                  "model": "today.model", "rules": "today.extra_rules", "enabled": "today.enabled", "model_type": "today.model"}
+        check("check-config: every today.* value out of its range or of the wrong type is an error naming its key",
+              all(any(k == expect[x] for k, m in t_bad[x]) for x in expect), dict((x, t_bad[x]) for x in expect if not t_bad[x]))
+        t_edges = [i for i in cc({"enabled": True, "every_minutes": 5, "manual_min_gap_seconds": 3600, "max_reads": 0,
+                                  "quote_min_chars": 40, "extra_rules": "r" * 2000}, intake_on=True,
+                                 intake_extra={"buffer": str(base / "vault" / "intake.md")})
+                   if i[0] == "error" or i[1].startswith("today")]
+        t_edges2 = [i for i in cc({"every_minutes": 1440, "manual_min_gap_seconds": 10, "max_reads": 20, "quote_min_chars": 2})
+                    if i[0] == "error"]
+        check("check-config: today.* at the edges of their ranges, enabled with a vault and intake on, gives no error and no today warning",
+              not t_edges and not t_edges2, (t_edges, t_edges2))
+        t_novault = cc({"enabled": True}, vault="", intake_on=True)
+        check("check-config: today.enabled true with paths.vault empty is an error saying the brief reads projects from the vault",
+              any(level == "error" and k == "paths.vault" and "brief reads your projects from the vault" in m for level, k, m in t_novault),
+              [i for i in t_novault if i[1] == "paths.vault"])
+        t_nointake = cc({"enabled": True}, intake_on=False)
+        check("check-config: today.enabled true with intake.enabled false is a warning, not an error",
+              any(level == "warning" and k == "today.enabled" and "without intake entries" in m for level, k, m in t_nointake)
+              and not any(level == "error" and k.startswith("today") for level, k, m in t_nointake), t_nointake)
+        t_ret = cc(intake_extra={"evening_push": True, "evening_at": "8pm"})
+        ret = dict((k, (level, m)) for level, k, m in t_ret if k.startswith("intake.evening"))
+        check("check-config: the retired intake.evening_push and intake.evening_at are warnings naming install/update.md, "
+              "never unknown key errors (and evening_at is no longer a time key)",
+              set(ret) == {"intake.evening_push", "intake.evening_at"} and all(v[0] == "warning" for v in ret.values())
+              and all("retired in v1.3.0" in v[1] and "install/update.md" in v[1] and "Today brief" in v[1] for v in ret.values())
+              and not any(level == "error" for level, k, m in t_ret), t_ret)
+        check("check-config: a config without the evening keys says nothing about them",
+              not any(k.startswith("intake.evening") for level, k, m in cc()))
+        dl0 = []
+        doctor(DoctorContext(config_path=cfg_file, wa_root=wa, runner=doc_runner, which=fake_which, user_home=uhome,
+                             launch_agents=agents, payload=payload, tailscale_app=str(base / "no-app")), out=dl0.append)
+        tcfg_raw = copy.deepcopy(raw)
+        tcfg_raw["today"] = dict(today_want, enabled=True, every_minutes=45)
+        write_text_atomic(cfg_file, json_text(tcfg_raw), 0o600)
+        ilabel = dget(raw, "launchd.intake_label") or "local.whatsapp-live.intake"
+        (agents / (ilabel + ".plist")).write_bytes(plistlib.dumps({"Label": ilabel, "ProgramArguments": ["/bin/true"]}))
+        dl1 = []
+        doctor(DoctorContext(config_path=cfg_file, wa_root=wa, runner=doc_runner, which=fake_which, user_home=uhome,
+                             launch_agents=agents, payload=payload, tailscale_app=str(base / "no-app")), out=dl1.append)
+        (agents / (ilabel + ".plist")).unlink()
+        write_text_atomic(cfg_file, json_text(raw), 0o600)
+        ev_line = "  evening intake job %s: still installed (retired; update.md removes it on your yes)" % ilabel
+        check("doctor: a today line, off by default and on with its model and minutes",
+              "  today: off" in dl0 and "  today: on (model claude-sonnet-5, every 45 min)" in dl1, [x for x in dl0 + dl1 if "today" in x])
+        check("doctor: one line when an evening job is still installed, nothing when it is absent",
+              dl1.count(ev_line) == 1 and not any("evening" in x for x in dl0), [x for x in dl0 + dl1 if "evening" in x])
+
         say("[render-claude-wrapper and the doctor auth line]")
         fake_token = "selftest-fake-token-value-9c41e7"
         realbin = base / "realbin"
@@ -3670,7 +3800,7 @@ def cmd_init(args):
 def cmd_render_launchd(args):
     path = _config_arg(args)
     rep = do_render_launchd(load_cfg(path), path, Report(dry_run=args.dry_run), intake=args.intake)
-    return 1 if rep.errors else 0
+    return 3 if rep.data.get("refused") else (1 if rep.errors else 0)
 
 
 def cmd_install_launchd(args):
@@ -3757,7 +3887,8 @@ def build_parser():
                        ("install-launchd", "copy the rendered plist to ~/Library/LaunchAgents, enable, bootstrap"),
                        ("uninstall-launchd", "bootout, disable, remove the plist from ~/Library/LaunchAgents")):
         sp = add(name, text, writes=True)
-        sp.add_argument("--intake", action="store_true", help="the evening intake job instead of the daemon")
+        sp.add_argument("--intake", action="store_true", help="the retired evening intake job: render and install refuse, "
+                                                               "uninstall removes one installed before v1.3.0")
     sp = add("restart", "restart the daemon: SIGTERM its python, SIGKILL it after ExitTimeOut if frozen, let launchd "
                         "start it again, prove one python holds the board port (never kickstart -k)", writes=True)
     sp.add_argument("--wait", type=int, default=None, metavar="S",

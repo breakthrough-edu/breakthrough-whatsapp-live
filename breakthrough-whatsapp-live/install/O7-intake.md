@@ -1,8 +1,8 @@
 # Station O7 · Intake
 
-**Should the things people ask of you, and the things you promised, be caught into one intake buffer note in your vault, and placed only when you say "intake"?** What it costs: no extra model call during the day, because captures ride on each judgment run. Each run may append at most two entries, of five kinds only (a request with a date, something you promised and have not delivered, an appointment, money, a decision the other side stated), each with a quote of up to 200 characters (marked 🗣 when the program found it word for word in the message, ≈ when it is the brain's gist), into one note in your vault (plus the second source's captures when O2 runs). Your command-base skill gains two patches: the "intake" mode and a line in the morning start. The optional evening push adds a second resident job (its own LaunchAgent) and, on evenings when entries are open, one model call on `brain.model` (read only tools, 4 turns, 300 seconds) that suggests a place for each entry, then pushes the open list, with names and quotes, through your outlet. Nothing is ever placed without your yes, and the daemon only appends.
+**Should the things people ask of you, and the things you promised, be caught into one intake buffer note in your vault, and placed only when you say "intake"?** What it costs: no extra model call during the day, because captures ride on each judgment run. Each run may append at most two entries, of five kinds only (a request with a date, something you promised and have not delivered, an appointment, money, a decision the other side stated), each with a quote of up to 200 characters (marked 🗣 when the program found it word for word in the message, ≈ when it is the brain's gist), into one note in your vault (plus the second source's captures when O2 runs). Your command-base skill gains two patches: the "intake" mode and a line in the morning start. The optional Today brief (question 5) adds one extra model call, at most every `today.every_minutes` (30) minutes, only when its inputs changed (today's judgments, the open intake entries, a source you took out of a project, or your replies in conversations its cards cover); it reads a few vault files (the briefs and task lists of the projects in play, and at most `today.max_reads` it opens itself), shows its proposals on the board, and is never pushed. Nothing is ever placed without your yes, and the daemon only appends.
 
-The buffer's shape and the three command-base patches: `references/vault-proposals.md`, proposals c and d. The registry entries: proposal f. Why a buffer and a mode instead of writing straight into tasks: `references/defaults-and-why.md`, "12 · The intake buffer is a command-base mode". Turning the evening push on also re-rules "6 · Pushes only for errors, plus the morning digest". What the quotes mean for privacy: `references/privacy.md`, "Quotes in your vault, and switching each writer off".
+The buffer's shape and the three command-base patches: `references/vault-proposals.md`, proposals c and d. The registry entries: proposal f. Why a buffer and a mode instead of writing straight into tasks, and why the brief is never pushed: `references/defaults-and-why.md`, "12 · The intake buffer is a command-base mode". What the brief reads and stores: `references/privacy.md`, "The Today brief". There is no evening push: it is retired, and a fresh install never has an evening job. What the quotes mean for privacy: `references/privacy.md`, "Quotes in your vault, and switching each writer off".
 
 ```sh
 KIT=~/.claude/skills/breakthrough-whatsapp-live      # the folder holding SKILL.md, install/ and daemon/
@@ -10,7 +10,7 @@ HOME_DIR="<paths.home from the progress file header>"
 LIVE="$HOME_DIR/live"
 PY=/usr/bin/python3
 LABEL="<launchd.label from the progress file header>"
-ILABEL="$LABEL.intake"
+ILABEL="<launchd.intake_label from the progress file header>"
 PORT="<board.port from the progress file header>"
 BUF="<vault>/99_Meta/intake-buffer.md"            # intake.buffer, as question 2 decides
 ```
@@ -24,7 +24,8 @@ One question at a time. Read default 12 before question 1.
 1. **Do you want captures?** Read default 12: the machine makes sure nothing is lost, you put each item where it belongs, and a pile of open entries is information, not a mess.
 2. **Where should the buffer note live?** The default `<vault>/99_Meta/intake-buffer.md`, next to the capture buffer, with no front matter. The folder must already exist. Its markers follow `board.lang`.
 3. **May the command base learn two things?** Patch 2, "intake", and patch 3, one morning line counting open entries (proposal d). If C4 did not add patch 1 ("update <name>'s note"), offer it here too.
-4. **Should the open list reach your phone in the evening, with a suggested place for each entry?** Say the cost (one model call on evenings with open entries, a second LaunchAgent, names and quotes through the outlet) and that a yes re-rules default 6. Then: at what time (`intake.evening_at`, 20:00)?
+4. *(Retired in v1.3.0: the evening push. The number stays so older progress files still read the same; go on to question 5.)*
+5. **Do you want the board to propose, per project, what today's conversations mean?** Say what it does: a Today page on the board, one block per project of yours, each with a few cards (update a task, create one, seed a new project, drop an entry) that you answer OK or No; the intake mode reads those cards under each entry as a starting point. Say what it costs: one extra model call, at most every 30 minutes, only when its inputs changed (today's judgments, the open intake entries, a source you took out of a project, or your replies in conversations its cards cover); it reads a few vault files. Say what it reads: today's judgments, the open intake entries, the briefs and task lists of the projects a conversation may belong to (found from your vault's own folders and doctrine), at most 6 more vault files it opens itself, and your own replies after a judgment (at most three per conversation, each cut to 200 characters; their text, and the model's raw answer, stay only in that run's folder (`prompt.md`, `result.txt`, `claude.stdout.jsonl`, `claude.stderr.txt`), like every run folder; before anything else is stored, any stretch of the model's answer, in any field, that repeats one of them, at least `today.quote_min_chars` CJK characters (Chinese, kana or Hangul) or 4 Latin words (6 letters or digits or more), ignoring case, spacing, punctuation (inside a word too), full-width forms, and the escapes, entities, percent codes and tags listed in `references/privacy.md`, is replaced with "(your reply, not copied)"; a shorter or reworded paraphrase is not caught). Say what it never does: write into the vault, or push. It needs `paths.vault`; it works without intake too, from judgments alone. Optionally ask for a paragraph of the owner's own judgment rules for it (`today.extra_rules`, at most 2000 characters), for example "a question about a cake class date belongs to the Weekend Classes project, never to Wholesale Orders".
 
 ## Do
 
@@ -62,32 +63,35 @@ Follow `references/vault-proposals.md`, proposal d, "Before patching": read the 
 
 These are the owner's files in the owner's words; never copy over them. Writes: `<command base>/SKILL.md` and `<command base>/references/intake.md` (and `<command base>/references/update-person.md` for patch 1).
 
-### 4 · The evening push (only on a yes to question 4)
+### 4 · The Today brief (only on a yes to question 5)
 
-The registry entry comes first: write the evening job's six cells (`references/vault-proposals.md`, proposal f, "The evening intake job") with the real label and paths. Then, with the config edit ritual, set `intake.evening_push` to `true`, `intake.evening_at`, and `intake.rules_file` to `<command base>/references/intake.md` from step 3, so the evening suggestions match the places the mode offers. Then:
+With the config edit ritual, set `today.enabled` to `true`, and `today.extra_rules` when the owner gave a paragraph; leave the other `today.*` keys at their defaults unless the owner asks (`references/config-reference.md`, "`today`"). `check-config` refuses `today.enabled` with an empty `paths.vault`, and warns while `intake.enabled` is false. Then:
 
 ```sh
 KIT=~/.claude/skills/breakthrough-whatsapp-live; PY=/usr/bin/python3
 HOME_DIR="<paths.home from the progress file header>"; LIVE="$HOME_DIR/live"
-"$PY" "$KIT/daemon/wa_intake.py" --config "$LIVE/config.json" --evening-status
-"$PY" "$KIT/daemon/wa_setup.py" render-launchd --intake --config "$LIVE/config.json" --dry-run
-"$PY" "$KIT/daemon/wa_setup.py" render-launchd --intake --config "$LIVE/config.json"
-"$PY" "$KIT/daemon/wa_setup.py" install-launchd --intake --config "$LIVE/config.json" --dry-run
-"$PY" "$KIT/daemon/wa_setup.py" install-launchd --intake --config "$LIVE/config.json"
+"$PY" "$KIT/daemon/wa_setup.py" check-config --config "$LIVE/config.json"
+"$PY" "$KIT/daemon/wa_setup.py" restart --config "$LIVE/config.json"
+"$PY" "$KIT/daemon/wa_setup.py" doctor --config "$LIVE/config.json" | grep today
+"$PY" "$KIT/daemon/wa_today.py" --config "$LIVE/config.json" --build --dry-run | head -40
 ```
 
-`--evening-status` prints the JSON the job reads: `"run": true` and the open count, or `"run": false` with the reason (`intake.evening_push is false, evening push skipped`, `notify.outlet is none or notify.mode is off, evening push skipped`, and the like). `render-launchd --intake` writes `<home>/launchd/intake-evening.mjs` and `<home>/launchd/<intake label>.plist`; `install-launchd --intake` refuses unless `intake.enabled` and `intake.evening_push` are both true, and ends with the evening job's own proof line: `proof: with one open entry in the buffer, launchctl kickstart -k gui/<uid>/<intake label>; <live>/intake-evening.log gets a line and one push arrives (station O7)`. The job never fires at load; it runs once a day at `intake.evening_at`, logs to `live/intake-evening.log`, and sets that log to 0600 each time it runs.
-
-To prove it, one open entry must exist: a real capture, or a test entry written by hand in the entry shape and placed as `drop` through the intake mode afterwards. Then fire it once (one model call):
+`doctor` prints `today: on (model <model>, every 30 min)`. The dry run prints the prompt the brief would send, with the projects it found in the vault and the candidates for today's conversations, and calls no model; show the owner the project list and fix `paths.vault` or `paths.doctrine` if a project is missing. After a restart the brief waits for the first change (a judgment, an entry, a reply); the first build for Verify is asked for by hand (one model call):
 
 ```sh
-LABEL="<launchd.label from the progress file header>"; ILABEL="$LABEL.intake"
-launchctl kickstart -k gui/$(id -u)/$ILABEL
+HOME_DIR="<paths.home from the progress file header>"; LIVE="$HOME_DIR/live"
+echo '{}' > "$LIVE/commands/today-now.json"
 ```
+
+Then point the intake mode at the brief: in `<command base>/references/intake.md` from step 3, the list step uses `--list-open --with-brief http://127.0.0.1:<board.port>/api/today` and the outline's step 5c (the cards with no entry) is in (`references/vault-proposals.md`, Patch 2). On the owner's yes, like every patch.
+
+### The evening push is retired
+
+`render-launchd --intake` and `install-launchd --intake` refuse with one line pointing here, and exit 3. The evening push of earlier releases (an evening list of the open entries, with a suggested place each, pushed through the outlet) is retired: the board's Today brief replaces it, because two proactive surfaces that may disagree are worse than one, and a push is a second inbox (`references/defaults-and-why.md`, default 12). Its templates left the payload, so a fresh install never has the job. An install that has one from an earlier release removes it through `install/update.md`, step 8b, on the owner's yes, or by hand with `wa_setup.py uninstall-launchd --intake --config <live>/config.json`, which prints `removed: <paths>`.
 
 ### 5 · The registry addition
 
-Under the daemon's entry, the O7 block from proposal f: reads the brain's captures, writes the intake buffer, switch `intake.enabled`, proof `wa_intake.py --count-open` rises after a run with a capture.
+Under the daemon's entry, the O7 block from proposal f: reads the brain's captures, writes the intake buffer, switch `intake.enabled`, proof `wa_intake.py --count-open` rises after a run with a capture. With the Today brief on, the "O7 Today brief" row of the same table as well.
 
 ## Verify
 
@@ -127,23 +131,45 @@ Run each probe with the station's opening block in front of it. Every check must
    ```sh
    md5 -q "$BUF"
    ```
-7. **The evening job is installed as ruled** (step 4 only). Pass: `false`; the hour of `intake.evening_at`; the log's last lines end with `push: notify: delivered (exit 0)`, or with `open entries: 0, nothing sent` when nothing was open; the list on the phone headed `🗂 intake pre-sort · <n> open` (`🗂 intake 预分类 · <n> 条等归位` in Chinese); the buffer's `md5` unchanged by the run; the log `-rw-------` (the job sets it when it runs). (K278, K279)
+7. **No evening job, on every install.** Pass: no plist under the intake label; both `--intake` commands refuse in one line pointing to this station, exit 3, and write nothing. (K278, K279)
    ```sh
-   plutil -extract RunAtLoad raw ~/Library/LaunchAgents/$ILABEL.plist
-   plutil -extract StartCalendarInterval.Hour raw ~/Library/LaunchAgents/$ILABEL.plist
-   tail -3 "$LIVE/intake-evening.log"
-   stat -f %Sp "$LIVE/intake-evening.log"
+   case "$ILABEL" in ""|*"<"*) echo "fill in ILABEL first (launchd.intake_label from the progress file header)" >&2; exit 1;; esac
+   ls ~/Library/LaunchAgents/$ILABEL.plist
+   "$PY" "$KIT/daemon/wa_setup.py" render-launchd --intake --config "$LIVE/config.json" --dry-run
+   "$PY" "$KIT/daemon/wa_setup.py" install-launchd --intake --config "$LIVE/config.json" --dry-run
    ```
+8. **The brief was built** (step 4 only, after the `today-now.json` there and a minute or two). A refresh or `today-now.json` within `today.manual_min_gap_seconds` (60) of any build, automatic ones included, answers `already` and builds nothing: when the log shows that answer, wait out the gap and drop the file again. Pass: `True`, today's date twice, `False` (not empty); a run folder ending `-today`. (K356)
+   ```sh
+   curl -s "http://127.0.0.1:$PORT/api/today" | "$PY" -c 'import json, sys; d = json.load(sys.stdin); print(d["ok"], d["date"], (d.get("built_at") or "")[:10], d["empty"])'
+   ls -td "$LIVE"/runs/*-today/ | head -1
+   ```
+9. **A second refresh within the gap answers `already`** (step 4 only, within `today.manual_min_gap_seconds` of the last build, automatic or manual, so right after Verify 8). Pass: `{"ok": true, "already": true, ...}`, and no new run folder. (K357)
+   ```sh
+   curl -s -X POST "http://127.0.0.1:$PORT/api/today/refresh"
+   ```
+10. **The intake list shows the card under its entry** (step 4 only, with the test entry from Verify 6 open and a brief built after it). Pass: under the test entry, `    board: <project> · <kind> <task> · <status>` and its `      proposal:` line, or `    board: no card, judge it as before` when the brief made no card for it; the cards with no entry follow the list, each with `id <8 hex> rev <n>`. (K362, K363)
+   ```sh
+   "$PY" "$KIT/daemon/wa_intake.py" --config "$LIVE/config.json" --list-open --with-brief "http://127.0.0.1:$PORT/api/today"
+   ```
+11. **Placing retires the card within a minute** (step 4 only, when Verify 10 showed a card under the test entry). Place the test entry as `drop` through the intake mode, wait 90 seconds, then list again. Pass: the entry is gone and so is its card (the database row reads `superseded · placed_elsewhere`). (K364)
+   ```sh
+   sqlite3 -readonly "$LIVE/state.sqlite" "select status, json_extract(retired_json, '$.why') from today_proposals where id like '<the card's 8 hex>%'"
+   ```
+12. **A settle with a wrong revision is refused** (step 4 only, on any live card; nothing changes). Pass: `refused: rev: …` (it says to run `--list-open --with-brief` again) and `1`. (K365)
+   ```sh
+   "$PY" "$KIT/daemon/wa_intake.py" --config "$LIVE/config.json" --settle-card <8 hex> --rev 999 --to "test" --with-brief "http://127.0.0.1:$PORT/api/today"; echo $?
+   ```
+13. **The page reads at phone width** (step 4 only). 📸 board on the phone (or a window 375 px wide): the Today button, the brief with its blocks and cards, OK and No, the way back. Pass: everything readable, nothing cut, no sideways scroll. (K376)
 
 ## Record
 
 Under `### O7 intake` in `<home>/INSTALL-PROGRESS.md`:
 
-- `asked:` captures yes, the buffer path, patches 2 and 3 (and 1) yes or no, the evening push and its time;
+- `asked:` captures yes, the buffer path, patches 2 and 3 (and 1) yes or no, the Today brief yes or no (and the owner's rules paragraph, when given);
 - `did:` the note created and its filing-log line; the patches, by file;
 - `verify:` the first `intake +` line, the copy test's `placed → drop` line, the morning line seen;
-- `did:` for the evening job, `install-launchd --intake` state line and the first `intake-evening.log` result;
-- the registry blocks added (the O7 addition, and the evening job's own entry when installed);
-- `ruled: default 12`, one note; with the evening push on, the same note says default 6 is re-ruled.
+- `did:` for the Today brief, the `doctor` line, the dry run's project count and the first `built_at`;
+- the registry blocks added (the O7 addition, and the Today brief row when it is on);
+- `ruled: default 12`, one note, saying whether the Today brief is on.
 
 Tick `- [x] O7 intake` only when every check that applies passes. Next: the next `- [ ]` line under `## Stations`.

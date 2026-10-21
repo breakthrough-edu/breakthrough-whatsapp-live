@@ -13,6 +13,7 @@ It is not a one-click installer, because no two owners' businesses, vaults and t
 - **The draft.** Edit it in place. On a one-to-one chat the green button opens WhatsApp with your edited text already in the box; on a group it copies the text.
 - **The conversation itself.** Text, photos, videos that play on an iPhone, and voice notes with a play button and a transcript made on your own Mac. Documents people send (Word, Excel, PowerPoint and the like) are converted to text on the Mac, so the brain reads them too.
 - **Search.** Find any message or file name across every chat on the Mac, and open the conversation around the one you found.
+- **Today, per project (optional).** A brief that proposes, project by project, what today's conversations mean for your work, as cards you answer OK or No; it writes nothing into your vault and is never pushed (it replaces the old evening intake push, now retired).
 - **Your hand on it.** Change the world or the stage (the machine only ever moves a stage forward), mark a conversation done (D on a keyboard, a swipe on a phone), hand the conversation to a deeper Claude Code session, start or rewrite a person note, add a proposed meeting to your calendar.
 - **Proof it is alive.** A footer with today's runs and tokens, and how long ago WhatsApp last wrote its database. If Claude cannot be called (a login that expired, a usage limit reached), a banner says so and what to do; the waiting messages stay queued, and your phone gets one alert, not one per message.
 

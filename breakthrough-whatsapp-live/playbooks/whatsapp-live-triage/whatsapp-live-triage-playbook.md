@@ -6,7 +6,7 @@ confirmed_by_owner: false
 references: []
 tags: []
 ---
-<!-- seed: breakthrough-whatsapp-live playbooks/whatsapp-live-triage/whatsapp-live-triage-playbook.md v1.1.0 -->
+<!-- seed: breakthrough-whatsapp-live playbooks/whatsapp-live-triage/whatsapp-live-triage-playbook.md v1.2.0 -->
 
 # Playbook: 给 personal WhatsApp 装一个实时分诊 daemon
 
@@ -73,12 +73,13 @@ tags: []
 7. **语音预热**: daemon 第一次跑之前, 先把窗内所有语音转进快取 (`prewarm-<天数>.json` 指令档), 用自己的工作夹跑, 不挡真实 run。⛔ 每个 run 各用自己的快照夹 (两个 sweep 共用快照档会互踩), 只共用语音快取; 同一时间只丢一个预热指令。
 8. **板子**: daemon 自己 serve, 用 `tailscale serve --bg --http=80 http://127.0.0.1:<board.port>` 挂上 tailnet (要 https, 先在 Tailscale 管理页开 HTTPS 凭证再改挂法); 三栏 (列表 / 状况 + 时间线 + 草稿 / 最近对话), 手机单栏; 首屏数据内嵌在页面里 (内容拦截器挡了 fetch 也能看); 定时刷新只在内容变了才重画 (否则会把人推到最下面)。
 9. **观察期一周, 再收**: 头一周板子天天看; 想让手机也收到每个判断, 这一周可以把 `notify.mode` 暂设 `all` (不用回的也推, 标「不用回」)。一周后看 runs 表的真实数量与花费, 再收白名单、再改词表, 然后回到默认的 `errors`: 只推出错 (run 失败、笼子破口、WhatsApp 库超过 `doorbell.stale_alert_hours` 小时没动、daemon 的主循环卡住), 外加每天早上一则日报。我们默认只推出错, 因为成功也推会把手机变成噪音, 你很快就不看了, 真出错那则反而被淹掉; 可是完全不推又分不清「没消息」是安静还是死了, 所以每天早上一则日报 (安静日也发一句说它活着), 把沉默变成可信的沉默。
-10. **登记**: 常驻物六格 (读 · 写 · 上限 · 停 · 证明 · 回滚) 写进你的常驻物登记簿, 一支一行: vault 里有列出各台机常驻程序的登记档就写那里, 没有就写 `~/WhatsApp-Live/INSTALLED.md`; 写机器的名字, 不写「这台」。这套有三支要写:
+10. **登记**: 常驻物六格 (读 · 写 · 上限 · 停 · 证明 · 回滚) 写进你的常驻物登记簿, 一支一行: vault 里有列出各台机常驻程序的登记档就写那里, 没有就写 `~/WhatsApp-Live/INSTALLED.md`; 写机器的名字, 不写「这台」。这套有两支要写 (晚间进料口那支已退役, 新装的不会有; 早期版本装过的, 照 `install/update.md` 移除时把它那行标成退役):
     - daemon 本身。
-    - 晚间进料口排程: 开了 `intake.evening_push` 才有, 它是另一支 launchd (`launchd.intake_label`)。
     - daemon 里的档案 run: 不是独立的 launchd 项, 却是这套唯一会整份改写 vault 档的东西。读 = 对话包 · 事实 · 现档 · person-dossier playbook 的骨架 · 宪法的 roles; 写 = 人物档整份 · filing-log 一行 · 备份夹留三版 · `live/runs/` 里的 run 夹; 上限 = 夜批每晚 `dossier.nightly_cap` 份、一次一个、同一人 `dossier.min_gap_hours` 小时一次、每 run `dossier.run_timeout_seconds` 秒; 停 = `dossier.enabled: false` 加 `wa_setup.py restart`, 然后看 People 房的档修改时间, 确认近况行那一路也停了, 没停就只能停 daemon; 证明 = 验档器过 + filing-log 那一行 + 备份在; 回滚 = 盖回备份, 中间追加的近况行会跟着丢, 要讲出来。
 
     你拍的规矩一条一份进 Decisions 房 (照 Command Base skill 的「log a decision」, 落档前先查现行的决定有没有冲突); ⛔ 不写进任何 skill 的 SKILL.md, skill 只当指针。我们默认这样, 因为 skill 每次 `npx skills update` 会被整个换掉, 而且往 SKILL.md 追加拍板会越长越大、越长越漂。项目 brief 加 handoff, 让下一场接得上。
+
+11. **归位前先读板上的卡** (开了今日简报 `today.enabled` 才有这一步): intake 模式列清单时用 `wa_intake.py --list-open --with-brief http://127.0.0.1:<board.port>/api/today`, 每条进料底下印着板子对它的提议 (哪个项目、更新哪张 task 或开新的、你在板上按了好还是不用、你的备注)。先读卡, 再一条一条提议归位; 卡是起点, 不是答案, 落不落、落哪里照旧由你一条一条点头。理由: 进料是单一一次判断看到的一句话, 卡是把当天几条对话和那个项目现有的 task 放在一起看过的, 两边一起读, 才不会把同一件事归成两张 task, 也不会漏掉 task 已经写着的期限; 可是卡也是机器写的, 所以它只能当起点。归位用 key (`--mark-placed-key`), 卡在一分钟内自己收起; 没有进料的卡 (只从对话来的) 处理完用 `--settle-card <id> --rev <n> --to "<落到哪>" --with-brief <同一个网址>` 收掉, 被拒说 `rev` 就是卡变了, 重列一次再读。简报只提议, 不写 vault, 也不推播。
 
 ## 不建议的路, 与原因
 

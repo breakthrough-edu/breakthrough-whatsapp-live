@@ -8,7 +8,7 @@ HOME_DIR="<paths.home from the progress file header>"    # chosen and written in
 LIVE="$HOME_DIR/live"                                # created in C1
 PY=/usr/bin/python3
 LABEL="<launchd.label from the progress file header>"    # chosen and written in step 2
-ILABEL="$LABEL.intake"
+ILABEL="<launchd.intake_label from the progress file header>"
 PORT="<board.port from the progress file header>"        # chosen and written in step 2
 ```
 
@@ -58,7 +58,7 @@ Read only. When any line comes back, that folder, label or port is taken: this i
 Prove the chosen values are free before they go into the header, with every placeholder filled (the first line stops on one that is not):
 
 ```sh
-HOME_DIR="<paths.home chosen in this step>"; LABEL="<launchd.label chosen in this step>"; ILABEL="$LABEL.intake"; PORT="<board.port chosen in this step>"
+HOME_DIR="<paths.home chosen in this step>"; LABEL="<launchd.label chosen in this step>"; ILABEL="<launchd.intake_label chosen in this step>"; PORT="<board.port chosen in this step>"
 case "$HOME_DIR $LABEL $PORT" in *"<"*|"~"*) echo "fill in HOME_DIR, LABEL and PORT first (HOME_DIR as an absolute path)" >&2; exit 1;; esac
 ls -A "$HOME_DIR"
 ls "$HOME/Library/LaunchAgents/$LABEL.plist" "$HOME/Library/LaunchAgents/$ILABEL.plist"

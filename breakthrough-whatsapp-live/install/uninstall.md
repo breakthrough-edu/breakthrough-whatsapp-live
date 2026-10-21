@@ -10,7 +10,7 @@ HOME_DIR="<paths.home from the progress file header>"
 LIVE="$HOME_DIR/live"
 PY=/usr/bin/python3
 LABEL="<launchd.label from the progress file header>"
-ILABEL="$LABEL.intake"
+ILABEL="<launchd.intake_label from the progress file header>"
 PORT="<board.port from the progress file header>"
 SKILLS="$(dirname "$KIT")"                           # the skills folder the kit sits in
 ```
@@ -46,7 +46,7 @@ Add `--no-process-check` when `backup.require_process` names a sync app that is 
 "$PY" "$KIT/daemon/wa_setup.py" uninstall-launchd --intake --config "$LIVE/config.json"
 ```
 
-Each boots its job out, disables its label (so a restart cannot bring it back) and removes its plist from `~/Library/LaunchAgents`. The rendered copies in `<home>/launchd/` and everything in `live/` stay until step 6. When the evening job was never installed, the `--intake` run says it was not loaded, which is fine. For a label it refuses, it exits 3 and runs nothing.
+Each boots its job out, disables its label (so a restart cannot bring it back) and removes its plist from `~/Library/LaunchAgents`. The rendered copies in `<home>/launchd/` and everything in `live/` stay until step 6. The `--intake` line removes an evening job an earlier release installed (the job is retired; it prints `removed: <paths>`, including the rendered plist and script under `<home>/launchd/`); when there is none, it says it was not loaded, which is fine. For a label it refuses, it exits 3 and runs nothing.
 
 ### 3 · Off the tailnet
 

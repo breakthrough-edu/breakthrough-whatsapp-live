@@ -8,8 +8,8 @@ The brain may return up to two `captures` per run, of five kinds: a dated reques
 appointment, money, a decision the other side stated. append_captures() adds them to the owner's buffer note (a
 Markdown file in their vault at `intake.buffer`), deduplicated per conversation and quote in the state database table
 `intake_seen`. Placing an entry (a task, a calendar event, a decision, dropping it) happens only in a session with the
-owner, through their command-base intake mode, which calls --list-open and --mark-placed. The daemon and the evening
-job never change an entry's status.
+owner, through their command-base intake mode, which calls --list-open and --mark-placed. The daemon never changes an
+entry's status.
 
 Buffer file (created by the install wizard with the owner's yes; this module never creates a missing folder):
   <any preamble the owner wants>
@@ -44,14 +44,33 @@ Safety (without it, two writers could overwrite each other and lose an entry alr
 - `intake.enabled=false` turns append_captures into a no-op that returns 0. The switch comes from `cfg=` when given,
   else from the config.json next to the state database (the daemon's live folder), so every caller honours it.
 
+The board's Today brief (read through the board's API, never written by this module): with --with-brief URL
+(the board's /api/today, e.g. http://127.0.0.1:<port>/api/today) --list-open fetches the brief once and prints, under
+each entry, the board's cards for that entry ("board: <project> · <kind> <task> · <status>", the proposal, the
+owner's note, the notes about placing and replies), or "board: no card, judge it as before"; after the list come the
+K cards, the board's open cards that have no intake entry (oldest first, with id and rev). The cards are a starting
+point, not an answer: the owner still places each entry. When the board cannot be read, one line says why and the
+listing is the usual one. --settle-card closes a K card once the owner has handled it (POST <URL>/settle).
+
 CLI
   wa_intake.py [--config P | --buffer P] --count-open
   wa_intake.py [--config P | --buffer P] --list-open [--json]               numbered from 1, each with its key
+  wa_intake.py [--config P | --buffer P] --list-open [--json] --with-brief URL
+                                                   the board's cards under each entry, then the K cards; --json gives
+                                                   {"entries": [... "cards"], "k_cards", "brief"} instead of the list
+  wa_intake.py --settle-card ID --rev N --to "…" --with-brief URL
+                                                   a K card handled: prints "settled" or the refusal; exit 0 settled, 1 not
   wa_intake.py [--config P | --buffer P] --list-placed [--json]             the placed zone, read only
   wa_intake.py [--config P | --buffer P] --mark-placed N --to "task [[Project]]"   (command-base intake mode only)
   wa_intake.py [--config P | --buffer P] --mark-placed-key KEY --to "…"     KEY: a full key or a unique prefix of 8+ hex
-  wa_intake.py [--config P] --evening-status                               JSON for templates/intake-evening.mjs
+  wa_intake.py [--config P] --evening-status                               retired: JSON for an evening job installed
+                                                                           before v1.3.0
   wa_intake.py --selftest                                                  temp files only
+The evening push is retired in v1.3.0 (the board's Today brief replaces it). evening_prompt, evening_status and
+--evening-status are kept so an evening job the owner chose to keep through an update does not break; they are removed
+in a later release. They read the retired key intake.evening_push with a default (false), since wa_common no longer
+fills it.
+
 Python 3.9 standard library only.
 """
 
@@ -77,7 +96,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import wa_common as W  # noqa: E402
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 KINDS = ("request_dated", "promise_undelivered", "appointment", "money", "decision")
 KIND_LABELS = {
@@ -991,7 +1010,237 @@ def resolve_key_prefix(buffer, prefix):
     return hits[0]
 
 
-# ---------------------------------------------------------------- evening push support
+# ---------------------------------------------------------------- the board's Today brief (read through its API)
+
+BRIEF_TIMEOUT = 8
+BRIEF_PATH = "/api/today"
+CARD_LIVE = ("pending", "ok")
+NOW_MAX = 160
+BRIEF_LABELS = {
+    "zh": {"board": "看板", "proposal": "提议", "note": "你的备注", "none": "看板: 这条没有卡, 照旧自己判断",
+           "unread": "看板: 读不到简报 (%s), 照旧逐条判断", "k_head": "看板另有 %d 张卡没有对应的 intake 条目 (最早 %s):",
+           "status": {"pending": "等你按", "ok": "你按了好", "no": "你按了不用", "superseded": "已收起", "expired": "过期"},
+           "replied": "已收起 (你回过讯息)",
+           "kinds": {"update": "更新任务", "create": "新任务", "seed": "新 Project 苗头", "drop": "不用归"},
+           "unassigned": "还没 Project"},
+    "en": {"board": "board", "proposal": "proposal", "note": "your note", "none": "board: no card, judge it as before",
+           "unread": "board: could not read the brief (%s); judging entry by entry as before",
+           "k_head": "The board has %d more card(s) with no intake entry (oldest %s):",
+           "status": {"pending": "waiting for your press", "ok": "you pressed OK", "no": "you pressed No",
+                      "superseded": "retired", "expired": "expired"},
+           "replied": "retired (you replied)",
+           "kinds": {"update": "update task", "create": "new task", "seed": "project seed", "drop": "drop"},
+           "unassigned": "no project yet"},
+}
+SETTLE_WHY = {
+    "rev": "the card changed since you listed it%s; run --list-open --with-brief again and look at it before settling",
+    "keys": "this card belongs to intake entries; it retires by itself within a minute when its entries are placed",
+    "ambiguous": "that id prefix matches more than one card; give more of the id",
+    "not_found": "no card with that id",
+    "to": "--to is empty; say where it went",
+    "status": "the card is not open any more (already retired or expired)",
+    "disabled": "the Today brief is off on this board (today.enabled is false)",
+    "dry_run": "the daemon runs in dry run mode; the brief is off",
+}
+
+
+def brief_url_ok(url):
+    """The board's brief URL with its trailing slash removed. ValueError unless it is http(s) and ends in /api/today."""
+    u = str(url or "").strip().rstrip("/")
+    if not re.match(r"^https?://[^/\s]+", u):
+        raise ValueError("--with-brief needs the board's http address, like http://127.0.0.1:<port>/api/today: %r" % url)
+    if not u.endswith(BRIEF_PATH):
+        raise ValueError("--with-brief must end in %s (the board's brief), got %r" % (BRIEF_PATH, url))
+    return u
+
+
+def settle_url(brief_url):
+    """<.../api/today>/settle; ValueError (before any request) when the URL is not the brief's."""
+    return brief_url_ok(brief_url) + "/settle"
+
+
+def _http_json(url, body=None, timeout=BRIEF_TIMEOUT):
+    """(status, parsed JSON or None, reason). GET, or POST with a JSON body. No proxy (the board is local or on the
+    tailnet). An HTTP error that carries a JSON body is returned like an answer, so a refusal keeps its reason."""
+    import urllib.error
+    import urllib.request
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    req = urllib.request.Request(url, data=data, method="POST" if data is not None else "GET",
+                                 headers={"Content-Type": "application/json", "Accept": "application/json"})
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(req, timeout=timeout) as r:
+            status, raw = r.status, r.read()
+    except urllib.error.HTTPError as e:
+        status, raw = e.code, (e.read() or b"")
+    except Exception as e:      # refused, timeout, DNS: one short reason
+        reason = getattr(e, "reason", None) or e
+        return None, None, "%s: %s" % (type(e).__name__, str(reason)[:120])
+    try:
+        js = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return status, None, "HTTP %d, not JSON" % status
+    return status, js, "" if (status or 0) < 400 else "HTTP %d" % status
+
+
+def fetch_brief(url, timeout=BRIEF_TIMEOUT):
+    """(payload, "") or (None, reason). Fetched once; anything that is not the brief's JSON object is a reason."""
+    try:
+        u = brief_url_ok(url)
+    except ValueError as e:
+        return None, str(e)
+    status, js, why = _http_json(u, timeout=timeout)
+    if js is None:
+        return None, why
+    if not isinstance(js, dict) or js.get("ok") is not True or not isinstance(js.get("projects", []), list):
+        return None, why or "the answer is not the brief (%s)" % (str(js.get("reason") or js.get("error") or "no projects")
+                                                                    if isinstance(js, dict) else type(js).__name__)
+    return js, ""
+
+
+def brief_cards(payload):
+    """Every card of a brief payload, flattened: [card dict + "block" (the block's name)]."""
+    out = []
+    for blk in (payload or {}).get("projects") or []:
+        if not isinstance(blk, dict):
+            continue
+        name = str(blk.get("name") or blk.get("id") or "").strip()
+        for c in blk.get("props") or []:
+            if isinstance(c, dict):
+                d = dict(c)
+                d["block"] = name
+                d["block_id"] = str(blk.get("id") or "")
+                out.append(d)
+    return out
+
+
+def _card_keys(card):
+    return [str(k).strip().lower() for k in (card.get("entry_keys") or []) if str(k or "").strip()]
+
+
+def _key_match(card_key, entry_key_):
+    a, b = str(card_key or "").lower(), str(entry_key_ or "").lower()
+    if not a or not b:
+        return False
+    return a == b or (len(a) >= 8 and b.startswith(a)) or (len(b) >= 8 and a.startswith(b))
+
+
+def _retired_replied_today(card, day):
+    if card.get("status") != "superseded" or card.get("retired_why") != "replied":
+        return False
+    when = str(card.get("retired_at") or card.get("date") or "")
+    return bool(day) and when[:10] == day
+
+
+def match_cards(entries, payload):
+    """(by_entry, k_cards): by_entry maps an entry's key to the cards whose entry_keys hold it (live cards, and cards
+    retired today because the owner replied); k_cards are the live cards with no entry keys, oldest first."""
+    cards = brief_cards(payload)
+    day = str((payload or {}).get("date") or "")
+    by_entry = {}
+    for e in entries:
+        k = e.get("key")
+        by_entry[k] = [c for c in cards if (c.get("status") in CARD_LIVE or _retired_replied_today(c, day))
+                       and any(_key_match(ck, k) for ck in _card_keys(c))]
+    k_cards = [c for c in cards if c.get("status") in CARD_LIVE and not _card_keys(c)]
+    k_cards.sort(key=lambda c: (str(c.get("date") or ""), str(c.get("id") or "")))
+    return by_entry, k_cards
+
+
+def _mmdd(day):
+    m = re.match(r"^\d{4}-(\d{2})-(\d{2})", str(day or ""))
+    return "%s-%s" % m.groups() if m else (str(day or "") or "?")
+
+
+def _card_status(card, B):
+    if card.get("status") == "superseded" and card.get("retired_why") == "replied":
+        return B["replied"]
+    return B["status"].get(str(card.get("status") or ""), str(card.get("status") or ""))
+
+
+def _card_head(card, B):
+    block = card.get("block") or ""
+    if not block or card.get("block_id") == "unassigned":
+        block = block if block and block != "unassigned" else B["unassigned"]
+    kind = str(card.get("kindL") or B["kinds"].get(str(card.get("kind") or ""), str(card.get("kind") or "")))
+    what = " ".join(x for x in (kind, str(card.get("task") or "").strip()) if x)
+    return block, what
+
+
+def _card_body(card, B):
+    out = []
+    now = _one_line(card.get("now"), 10000)
+    if now:
+        out.append("      %s: %s" % (B["proposal"], now if len(now) <= NOW_MAX else now[:NOW_MAX - 1] + "…"))
+    note = _one_line(card.get("note"), 500)
+    if note:
+        out.append("      %s: %s" % (B["note"], note))
+    for k in ("placed_note", "replied_note", "close_note"):
+        v = _one_line(card.get(k), 300)
+        if v:
+            out.append("      " + v)
+    return out
+
+
+def format_brief_listing(entries, payload, lang="zh", why=""):
+    """The --list-open --with-brief text: the normal listing with the board's cards under each entry, then the K cards.
+    payload None: one line saying why the brief could not be read, then the normal listing."""
+    B = BRIEF_LABELS[_lang(lang)]
+    if payload is None:
+        head = B["unread"] % (why or "?")
+        listing = format_listing(entries, keys=True)
+        return head + ("\n" + listing if listing else "")
+    by_entry, k_cards = match_cards(entries, payload)
+    out = []
+    for e in entries:
+        out.append(format_listing([e], keys=True))
+        cards = by_entry.get(e.get("key")) or []
+        if not cards:
+            out.append("    " + B["none"])
+        for c in cards:
+            block, what = _card_head(c, B)
+            out.append("    %s: %s · %s · %s" % (B["board"], block, what, _card_status(c, B)))
+            out.extend(_card_body(c, B))
+    if k_cards:
+        out.append("")
+        out.append(B["k_head"] % (len(k_cards), _mmdd(k_cards[0].get("date"))))
+        for i, c in enumerate(k_cards):
+            block, what = _card_head(c, B)
+            out.append("K%d. %s · %s · %s · %s · id %s rev %s" % (i + 1, _mmdd(c.get("date")), block, what, _card_status(c, B),
+                                                               str(c.get("id") or "")[:8], c.get("rev")))
+            out.extend(_card_body(c, B))
+    return "\n".join(out)
+
+
+def brief_json(entries, payload, why=""):
+    """The --list-open --json --with-brief object: {"entries": [entry + n + cards], "k_cards": [...], "brief": {...}}."""
+    by_entry, k_cards = match_cards(entries, payload) if payload is not None else ({}, [])
+    return {"entries": [dict(e, n=e["index"] + 1, cards=by_entry.get(e.get("key")) or []) for e in entries],
+            "k_cards": k_cards,
+            "brief": {"read": payload is not None, "why": why, "date": (payload or {}).get("date"),
+                      "stale": bool((payload or {}).get("stale")), "built_at": (payload or {}).get("built_at")}}
+
+
+def settle_card(brief_url, card_id, rev, to, timeout=BRIEF_TIMEOUT):
+    """POST <brief_url>/settle {id, rev, to}. Returns (settled bool, one answer line). ValueError for a URL that is not
+    the brief's (raised before any request)."""
+    url = settle_url(brief_url)
+    status, js, why = _http_json(url, {"id": str(card_id), "rev": rev, "to": str(to)}, timeout=timeout)
+    if js is None:
+        return False, "refused: could not reach the board (%s)" % why
+    if not isinstance(js, dict):
+        return False, "refused: the board answered something that is not an object"
+    if js.get("ok") is True:
+        return True, "settled: card %s → %s" % (str(js.get("id") or card_id)[:8], to)
+    reason = str(js.get("reason") or js.get("error") or why or "unknown")
+    msg = SETTLE_WHY.get(reason, "")
+    if reason == "rev":
+        cur = js.get("current") if isinstance(js.get("current"), dict) else {}
+        msg = msg % ((" (it is at rev %s now)" % cur.get("rev")) if cur.get("rev") is not None else "")
+    return False, "refused: %s%s" % (reason, (": " + msg) if msg else "")
+
+
+# ---------------------------------------------------------------- evening push support (retired in v1.3.0)
 
 def evening_prompt(cfg, listing, n_open, rules="", lang="zh", today=None):
     owner = str((cfg or {}).get("owner_label") or "").strip() or "the owner"
@@ -1014,7 +1263,8 @@ def evening_prompt(cfg, listing, n_open, rules="", lang="zh", today=None):
 
 
 def evening_status(cfg):
-    """Everything templates/intake-evening.mjs needs, as one JSON-able dict (defaults already applied here, so the
+    """Retired with the evening push (kept for an evening job installed before v1.3.0; intake.evening_push is read with
+    a default because wa_common no longer fills it). Everything the evening job's script needs, as one JSON-able dict (defaults already applied here, so the
     node script never guesses): run and why, the open count and listing, the prompt, the claude binary, model,
     settings path, cwd, PATH, and the labels for the pushed message."""
     it = cfg.get("intake") or {}
@@ -1033,7 +1283,7 @@ def evening_status(cfg):
            "outlet": str((cfg.get("notify") or {}).get("outlet") or "none"), "mode": str((cfg.get("notify") or {}).get("mode") or "errors")}
     if not it.get("enabled"):
         out.update(run=False, why="intake.enabled is false, evening push skipped")
-    elif not it.get("evening_push"):
+    elif not it.get("evening_push", False):     # retired key, read with its default
         out.update(run=False, why="intake.evening_push is false, evening push skipped")
     elif not out["buffer"]:
         out.update(run=False, why="intake.buffer is not set, evening push skipped")
@@ -1215,7 +1465,6 @@ def _selftest():
         r = subprocess.run([sys.executable, me, "--config", str(cfgp), "--count-open"], capture_output=True, timeout=60)
         check(r.stdout.decode("utf-8").strip() == "2", "CLI --count-open reads intake.buffer from the config")
         # ---- v1.2.0 · quotes checked by code against the run's own pack (invented chat, invented words)
-        check(VERSION == "1.2.0", "VERSION is 1.2.0")
         pack = [
             {"pk": 101, "at": "2026-10-02 09:10:00", "me": False, "speaker": "Robin", "text": "Could you hold the walnut table until Saturday? I can pay the deposit on Friday."},
             {"pk": 102, "at": "2026-10-02 09:12:00", "me": False, "speaker": "Robin", "text": "", "transcript": "I will come with my sister to see the lamps at four"},
@@ -1467,6 +1716,172 @@ def _selftest():
         r = subprocess.run([sys.executable, me, "--buffer", str(kbuf), "--list-placed"], capture_output=True, timeout=60)
         check(r.returncode == 0 and "task [[Tables]]" in r.stdout.decode("utf-8") and ("key: %s" % k2[:12]) in r.stdout.decode("utf-8"),
               "CLI --list-placed lists the placed zone with keys")
+        # ---- v1.3.0 · the board's Today brief under each entry, K cards, settle (stub board on 127.0.0.1, OS chosen port)
+        check(VERSION == "1.3.0", "VERSION is 1.3.0")
+        cfgp.write_text(json.dumps({"intake": {"enabled": True, "buffer": str(buf)}, "owner_label": "Alex Rivera",
+                                    "notify": {"outlet": "command", "command": "cat > /dev/null"}}), encoding="utf-8")
+        r = subprocess.run([sys.executable, me, "--config", str(cfgp), "--evening-status"], capture_output=True, timeout=60)
+        try:
+            st = json.loads(r.stdout.decode("utf-8"))
+        except ValueError:
+            st = {}
+        check(r.returncode == 0 and st.get("run") is False and "evening_push" in str(st.get("why")),
+              "retired evening status: a config without the retired evening keys reads them as off, no crash")
+        bbuf = tmp / "brief-buffer.md"
+        ent = ("### 2026-10-05 · [wa] · %s (no note) · %s\n- 🗣 10-05 09:%s \"%s\"\n- owner side: to place\n"
+               "- machine guess: (Work · dated request) none\n- dig deeper: `dossier.py prepare --name %s`\n- status: open\n\n")
+        bbuf.write_text("# Intake\n\n"
+                        + ent % ("Robin Vale", "wants two seats held for the spring bake class", "10", "can you hold two seats", "Robin Vale")
+                        + ent % ("Sky Moreno", "oven repair visit on Thursday", "20", "the technician comes Thursday", "Sky Moreno")
+                        + ent % ("Quinn Hale", "asks for the sourdough recipe sheet", "30", "send me the recipe sheet", "Quinn Hale")
+                        + "## Placed\n", encoding="utf-8")
+        bents = list_open(bbuf)
+        k0, k1, k2 = [e["key"] for e in bents]
+        long_now = "Add the two held seats to the class list and tell Robin by Friday " + "x" * 160
+
+        def card(cid, status, kind, task, keys, date="2026-10-05", rev=1, **kw):
+            d = {"id": cid, "rev": rev, "status": status, "date": date, "kind": kind, "task": task, "now": "", "fm_set": {},
+                 "ev": [], "jids": [], "entry_keys": keys, "note": "", "newer": None, "retired_note": "", "placed_note": "",
+                 "replied_at": "", "replied_note": "", "close_note": "", "retired_why": ""}
+            d.update(kw)
+            return d
+        brief = {"ok": True, "date": "2026-10-05", "empty": False, "stale": False, "built_at": "2026-10-05T11:00:00", "projects": [
+            {"id": "Deliver/Spring-Bake-Class", "name": "Spring Bake Class", "lane": "Deliver", "props": [
+                card("a1a1a1a1a1a1a1a1", "pending", "update", "Hold-Seats.md", [k0], rev=3, kindL="update task", now=long_now),
+                card("b2b2b2b2b2b2b2b2", "ok", "create", "Seat-List.md", [k0[:12]], note="check the room size first",
+                     replied_note="you replied after this card was made"),
+                card("c3c3c3c3c3c3c3c3", "no", "update", "Pressed-No.md", [k0]),
+                card("d4d4d4d4d4d4d4d4", "superseded", "update", "Oven-Visit.md", [k1], retired_why="replied",
+                     close_note="the brain read your reply as the answer"),
+                card("e5e5e5e5e5e5e5e5", "superseded", "update", "Placed-Before.md", [k1], retired_why="placed_elsewhere"),
+                card("f6f6f6f6f6f6f6f6", "pending", "create", "Deposit-Refund.md", [], date="2026-10-04", rev=2,
+                     now="Refund the deposit for the cancelled tart workshop")]},
+            {"id": "unassigned", "name": "", "lane": "", "props": [
+                card("0e0e0e0e0e0e0e0e", "ok", "seed", "", [], date="2026-10-03", now="A weekend kids class keeps coming up")]}]}
+        text = format_brief_listing(bents, brief, "en")
+        tl = text.split("\n")
+        i1, i2, i3 = (tl.index("%d. %s" % (n + 1, bents[n]["title"])) for n in range(3))
+        under0, under1, under2 = tl[i1:i2], tl[i2:i3], tl[i3:]
+        check("    board: Spring Bake Class · update task Hold-Seats.md · waiting for your press" in under0
+              and "    board: Spring Bake Class · new task Seat-List.md · you pressed OK" in under0
+              and "      your note: check the room size first" in under0 and "      you replied after this card was made" in under0
+              and not any("Pressed-No.md" in x for x in tl) and not any("Hold-Seats.md" in x for x in under1 + under2),
+              "brief lines: the matching entry's live cards under it (a key prefix counts), a card pressed No left out")
+        prop = [x for x in under0 if x.startswith("      proposal: ")]
+        check(len(prop) == 1 and len(prop[0]) == len("      proposal: ") + 160 and prop[0].endswith("…")
+              and under0.index(prop[0]) == under0.index("    board: Spring Bake Class · update task Hold-Seats.md · waiting for your press") + 1,
+              "brief lines: the proposal right under its card, cut to 160 characters")
+        check("    board: Spring Bake Class · update task Oven-Visit.md · retired (you replied)" in under1
+              and "      the brain read your reply as the answer" in under1 and not any("Placed-Before.md" in x for x in tl),
+              "brief lines: a card retired today because you replied still shows, one retired because it was placed does not")
+        check("    board: no card, judge it as before" in under2 and "    board: no card, judge it as before" not in under0 + under1,
+              "brief lines: an entry with no card gets the no-card line")
+        kh = [n for n, x in enumerate(tl) if x.startswith("The board has ")]
+        check(kh and tl[kh[0]] == "The board has 2 more card(s) with no intake entry (oldest 10-03):"
+              and tl[kh[0] + 1] == "K1. 10-03 · no project yet · project seed · you pressed OK · id 0e0e0e0e rev 1"
+              and tl[kh[0] + 2] == "      proposal: A weekend kids class keeps coming up"
+              and tl[kh[0] + 3] == "K2. 10-04 · Spring Bake Class · new task Deposit-Refund.md · waiting for your press · id f6f6f6f6 rev 2",
+              "K cards: live cards without entries after the list, oldest first, with id and rev (%s)" % tl[kh[0]:] if kh else tl[-6:])
+        zh = format_brief_listing(bents, brief, "zh")
+        check("    看板: 这条没有卡, 照旧自己判断" in zh and "看板另有 2 张卡没有对应的 intake 条目 (最早 10-03):" in zh
+              and "    看板: Spring Bake Class · update task Hold-Seats.md · 等你按" in zh, "brief lines in Chinese for board.lang zh")
+        none_left = format_brief_listing(bents, dict(brief, projects=[]), "en")
+        check(none_left.count("    board: no card, judge it as before") == 3 and "The board has" not in none_left,
+              "an empty brief: every entry gets the no-card line, no K list")
+
+        import http.server
+        board = {"brief": brief, "posts": []}
+
+        class _Board(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def _send(self, code, body, ctype="application/json"):
+                data = body if isinstance(body, bytes) else json.dumps(body).encode("utf-8")
+                self.send_response(code)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def do_GET(self):
+                if self.path == "/api/today":
+                    self._send(200, board["brief"])
+                elif self.path == "/html/api/today":
+                    self._send(200, b"<html>not the brief</html>", "text/html")
+                else:
+                    self._send(404, {"ok": False, "error": "not found"})
+
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)).decode("utf-8"))
+                board["posts"].append((self.path, body))
+                if self.path != "/api/today/settle":
+                    return self._send(404, {"ok": False, "error": "not found"})
+                if str(body.get("id")).startswith("b2b2"):
+                    return self._send(200, {"ok": False, "reason": "keys"})
+                if body.get("rev") != 2:
+                    return self._send(409, {"ok": False, "reason": "rev", "current": {"id": "f6f6f6f6f6f6f6f6", "rev": 2}})
+                return self._send(200, {"ok": True, "id": "f6f6f6f6f6f6f6f6", "status": "superseded"})
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Board)
+        th = threading.Thread(target=srv.serve_forever, daemon=True)
+        th.start()
+        try:
+            url = "http://127.0.0.1:%d/api/today" % srv.server_address[1]
+            r = subprocess.run([sys.executable, me, "--buffer", str(bbuf), "--list-open", "--with-brief", url], capture_output=True, timeout=60)
+            check(r.returncode == 0 and r.stdout.decode("utf-8") == text + "\n",
+                  "CLI --list-open --with-brief prints the cards under the entries and the K list (English buffer, English words)")
+            r = subprocess.run([sys.executable, me, "--buffer", str(bbuf), "--list-open", "--json", "--with-brief", url],
+                               capture_output=True, timeout=60)
+            js = json.loads(r.stdout.decode("utf-8"))
+            check(r.returncode == 0 and [c["id"] for c in js["entries"][0]["cards"]] == ["a1a1a1a1a1a1a1a1", "b2b2b2b2b2b2b2b2"]
+                  and js["entries"][2]["cards"] == [] and js["entries"][0]["n"] == 1 and js["entries"][0]["key"] == k0
+                  and [c["id"] for c in js["k_cards"]] == ["0e0e0e0e0e0e0e0e", "f6f6f6f6f6f6f6f6"] and js["brief"]["read"] is True,
+                  "CLI --list-open --json --with-brief: cards per entry and k_cards")
+            sock = __import__("socket").socket()
+            sock.bind(("127.0.0.1", 0))
+            dead = "http://127.0.0.1:%d/api/today" % sock.getsockname()[1]
+            sock.close()
+            plain = format_listing(bents, keys=True)
+            for label, u, why in (("unreachable", dead, "could not read the brief ("), ("not JSON", url.replace("/api/today", "/html/api/today"), "not JSON")):
+                r = subprocess.run([sys.executable, me, "--buffer", str(bbuf), "--list-open", "--with-brief", u], capture_output=True, timeout=60)
+                o = r.stdout.decode("utf-8").split("\n", 1)
+                check(r.returncode == 0 and o[0].startswith("board: could not read the brief (") and why in o[0]
+                      and o[0].endswith("; judging entry by entry as before") and o[1] == plain + "\n",
+                      "a brief that cannot be read (%s): one line saying why, then the usual listing" % label)
+            check(settle_url("http://127.0.0.1:8/api/today/") == "http://127.0.0.1:8/api/today/settle"
+                  and settle_url("https://board.example.ts.net/api/today") == "https://board.example.ts.net/api/today/settle",
+                  "settle URL: <brief URL>/settle")
+            bad_urls = []
+            for u in ("http://127.0.0.1:8/api/todays", "http://127.0.0.1:8/api/today/refresh", "file:///tmp/api/today", "127.0.0.1:8/api/today"):
+                try:
+                    settle_url(u)
+                    bad_urls.append(u)
+                except ValueError:
+                    pass
+            check(not bad_urls, "settle URL: anything not ending in /api/today, or not http, is refused (%s)" % bad_urls)
+            n_posts = len(board["posts"])
+            base_cmd = [sys.executable, me, "--settle-card"]
+            r_ok = subprocess.run(base_cmd + ["f6f6f6", "--rev", "2", "--to", "task [[Deposits]]", "--with-brief", url], capture_output=True, timeout=60)
+            r_rev = subprocess.run(base_cmd + ["f6f6f6", "--rev", "1", "--to", "task [[Deposits]]", "--with-brief", url], capture_output=True, timeout=60)
+            r_keys = subprocess.run(base_cmd + ["b2b2b2b2", "--rev", "1", "--to", "drop", "--with-brief", url], capture_output=True, timeout=60)
+            check(r_ok.returncode == 0 and r_ok.stdout.decode("utf-8") == "settled: card f6f6f6f6 → task [[Deposits]]\n"
+                  and board["posts"][n_posts] == ("/api/today/settle", {"id": "f6f6f6", "rev": 2, "to": "task [[Deposits]]"}),
+                  "CLI --settle-card: POST <URL>/settle {id, rev, to}, prints settled, exit 0")
+            check(r_rev.returncode == 1 and r_rev.stdout.decode("utf-8").startswith("refused: rev: the card changed")
+                  and "rev 2 now" in r_rev.stdout.decode("utf-8") and r_keys.returncode == 1
+                  and r_keys.stdout.decode("utf-8").startswith("refused: keys: ") and "within a minute" in r_keys.stdout.decode("utf-8"),
+                  "CLI --settle-card: a wrong rev and a card with entries are refused with the reason, exit 1")
+            n_posts = len(board["posts"])
+            r_url = subprocess.run(base_cmd + ["f6f6f6", "--rev", "2", "--to", "drop", "--with-brief", url + "/refresh"], capture_output=True, timeout=60)
+            r_norev = subprocess.run(base_cmd + ["f6f6f6", "--to", "drop", "--with-brief", url], capture_output=True, timeout=60)
+            r_dead = subprocess.run(base_cmd + ["f6f6f6", "--rev", "2", "--to", "drop", "--with-brief", dead], capture_output=True, timeout=60)
+            check(r_url.returncode == 1 and "must end in /api/today" in r_url.stderr.decode("utf-8") and r_norev.returncode == 1
+                  and len(board["posts"]) == n_posts and r_dead.returncode == 1
+                  and r_dead.stdout.decode("utf-8").startswith("refused: could not reach the board"),
+                  "CLI --settle-card: a wrong URL or no --rev exits 1 before any request; an unreachable board exits 1")
+        finally:
+            srv.shutdown()
+            srv.server_close()
         src = Path(__file__).read_text(encoding="utf-8")
         check(chr(0x2014) not in src and chr(0x2013) not in src, "no em dash or en dash in this file")
     finally:
@@ -1476,8 +1891,25 @@ def _selftest():
 
 # ---------------------------------------------------------------- CLI
 
+def _cli_settle(a):
+    """--settle-card: exit 0 when the board settled the card, 1 for anything else (the URL is checked first)."""
+    missing = [flag for flag, v in (("--with-brief", a.with_brief), ("--rev", a.rev), ("--to", (a.to or "").strip() or None))
+               if v is None]
+    if missing:
+        sys.stderr.write("--settle-card needs %s\n" % ", ".join(missing))
+        return 1
+    try:
+        settle_url(a.with_brief)
+    except ValueError as e:
+        sys.stderr.write("%s\n" % e)
+        return 1
+    ok, line = settle_card(a.with_brief, a.settle_card, a.rev, a.to.strip())
+    print(line)
+    return 0 if ok else 1
+
+
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="intake buffer: count, list, place; evening push status")
+    ap = argparse.ArgumentParser(description="intake buffer: count, list, place; the board's brief cards under each entry; settle a card")
     ap.add_argument("--config", default=None, help="live/config.json (default: env WA_LIVE_CONFIG or ~/WhatsApp-Live/live/config.json)")
     ap.add_argument("--buffer", default=None, help="buffer path (default: intake.buffer from the config)")
     ap.add_argument("--selftest", action="store_true", help="temp files only")
@@ -1490,10 +1922,18 @@ def main(argv=None):
                                                               "(full, or a unique prefix of 8+ hex) placed")
     ap.add_argument("--to", default="", help="with --mark-placed or --mark-placed-key: where it went ('task [[Project]]', "
                                              "'calendar 2026-09-19 15:00', 'drop')")
-    ap.add_argument("--evening-status", action="store_true", help="JSON for the evening push job")
+    ap.add_argument("--with-brief", metavar="URL", default=None,
+                    help="the board's brief, http://127.0.0.1:<port>/api/today: with --list-open, its cards under each entry "
+                         "and the K cards; with --settle-card, where to settle")
+    ap.add_argument("--settle-card", metavar="ID", default=None, help="settle a K card (id or a unique prefix of 6+ hex) "
+                                                                      "with --rev, --to and --with-brief")
+    ap.add_argument("--rev", type=int, default=None, help="with --settle-card: the rev the listing showed")
+    ap.add_argument("--evening-status", action="store_true", help="retired: JSON for an evening job installed before v1.3.0")
     a = ap.parse_args(argv)
     if a.selftest:
         return _selftest()
+    if a.settle_card is not None:
+        return _cli_settle(a)
     cfg = None
     if a.evening_status or not a.buffer:
         try:
@@ -1511,6 +1951,21 @@ def main(argv=None):
         ap.error("intake.buffer is not set in the config (or pass --buffer)")
     if a.count_open:
         print(count_open(buffer))
+        return 0
+    if a.list_open and a.with_brief:
+        entries = list_open(buffer)
+        if cfg is not None:
+            lang = W.owner_lang(cfg)
+        else:
+            langs = [e["lang"] for e in list_entries(buffer) if e.get("lang")]
+            lang = langs[0] if langs else "zh"
+        payload, why = fetch_brief(a.with_brief)
+        if a.json:
+            print(json.dumps(brief_json(entries, payload, why), ensure_ascii=False, indent=1))
+            return 0
+        text = format_brief_listing(entries, payload, lang, why)
+        if text:
+            print(text)
         return 0
     if a.list_open or a.list_placed:
         entries = list_open(buffer) if a.list_open else list_placed(buffer)

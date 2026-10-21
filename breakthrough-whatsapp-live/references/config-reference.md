@@ -5,7 +5,7 @@ Every key the kit's code reads from `live/config.json`, grouped by section, plus
 ## How loading works
 
 - **Where.** `--config`, else the environment variable `WA_LIVE_CONFIG`, else `~/WhatsApp-Live/live/config.json`. `wa_setup.py init` writes the file (0600) from `daemon/templates/config.example.json`, dropping its `_help` object, with the tools and whisper model it finds.
-- **One loader.** Every module, the daemon, the command line tools and the evening job call `wa_common.load_config`, which fills every default the same way. A missing or `null` key gets its default; an object or a list of the wrong type is replaced by its default with a load warning; a scalar of the wrong type is kept as written (`wa_setup.py check-config` reports it). `wa_common.py --print-defaults` prints every default the loader fills (the keys marked ◇ below are filled where they are read instead).
+- **One loader.** Every module, the daemon and the command line tools call `wa_common.load_config`, which fills every default the same way. A missing or `null` key gets its default; an object or a list of the wrong type is replaced by its default with a load warning; a scalar of the wrong type is kept as written (`wa_setup.py check-config` reports it). `wa_common.py --print-defaults` prints every default the loader fills (the keys marked ◇ below are filled where they are read instead).
 - **Placeholders** in string values: `<home>` (`paths.home`), `<live>` (`paths.live_dir`), `<payload>` (the installed kit), `<vault>` (only when `paths.vault` is set), and a leading `~`. They are never expanded inside owner text: `vocab`, `group_policies`, `my_names`, `owner_label`, `owner_marker`, `my_phone`, `ignored_jids`. `<auto>` in `bin.*` and `doorbell.wal_path` is looked up at load; a tool that is not found becomes `""`.
 - **Vault paths.** When `paths.vault` is set, the loader resolves a relative `paths.people_dir`, `paths.doctrine`, `paths.person_playbook`, `paths.filing_log`, `paths.decisions_dir`, `paths.intake_buffer` and `intake.buffer` against it, and fills an empty `paths.doctrine` with `99_Meta/structure-doctrine.md` and an empty `paths.filing_log` with `99_Meta/filing-log.md` inside the vault. Every module therefore reads the same absolute path.
 - **Checking.** `wa_setup.py check-config` reports unknown keys, wrong types and values, vocabulary keys that do not exist, and enabled stations missing their paths. Keys starting with `_` are skipped, so `"_note"` entries are safe. It accepts a facts source, second source or calendar destination the kit does not ship when your own implementation of it sits in `<live>/adapters/` (`references/interfaces.md`, "Where a new implementation lives").
@@ -20,8 +20,8 @@ Every key the kit's code reads from `live/config.json`, grouped by section, plus
 |---|---|
 | `restart` | The daemon reads it from the config it loaded at start: `wa_setup.py restart --config <live>/config.json` (it stops the python child, kills it when frozen, and proves one daemon on the board port; never `launchctl kickstart -k`, `references/pitfalls.md`, pit 15). Command line tools see the change at once. |
 | `sync` | Also copied into the reader config: run `wa_setup.py sync-reader-config` (a daemon start does the same, and each run then picks it up). |
-| `reinstall` | Written into a launchd plist: `wa_setup.py render-launchd` then `install-launchd` (add `--intake` for the evening job), which also restarts that job. |
-| `no` | Read fresh wherever it is used (a command line tool, the evening job, `check-config`). |
+| `reinstall` | Written into a launchd plist: `wa_setup.py render-launchd` then `install-launchd`, which also restarts that job. |
+| `no` | Read fresh wherever it is used (a command line tool, `check-config`). |
 
 ◇ marks a key that `config.example.json` lists but `wa_common.DEFAULTS` does not. `init` writes it into a new config, `check-config` knows it and the wizard can read its `_help` line; a config without the key gets the default applied where the key is read, and `wa_common.py --print-defaults` does not print it.
 
@@ -75,7 +75,7 @@ Every key the kit's code reads from `live/config.json`, grouped by section, plus
 
 | Key | Default | Type | What it changes | Station | Restart |
 |---|---|---|---|---|---|
-| `brain.model` | `"claude-sonnet-5"` | model name | Model of every triage run, and of the second source's nightly call, summary backfill, `probe-claude` and the evening intake pre-sort. | C2 | restart |
+| `brain.model` | `"claude-sonnet-5"` | model name | Model of every triage run, and of the second source's nightly call, summary backfill and `probe-claude`. The Today brief has its own `today.model`. | C2 | restart |
 | `brain.cwd` | `"<home>/brain-cwd"` | path | Empty working folder of every headless `claude` run. Keep it outside Documents, Desktop and Downloads; the daemon creates it. | C1 | restart |
 | `brain.context_days` | `7` | integer | Days of one to one history in a full (grounding) read; also the window of a `prewarm` command file without a number. | C2 | restart |
 | `brain.group_context_days` | `3` | integer | Days of group history in a full read. | C2 | restart |
@@ -310,16 +310,30 @@ The keys read through `wa_second_source.opt` (`whitelist`, `skip_chat_ids`, `sys
 
 ## `intake`
 
-The evening job loads the config fresh every evening (`wa_intake.py --evening-status`), so changes to `intake.*`, `notify.*` and `brain.model` reach it without a restart; the daemon's own captures follow the table.
+The daemon's captures follow the table. The evening push of earlier releases is retired: its two keys stay listed below so an old config reads clearly, and the proactive half of intake is now the board's Today brief (`today`, below).
 
 | Key | Default | Type | What it changes | Station | Restart |
 |---|---|---|---|---|---|
-| `intake.enabled` | `false` | boolean | Append things asked of you to the intake buffer. `false` stops every writer: the brain's captures, the second source's captures and the evening push. | O7 | restart |
+| `intake.enabled` | `false` | boolean | Append things asked of you to the intake buffer. `false` stops every writer: the brain's captures and the second source's captures. | O7 | restart |
 | `intake.buffer` | `""` | path | The buffer note; same file as `paths.intake_buffer`, and this key wins when both are set. Its folder must exist. | O7 | restart |
-| `intake.evening_push` | `false` | boolean | Push the open entries every evening with a suggested place each. `install-launchd --intake` refuses unless this and `intake.enabled` are true. | O7 | no |
-| `intake.evening_at` | `"20:00"` | `HH:MM` | Time of the evening job, written into its plist. | O7 | reinstall |
+| `intake.evening_push` | not filled | boolean | Retired in v1.3.0 (`check-config` warns while it is set). It switched the evening push of the open entries, which the board's Today brief replaces. An evening job kept through an update still reads it; `install/update.md` removes the job and the key on your yes. | O7 | no |
+| `intake.evening_at` | not filled | `HH:MM` | Retired in v1.3.0 (`check-config` warns while it is set). It was the time of the evening job. | O7 | reinstall |
 | `intake.verify_quotes` | `true` | boolean | Every WhatsApp quote in an intake entry is looked up in the run's own pack before it is written: found is marked 🗣 (🎙, 📄) with the message's stored words, not found ≈ as a gist. `false` writes every quote as ≈ not checked (`references/vault-proposals.md`, proposal c). | O7 | restart |
-| `intake.rules_file` | `""` | path | Optional note saying where each kind of entry usually goes; the pre-sort reads its first 6000 characters. Empty: built in places. | O7 | no |
+| `intake.rules_file` | `""` | path | Optional note saying where each kind of entry usually goes (the first 6000 characters are read). Empty: built in places. | O7 | no |
+
+## `today`
+
+The board's Today brief: per project, what today's conversations and open intake entries mean, with cards you answer OK or No on the board. It reads the vault (`paths.vault`, `paths.doctrine`) and writes nothing into it. Why it exists and why it is never pushed: `references/defaults-and-why.md`, default 12. What it reads and stores: `references/privacy.md`. Two command files serve it: `commands/today-now.json` asks for a build now (the same as the board's refresh button), `commands/today-stats.json` writes counts to `live/today/stats.json` (`references/operating.md`).
+
+| Key | Default | Type | What it changes | Station | Restart |
+|---|---|---|---|---|---|
+| `today.enabled` | `false` | boolean | The board proposes, per project, what today's conversations mean. `true` with `paths.vault` empty is a `check-config` error (the brief reads your projects from the vault); with `intake.enabled` false it is a warning (the brief still works from judgments, without entries). | O7 | restart |
+| `today.model` | `"claude-sonnet-5"` | model name, not empty | Model of the brief run, in the same tool cage as triage. | O7 | restart |
+| `today.every_minutes` | `30` | integer, 5 to 1440 | An automatic rebuild happens at most this often, and only when its inputs changed (a new judgment, an entry added or placed, a reply of yours, a card you moved away from a project). | O7 | restart |
+| `today.manual_min_gap_seconds` | `60` | integer, 10 to 3600 | A refresh (board button or `today-now.json`) within this many seconds of the last build answers `already` and shows the latest brief. | O7 | restart |
+| `today.max_reads` | `6` | integer, 0 to 20 | How many vault files the brief run may open on its own, beyond the briefs and task lists the prompt carries. Said in the prompt and counted after the run; going over is noted in the brief. | O7 | restart |
+| `today.quote_min_chars` | `6` | integer, 2 to 40 | A quoted segment in the brief this long (CJK characters, or 4 Latin words and more) is checked against the stored messages: found, it is shown as stored; not found, its quote marks are removed and it is shown as a gist. | O7 | restart |
+| `today.extra_rules` | `""` | string, at most 2000 characters | Your own judgment paragraph, added to the brief prompt's rules under "Owner's own rules". | O7 | restart |
 
 ## `voice`
 
@@ -345,7 +359,7 @@ The evening job loads the config fresh every evening (`wa_intake.py --evening-st
 | Key | Default | Type | What it changes | Station | Restart |
 |---|---|---|---|---|---|
 | `launchd.label` | `"local.whatsapp-live"` | reverse domain label | LaunchAgent label of the daemon, and the name of its plist. Change it only for a second, separate install, and uninstall the old label first or two daemons run. | C0 (chosen), C1 (written); O11 for a test install | reinstall |
-| `launchd.intake_label` | `"local.whatsapp-live.intake"` | reverse domain label | LaunchAgent label of the evening job; must differ from `launchd.label`. The wizard always writes `launchd.label` plus `.intake`. | C0 (chosen), C1 (written) | reinstall |
+| `launchd.intake_label` | `"local.whatsapp-live.intake"` | reverse domain label | LaunchAgent label of the retired evening job. No new install renders or installs that job; the key stays so `uninstall-launchd --intake` and `install/update.md` can find and remove one an earlier release installed. Must differ from `launchd.label`. | C0 (chosen), C1 (written) | no |
 
 ## `reader`
 
@@ -375,7 +389,7 @@ Settings of the reader's vault lookup (`wa_context.py`), and of its database sna
 
 **Legacy spellings** still load: `"notify": "<command>"` (a string) is read as `notify.outlet: command` with that command, and a top level `notify_mode` becomes `notify.mode` when that is not set. `check-config` reports both; rewrite them.
 
-**Environment variables.** `WA_LIVE_CONFIG`: the config path when `--config` is not given; the daemon sets it for its children. `WA_LIVE_WA_ROOT`: a folder holding WhatsApp Desktop's databases instead of the group container (selftests point it at fakes). `WA_WHISPER_MODEL`: set by the daemon from `brain.whisper_model`; the reader prefers it when the folder exists. The launchd scripts also accept `WA_LIVE_PYTHON` and `WA_LIVE_SCRIPT` (`run.mjs`) and `WA_LIVE_DAEMON_DIR` (`intake-evening.mjs`).
+**Environment variables.** `WA_LIVE_CONFIG`: the config path when `--config` is not given; the daemon sets it for its children. `WA_LIVE_WA_ROOT`: a folder holding WhatsApp Desktop's databases instead of the group container (selftests point it at fakes). `WA_WHISPER_MODEL`: set by the daemon from `brain.whisper_model`; the reader prefers it when the folder exists. The launchd script also accepts `WA_LIVE_PYTHON` and `WA_LIVE_SCRIPT` (`run.mjs`).
 
 ## The reader config (`<home>/config.json`)
 

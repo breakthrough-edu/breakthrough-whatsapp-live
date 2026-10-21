@@ -14,6 +14,8 @@ The code is the source of truth. Every contract below was read out of the module
 
 Every key named here is described in `references/config-reference.md`. Why the defaults are what they are is in `references/defaults-and-why.md` (defaults 6, 10, 11 and 13); this page does not repeat it.
 
+v1.3.0 adds no interface. The board's Today brief reads the vault through the same paths every other feature uses (`paths.vault`, `paths.doctrine`, `live/topic-map.json`), and reads the WhatsApp database only through the daemon, read only, like the rest of the daemon; it calls no facts source, second source, calendar or outlet of its own (a failed build is one `error` push, below).
+
 ## Before the probes
 
 ```sh
@@ -424,10 +426,10 @@ Pass: `selftest: <n>/<n> passed`. The probe prints `calendar.destination: <name>
 
 | Kind | Sent when | Sent by |
 |---|---|---|
-| `error` | A brain run failed (at most once per conversation per 30 minutes), a person note run failed, a scheduled job failed (once per job per hour), the tool cage broke, the WhatsApp database has not changed for `doorbell.stale_alert_hours`, the watermark was reset, backfill failed, `commands/notify-test.json` | The daemon |
+| `error` | A brain run failed (at most once per conversation per 30 minutes), a person note run failed, a scheduled job failed (once per job per hour), the tool cage broke, the WhatsApp database has not changed for `doorbell.stale_alert_hours`, the watermark was reset, backfill failed, a Today brief build failed (at most once every six hours), `commands/notify-test.json` | The daemon |
 | `needs_me` | A judgment that needs the owner | The daemon |
 | `info` | Any other judgment | The daemon |
-| `digest` | The morning digest (short form); the evening intake list | The daemon's digest job and `wa_digest.py --send`; the evening job through `wa_common.py --notify --kind digest` |
+| `digest` | The morning digest (short form); the evening intake list, only from an evening job an earlier release installed and the owner kept | The daemon's digest job and `wa_digest.py --send`; a kept evening job through `wa_common.py --notify --kind digest` |
 
 `notify.mode` decides which kinds go out: `off` nothing · `errors` `error` and `digest` · `needs_me` adds `needs_me` · `all` everything. An unknown mode counts as `errors`. A daemon started with `--dry-run` pushes nothing.
 
@@ -440,7 +442,7 @@ wa_common.notify_deliver(cfg, text, parse_mode=None) -> (ok, why)               
 wa_common.py --notify [--config P] [--html] [--kind error|needs_me|digest|info]              text on stdin
 ```
 
-There is one outlet for the daemon, the command line tools and the evening job. What an outlet receives: `text`, cut to 3800 characters with an ellipsis, several lines, emoji allowed; `parse_mode` `None` or `"HTML"` (Telegram HTML: `<b>`, `<i>`, escaped content). What it returns: `(ok, why)`, where `ok` is true only when the message was accepted for delivery and `why` is a short reason that never contains a secret. It never raises.
+There is one outlet for the daemon and the command line tools (and an evening job kept from an earlier release). What an outlet receives: `text`, cut to 3800 characters with an ellipsis, several lines, emoji allowed; `parse_mode` `None` or `"HTML"` (Telegram HTML: `<b>`, `<i>`, escaped content). What it returns: `(ok, why)`, where `ok` is true only when the message was accepted for delivery and `why` is a short reason that never contains a secret. It never raises.
 
 Dedupe: with `key` and `min_gap`, the same key goes out at most once per `min_gap` seconds; only a successful send starts the gap, and a send already in flight with the same key suppresses a second one. The memory is in process only, so a restart clears it.
 

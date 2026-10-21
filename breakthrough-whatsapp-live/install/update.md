@@ -4,13 +4,15 @@
 
 ⛔ Never overwrite an owner copy. ⛔ Never touch a playbook door's "What we have learned" or "Recent runs". ⛔ Only one session touches the daemon at a time: a restart kills the runs in flight.
 
+**When the owner does not answer.** Every step below that asks the owner something has a safe default for silence: an owner who does not answer has said no. Nothing is changed for them, the question stays open, and the session writes one line under `## Updates` in `<home>/INSTALL-PROGRESS.md` saying what was asked and that it was not answered, so the next session (or the owner) can ask again. A step's own "No answer" line names its default; the one exception is step 6, where the default keeps what the owner already had.
+
 ```sh
 KIT=~/.claude/skills/breakthrough-whatsapp-live      # the folder holding SKILL.md, install/ and daemon/
 HOME_DIR="<paths.home from the progress file header>"
 LIVE="$HOME_DIR/live"
 PY=/usr/bin/python3
 LABEL="<launchd.label from the progress file header>"
-ILABEL="$LABEL.intake"
+ILABEL="<launchd.intake_label from the progress file header>"
 PORT="<board.port from the progress file header>"
 SKILLS="$(dirname "$KIT")"                           # the skills folder the kit sits in
 ```
@@ -35,7 +37,7 @@ grep -m1 '^VERSION' "$KIT/daemon/wa_live.py"
 ls -L "$SKILLS/breakthrough-whatsapp-read/" "$SKILLS/breakthrough-person-dossier/"
 ```
 
-It reaches the network, so the owner runs it or says yes to it. `-g -y` updates the install the README's `npx skills add -g` made without stopping at a scope question (a session's shell cannot answer one); a kit installed into one project instead is updated from inside that project with `-p -y`. When it answers `No installed skills found matching`, the kit was installed from a local folder, which `update` does not follow: run the same `npx skills add` again with that folder, then carry on here. Writes: the payload folder, replaced. The two companion links point into the payload and follow it; a companion installed as a copy instead stays at its old version until the owner agrees to refresh it. Your own adapters in `<live>/adapters/` are outside the payload and stay; run each one's `--selftest` once (`"$PY" "$LIVE/adapters/<file>" --selftest; echo "exit $?"`), since the kit code around it changed. Pass: `exit 0`; an adapter's selftest may print nothing else.
+It reaches the network, so the owner runs it or says yes to it. No answer: do not update; stop here and record `update not run: owner did not answer`. `-g -y` updates the install the README's `npx skills add -g` made without stopping at a scope question (a session's shell cannot answer one); a kit installed into one project instead is updated from inside that project with `-p -y`. When it answers `No installed skills found matching`, the kit was installed from a local folder, which `update` does not follow: run the same `npx skills add` again with that folder, then carry on here. Writes: the payload folder, replaced. The two companion links point into the payload and follow it; a companion installed as a copy instead stays at its old version until the owner agrees to refresh it. Your own adapters in `<live>/adapters/` are outside the payload and stay; run each one's `--selftest` once (`"$PY" "$LIVE/adapters/<file>" --selftest; echo "exit $?"`), since the kit code around it changed. Pass: `exit 0`; an adapter's selftest may print nothing else.
 
 When `ls -L` answers `No such file or directory` for a companion, it was never linked: station C1 step 1 links the reader and station C4 the person notes; on an install that skipped those stations there is nothing to update for them.
 
@@ -49,9 +51,9 @@ When `ls -L` answers `No such file or directory` for a companion, it was never l
 
 Read only. One line per owner copy, with its status and `copy v<x>, payload v<y>`; the last line counts the copies that need a merge. An update that changed playbook seeds shows each of them as `seed newer`; the playbook seeds this release changed are listed in `playbooks/CHANGELOG.md`. Playbooks appear here only when they were copied into the vault (station C1, step 5); when none were, the changelog is where to read what changed in case the owner wants a copy now (step 5).
 
-This release (1.2.0), coming from 1.1.0: `prompts/brain-prompt.md` moved (1.1.0 to 1.2.0: the rule for a message the person edited, under input 1; the two quote rules under `captures`, with the one exception to "fewer is better"; the `stake` ending now 「怎么开口: …」), and `claude-settings.json` shows `template newer`, because the template gained one Read deny rule (`transcripts-cache/**`, step 6). One playbook seed changed, by one sentence: `resident-workers-playbook.md` 1.0.3 (the note on probing a guard with JSON is stated as a general rule; nothing in the method changed); it shows as `seed newer` only when the owner copied the resident-workers folder into the vault. Expect `seed newer` on the brain prompt and `template newer` on the settings, so `2 need a merge` (3 with the resident-workers copy). From this release on, a copy the owner merged by taking every section of the new seed as it was (byte for byte the payload seed) reads `unchanged` afterwards, not `edited by owner`.
+This release (1.3.0), coming from 1.2.0: no prompt, topic map or settings template changed, so `prompts/brain-prompt.md`, `topic-map.json` and `claude-settings.json` read as they did. Three playbook seeds changed, all in the whatsapp-live-triage folder (`playbooks/CHANGELOG.md` has each entry): `whatsapp-live-triage-playbook.md` 1.2.0 (new move 11: with the Today brief on, read the board's cards before placing, as a starting point and not an answer; move 10 now names two registry entries, the evening job being retired), `_WhatsApp-Live-Triage-Guide.md` 1.1.0 (the summary line names the Today brief), and `standby-machine-runbook.md` 1.1.0 (the evening job is retired, so a takeover has nothing to decide or stop about it; the Today brief comes back with the restored config). They show as `seed newer` only when the owner copied that folder into the vault, so expect `3 need a merge` then, else `0 need a merge`.
 
-For the brain prompt, step 4 walks three sections, each with the owner's yes: (a) the new sentences under input 1 of 你手上有什么 (a burst line ending ✏️ is an edited message, the current version wins, `reason` opens with 「对方改了讯息: …」); (b) under `captures`, the `quote` rule's "same message" words, the new ⛔ line saying a quote is copied from one message as one unbroken span because the program checks it against the pack, and the sentence after "已经交付 / 已经过期的不写" with the one exception for an edited message; (c) the `stake` ending in the first draft rule. A copy without (a) and (b) still runs, but edited messages are judged without their rule and quotes the brain joins or shortens land as ≈ entries; without (c) the board shows the old ending. The maintainer notes at the top of the seed (items 6 and 7) never reach the model and merge like any other section.
+For the playbook, step 4 walks two sections, each with the owner's yes: (a) move 11, whole; (b) the change to move 10's list. A copy without (a) still works: the intake mode reads whatever its own `references/intake.md` says (step 6b), and the playbook is where the reason lives. For the door, only the summary line changes, and its "What we have learned" and "Recent runs" are never touched. For the runbook, three places: the paragraph at the end of step 2, the line after step 3's start commands, and the last sentence of step 4's stop note, plus one clause in the closing registry line.
 
 | Status | What to do |
 |---|---|
@@ -59,10 +61,11 @@ For the brain prompt, step 4 walks three sections, each with the owner's yes: (a
 | `edited by owner` | nothing: those edits are the owner's |
 | `seed newer` (alone or with `edited by owner`) | merge it, step 4 |
 | `owner copy missing (...)` | the code is running on the payload seed and saying so in the log and in the digest's health block; offer to copy it again, step 5 |
-| `stamp removed from the copy` | ask the owner which version the copy came from before merging anything |
+| `stamp removed from the copy` | ask the owner which version the copy came from before merging anything; no answer: merge nothing into that copy and record it |
 | `not recorded, cannot tell` | compare the copy with the seed by hand before merging |
 | `template newer (...)` | `claude-settings.json`: step 6 |
 | `rendered file missing (...)` | `"$PY" "$KIT/daemon/wa_setup.py" init --config "$LIVE/config.json"` renders it again |
+| a playbook folder in the vault that `seed-status` does not list | it was copied by hand, not with `copy-seed`, so it is not in `live/seeds.json` and `seed-status` cannot see it. Compare the seed stamp comment in each of its files with the payload's by hand, then merge as step 4 says; or record it first with `copy-seed` into an empty folder (on the owner's yes) and merge from there. No answer: leave it, and record that the folder is not tracked |
 
 ## 4 · Merge a newer seed, section by section
 
@@ -74,7 +77,7 @@ One owner copy at a time:
    diff -u "<the owner copy>" "$KIT/<the seed path from seed-status>"
    ```
    When `seed-status` did not say `edited by owner`, every difference is the seed's. When it did, the changelog entries tell the seed's changes apart from the owner's own.
-3. **One section at a time, with the owner.** Show what the seed changed, the changelog line that says why, and what their copy says now. Apply that section with the Edit tool only on their yes; a no keeps their text.
+3. **One section at a time, with the owner.** Show what the seed changed, the changelog line that says why, and what their copy says now. Apply that section with the Edit tool only on their yes; a no keeps their text. No answer: keep their text, and leave that section unsettled (step 6 then leaves the stamp where it is, so `seed-status` asks again next time); record it.
 4. **Frontmatter stays the owner's.** Keep every frontmatter value of the owner copy (`confirmed_by_owner`, `updated`, and anything else the owner set). The seed's frontmatter shows defaults such as `confirmed_by_owner: false`; those never overwrite the copy's values. Only a key the seed adds is offered, like any other section.
 5. **Doors.** "What we have learned" and "Recent runs" are the owner's history and are never touched; the rest of a door merges like any other section.
 6. **Stamp it.** When every section of that version is settled, merged or declined, change the version in the copy's seed stamp comment to the payload's. The stamp records which seed text the owner has ruled on, not which text they took, so `seed-status` stops asking.
@@ -83,7 +86,7 @@ One owner copy at a time:
 ## 5 · A missing owner copy
 
 - Prompts and the topic map: `"$PY" "$KIT/daemon/wa_setup.py" init --config "$LIVE/config.json"` copies what is missing and keeps everything that exists.
-- A playbook file, on the owner's yes (which `--confirmed-by-owner` records in the copy's frontmatter, as at C1 step 5):
+- A playbook file, on the owner's yes (which `--confirmed-by-owner` records in the copy's frontmatter, as at C1 step 5); no answer: nothing is copied, the code keeps reading the payload seed and says so, and the offer is recorded:
   ```sh
   "$PY" "$KIT/daemon/wa_setup.py" copy-seed --config "$LIVE/config.json" --seed "playbooks/<folder>/<file>" --to "<its folder in the vault>" --confirmed-by-owner
   ```
@@ -98,22 +101,30 @@ mv "$LIVE/claude-settings.json" "$LIVE/claude-settings.json.old-$(date +%Y%m%d)"
 diff "$LIVE/claude-settings.json.old-$(date +%Y%m%d)" "$LIVE/claude-settings.json"
 ```
 
-`init` renders the file again and records its new hash; every other file is kept, and any folder of the working tree a release added is created (0700), and any deny probe marker a release added is written (this release, 1.2.0: `<home>/transcripts-cache/deny-canary.txt`, 0600, in a folder every install already has). Lines only in the old file are rules the owner added: carry each one over with the Edit tool on their yes, then `chmod 600` the file. Lines only in the new file are the release's new rules (this release: `transcripts-cache/**`, and the `_comment` line, which now names the transcript cache).
+`init` renders the file again and records its new hash; every other file is kept, and any folder of the working tree a release added is created (0700), and any deny probe marker a release added is written (this release, 1.3.0, adds none). Lines only in the old file are rules the owner added: carry each one over with the Edit tool on their yes, then `chmod 600` the file. No answer: carry them over anyway, unchanged, and record that you did: they are rules the owner already had in force, and dropping a deny rule they wrote would open a read they chose to close. A no removes them. Lines only in the new file are the release's new rules (this release: none, since the template did not change).
 
 When `seed-status` showed no `template newer`, still run `"$PY" "$KIT/daemon/wa_setup.py" init --config "$LIVE/config.json"` once: it creates a folder or a probe marker a release added and keeps everything that exists.
+
+## 6a · The Today brief, offered
+
+This release (1.3.0) brings one optional feature: the board's Today brief. Offer it with station O7's question 5 (`install/O7-intake.md`), read as written there: what it does (per project of the owner's, what today's conversations mean, as cards answered OK or No on the board), what it costs (one extra model call, at most every 30 minutes, only when its inputs changed (today's judgments, the open intake entries, a source you took out of a project, or your replies in conversations its cards cover); it reads a few vault files), what it reads, and that it never writes into the vault and is never pushed. It needs `paths.vault`.
+
+- **Yes:** with the config edit ritual (`install/00-start-here.md`), set `today.enabled` to `true` (and `today.extra_rules` when the owner gives a paragraph), then `check-config`. The restart in step 9 starts it; O7's Do step 4 has the dry run that shows which projects it found, and Verify 8 to 13 of that station are this update's checks too.
+- **No:** leave `today.enabled` at `false`. The board shows no Today page, and nothing else changes.
+- **No answer:** the same as no: leave it off, and record `Today brief not offered to completion: owner did not answer`.
+
+Either way, record the answer in the default 12 decision note (one line) and under `## Updates`.
 
 ## 6b · The command-base patches changed
 
 A release can change the outline of a command-base patch (`references/vault-proposals.md`, proposal d). The owner's command-base skill is their file, written in their words, so an update never touches it: the session shows what changed and applies it only on the owner's yes.
 
-This release (1.2.0) changed Patch 2, the outline of `<command base>/references/intake.md`: step 2 now reads each entry's quote mark (🗣, 🎙 and 📄 are the person's words; ≈ is a gist, checked against the chat before a date or an amount is used) and treats a ✏️ entry as a correction that replaces the older one (place the ✏️ entry, merge or drop the older); step 5 marks placed by key (`wa_intake.py --config <live>/config.json --mark-placed-key KEY --to "<where it went>"`, KEY a full key or a unique prefix of at least 8 hex from `--list-open`), because numbers shift after every placement and when a correction lands while the owner decides, and keys do not. When O7 never ran, there is no such file: skip this step.
+This release (1.3.0) changed Patch 2, the outline of `<command base>/references/intake.md`, for the Today brief: step 2 lists with `--list-open --with-brief http://127.0.0.1:<board.port>/api/today` and reads the board's card under each entry as a starting point, not an answer; step 5 adds that a card whose entries are all placed retires by itself within a minute; the new step 5c handles the cards with no entry and settles each with `--settle-card <id> --rev <n> --to "<where>" --with-brief <url>` (a `rev` refusal means the card changed: list again); step 6 says "placed N, settled K, still open M". The sentence that pointed the evening sort at this file is gone, since the evening push is retired. When O7 never ran, there is no such file: skip this step. When the owner said no to the Today brief in step 6a, offer only the removal of the evening sentence: the new steps read cards that do not exist (the list still works, printing one line that the brief could not be read).
 
 1. Read the owner's `<command base>/references/intake.md` whole, and the new Patch 2 outline in `references/vault-proposals.md`.
-2. Show the owner the difference, step by step of the outline: what their file says now, what the new outline says, and why (the changelog line above). Their own wording stays theirs; only the meaning of steps 2 and 5 is offered.
-3. Apply it with the Edit tool only on a yes, one step at a time, with this install's absolute paths. A no keeps their file as it is: `--mark-placed <n>` still works, and the marks still show in the buffer.
-4. Log it under `## Updates`: offered, and applied or declined, per step.
-
-Also offer the legend line for the buffer's rules at the top (`references/vault-proposals.md`, proposal c, "The legend line"), on a yes, with the Edit tool; nothing reads it but the owner.
+2. Show the owner the difference, step by step of the outline: what their file says now, what the new outline says, and why (the changelog line above). Their own wording stays theirs; only the meaning of steps 2, 5, 5c and 6 is offered.
+3. Apply it with the Edit tool only on a yes, one step at a time, with this install's absolute paths. A no keeps their file as it is: the plain `--list-open` and `--mark-placed-key` still work, and cards whose entries get placed still retire by themselves. No answer: the same as a no; nothing is applied, and the diff offer is recorded as not answered.
+4. Log it under `## Updates`: offered, and applied, declined or not answered, per step.
 
 ## 7 · Config
 
@@ -122,7 +133,7 @@ Also offer the legend line for the buffer's rules at the top (`references/vault-
 "$PY" "$KIT/daemon/wa_setup.py" sync-reader-config --config "$LIVE/config.json"
 ```
 
-New keys fill themselves with their defaults when the config loads; `references/config-reference.md` lists each key with its station, and the wizard reads any new one to the owner. `check-config` must show no new errors. This release (1.2.0) adds three, all working at their defaults with nothing to write: `edit_watch.enabled` (true: a message that passed the gate is read again while its window lasts, so an edit is judged again), `edit_watch.minutes` (30: that window, 1 to 1440) and `intake.verify_quotes` (true: every intake quote is looked up in the run's own pack and marked 🗣 when found, ≈ when not). Read default 15 (`references/defaults-and-why.md`) to the owner; a ruling lands as one decision note. None of them reaches the reader config (`sync-reader-config` may still report a per-run copy changed; that is the refresh, not a new key).
+New keys fill themselves with their defaults when the config loads; `references/config-reference.md` lists each key with its station, and the wizard reads any new one to the owner. `check-config` must show no new errors. This release (1.3.0) adds seven, all under `today` and all working at their defaults: `today.enabled` (false, unless step 6a set it), `today.model`, `today.every_minutes` (30), `today.manual_min_gap_seconds` (60), `today.max_reads` (6), `today.quote_min_chars` (6) and `today.extra_rules` (empty). Read default 12 (`references/defaults-and-why.md`) to the owner when step 6a did not already; a ruling lands as one decision note, and no answer leaves the defaults and no note. It retires two: `intake.evening_push` and `intake.evening_at`. Every config an earlier `init` wrote carries both, so `check-config` now prints a warning for each (`retired in v1.3.0: the board's Today brief replaces the evening push`, naming this page); they are warnings, never errors, and step 8b removes them. None of the new keys reaches the reader config (`sync-reader-config` may still report a per-run copy changed; that is the refresh, not a new key).
 
 ## 8 · The LaunchAgents
 
@@ -136,7 +147,33 @@ Read the `next:` line. `next: nothing to reinstall, the installed LaunchAgent al
 "$PY" "$KIT/daemon/wa_setup.py" install-launchd --config "$LIVE/config.json"
 ```
 
-When the evening intake job is installed, run `render-launchd` again with `--intake`, and `install-launchd --intake` only when its `next:` line names it. A release that changes only a script (`run.mjs` or `intake-evening.mjs`) prints `update <path>` for it and still `next: nothing to reinstall, ...`: the next start, or the next evening run, uses the new script. This release (1.2.0) changed neither the scripts nor the plist templates, so both runs keep every file and print `next: nothing to reinstall, the installed LaunchAgent already matches this plist`, unless a tool path in the config moved since the last render.
+A release that changes only `run.mjs` prints `update <path>` for it and still `next: nothing to reinstall, ...`: the next start uses the new script. This release (1.3.0) changed neither `run.mjs` nor the daemon's plist template, so the run keeps every file and prints `next: nothing to reinstall, the installed LaunchAgent already matches this plist`, unless a tool path in the config moved since the last render. `render-launchd --intake` and `install-launchd --intake` now refuse: the evening job is retired (step 8b).
+
+## 8b · The retired evening job
+
+The evening push is retired in this release, and the board's Today brief (step 6a) replaces it: two proactive surfaces that may disagree are worse than one (`references/defaults-and-why.md`, default 12). The job's templates left the payload, so no install can render or install it again. An installed one keeps working from the code that was kept for it, until it is removed.
+
+```sh
+ILABEL="<launchd.intake_label from the progress file header>"
+case "$ILABEL" in ""|*"<"*) echo "fill in ILABEL first (launchd.intake_label from the progress file header)" >&2; exit 1;; esac
+ls ~/Library/LaunchAgents/$ILABEL.plist
+"$PY" "$KIT/daemon/wa_setup.py" doctor --config "$LIVE/config.json" | grep -i evening
+```
+
+**When the plist exists** (`doctor` says `evening intake job <label>: still installed (retired; update.md removes it on your yes)`), tell the owner it is retired and replaced by the Today brief, show them both halves of the removal (unloading the job, and the config edit that takes `intake.evening_push` and `intake.evening_at` out of the `intake` block), and ask once. One yes covers both halves; a no leaves both.
+
+- **Yes:** remove the job, then, on the same yes, the two retired keys:
+  ```sh
+  "$PY" "$KIT/daemon/wa_setup.py" uninstall-launchd --intake --config "$LIVE/config.json" --dry-run
+  "$PY" "$KIT/daemon/wa_setup.py" uninstall-launchd --intake --config "$LIVE/config.json"
+  ls ~/Library/LaunchAgents/$ILABEL.plist
+  ```
+  It boots the label out, removes the plist from `~/Library/LaunchAgents/` and the rendered plist and installed script under `<home>/launchd/`, and prints `removed: <paths>`; it works although the templates left the payload; `ls` then answers `No such file or directory`. Then apply the config edit already shown, with the config edit ritual, and run `check-config`, which no longer warns. (`intake.rules_file` stays unless the owner asks to drop it too.) In the registry, mark the evening job's entry retired, with today's date and the `ls` line as proof (`references/vault-proposals.md`, proposal f).
+- **No:** leave both, the job and the keys. It keeps running every evening from the kept code path, `doctor` keeps its line, and `check-config` keeps warning about the two keys. Record `evening job kept: owner said no`; a later update asks again.
+- **No answer:** leave both in place, exactly as for a no, and record `evening job left in place, owner did not answer` in `INSTALL-PROGRESS.md`.
+
+**When there is no plist** (most installs: the evening push was off by default), there is nothing to remove. Offer only the config edit above for the two retired keys, on a yes; no answer leaves them (warnings only), recorded.
+
 
 ## 9 · Restart, and the fingerprint
 
@@ -150,14 +187,14 @@ HOME_DIR="<paths.home from the progress file header>"; LIVE="$HOME_DIR/live"
 
 The daemon loads the new code. Runs in flight are killed and their bursts run again; a person note run that was cut off is marked failed and can be queued again. Pass: the last line is `proof: one daemon, the new code is loaded (...)` (station C2, step 11, reads the rest of the output).
 
-Either way, refresh the fingerprint in the daemon's registry entry (C2 step 5). When the install has no registry entry (no machine registry note in the vault and no `<home>/INSTALLED.md`), say so, skip the refresh, record `no registry entry` under `## Updates`, and offer to write one now as station C2, step 5 does. The refresh: the new hash and version, with today's date and the Mac's name. A standby Mac compares against it on the day it takes over (the standby runbook's step 2), so a stale value sends it to the wrong version.
+Either way, refresh the fingerprint in the daemon's registry entry (C2 step 5). When the install has no registry entry (no machine registry note in the vault and no `<home>/INSTALLED.md`), say so, skip the refresh, record `no registry entry` under `## Updates`, and offer to write one now as station C2, step 5 does; no answer: none is written, and that is recorded. The refresh: the new hash and version, with today's date and the Mac's name. A standby Mac compares against it on the day it takes over (the standby runbook's step 2), so a stale value sends it to the wrong version.
 
 ```sh
 shasum -a 256 "$KIT/daemon/wa_live.py"
 grep -m1 '^VERSION' "$KIT/daemon/wa_live.py"
 ```
 
-**Something new to offer.** A release can bring an optional step an existing install never saw. After the restart, name it to the owner once, with its cost, and run it only on their yes; never assume it. This release (1.2.0) brings no optional step: the edit watch, the quote marks and the entry keys work once the new code runs, and the Patch 2 change was offered in step 6b. When the install never took the optional setup token of 1.1.0 (`install/C2-daemon.md`, step 12) and the owner was never asked, it can be offered now, once.
+**Something new to offer.** A release can bring an optional step an existing install never saw. After the restart, name it to the owner once, with its cost, and run it only on their yes; never assume it. This release (1.3.0) brings one, the Today brief, already offered in step 6a; when it was turned on, the first build waits for the first change after this restart, and `echo '{}' > "$LIVE/commands/today-now.json"` asks for one now (one model call). When the install never took the optional setup token of 1.1.0 (`install/C2-daemon.md`, step 12) and the owner was never asked, it can be offered now, once. No answer to any offer: leave it off and record it.
 
 ## 10 · Verify
 
@@ -165,8 +202,10 @@ grep -m1 '^VERSION' "$KIT/daemon/wa_live.py"
    ```sh
    "$PY" "$KIT/daemon/wa_setup.py" --selftest | tail -1
    "$PY" "$KIT/daemon/wa_live.py" --selftest | tail -1
+   "$PY" "$KIT/daemon/wa_today.py" --selftest | tail -1
    "$PY" "$KIT/skills/breakthrough-person-dossier/scripts/dossier_core.py" --selftest | tail -1
    ```
+   `wa_today.py` is new in this release; its last line reports a pass.
 2. **The daemon runs the new version.** Pass: `state = running`; a `/health` body starting with `ok (last scan`; the newest start line in the log names the new version.
    ```sh
    launchctl print "gui/$(id -u)/$LABEL" | grep "state = "
@@ -195,12 +234,19 @@ grep -m1 '^VERSION' "$KIT/daemon/wa_live.py"
    ```sh
    grep -F "read_canary [" "$LIVE/wa_live.log" | grep -v " 开始 (" | tail -2
    ```
-10. **The new config keys load.** Pass: `True 30 True`.
+10. **The new config keys load.** Pass: `today.enabled` as step 6a ruled, then the owner's own `today.every_minutes`, `today.manual_min_gap_seconds` and `today.max_reads` (the defaults `30 60 6` unless the owner set others): compare with the `today` block of `$LIVE/config.json`, where a key that is absent means its default.
    ```sh
-   "$PY" -c 'import sys; sys.path.insert(0, sys.argv[1] + "/daemon"); import wa_common as W; c = W.load_config(sys.argv[2]); print(c["edit_watch"]["enabled"], c["edit_watch"]["minutes"], c["intake"]["verify_quotes"])' "$KIT" "$LIVE/config.json"
+   "$PY" -c 'import sys; sys.path.insert(0, sys.argv[1] + "/daemon"); import wa_common as W; t = W.load_config(sys.argv[2])["today"]; print(t["enabled"], t["every_minutes"], t["manual_min_gap_seconds"], t["max_reads"])' "$KIT" "$LIVE/config.json"
    ```
-11. **Quotes are marked** (when O7 ran). Run the hand-built replay in `references/feature-checklist.md` (K344 to K346; temp files under `$HOME_DIR/acceptance/replay/`, no model call). Pass: the lines that section names, and `first entry unchanged True`. After the first real run with a capture, the new entry's second line opens with 🗣, 🎙, 📄 or ≈.
+11. **The evening job is as ruled in step 8b.** Pass: removed, `No such file or directory` and no evening line in `doctor`; kept (a no, or no answer), the plist still there and `doctor` saying it is still installed and retired. Either way `render-launchd --intake` refuses in one line and exits 3. (K278, K279)
+   ```sh
+   case "$ILABEL" in ""|*"<"*) echo "fill in ILABEL first (launchd.intake_label from the progress file header)" >&2; exit 1;; esac
+   ls ~/Library/LaunchAgents/$ILABEL.plist
+   "$PY" "$KIT/daemon/wa_setup.py" doctor --config "$LIVE/config.json" | grep -i -e evening -e "today:"
+   "$PY" "$KIT/daemon/wa_setup.py" render-launchd --intake --config "$LIVE/config.json" --dry-run
+   ```
+12. **The brief works** (only when step 6a turned it on): station O7's Verify 8 to 13 (`install/O7-intake.md`), after the restart.
 
 ## 11 · Record
 
-Under `## Updates` in `<home>/INSTALL-PROGRESS.md`: the date, the version before and after, each seed merged or declined section by section, each command-base patch change offered and applied or declined (step 6b), whether the LaunchAgent was reinstalled or restarted, the new fingerprint written into the registry, each Verify check with the value it printed, and the owner's answer to anything new that was offered.
+Under `## Updates` in `<home>/INSTALL-PROGRESS.md`: the date, the version before and after, each seed merged or declined section by section, the Today brief offered and the answer (step 6a), each command-base patch change offered and applied, declined or not answered (step 6b), the evening job removed, kept, or left for want of an answer (step 8b), whether the LaunchAgent was reinstalled or restarted, the new fingerprint written into the registry, each Verify check with the value it printed, and the owner's answer to anything new that was offered, including every question that got no answer.
