@@ -36,6 +36,8 @@ it gets a new entry whose title starts "✏️ 对方改了讯息" (en "✏️ t
 
 Entry keys: entry_key() is the sha1 of the title line and the quote line. Neither changes after an entry is written (placing
 rewrites only the status line), so a key names the same entry before and after placing, whatever its number.
+append_under_key() adds one line as the last line of an entry found by its key, in either zone, under the same lock;
+the daemon's vault write records an undo under the entries it had placed this way (they stay placed).
 
 Safety (without it, two writers could overwrite each other and lose an entry already marked seen):
 - append and mark-placed hold an exclusive fcntl.flock on the sidecar `.<buffer name>.lock` next to the buffer, read
@@ -96,7 +98,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import wa_common as W  # noqa: E402
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 KINDS = ("request_dated", "promise_undelivered", "appointment", "money", "decision")
 KIND_LABELS = {
@@ -991,6 +993,48 @@ def mark_placed_by_key(buffer, key, to):
         return _rewrite(p, transform)
 
 
+def _append_in_text(text, key, line):
+    """Pure: `line` becomes the last line of the entry block with this full key, in either zone. Returns
+    (new_text, {"status": "appended", "zone", "index"}) or (text, {"status": "not_found"}). Blank lines after the block
+    and every other byte stay as they were; the entry's key does not change (only its title and quote line make it)."""
+    k = str(key or "").strip().lower()
+    open_zone, placed = _zones(text)
+    for zone, base, part in (("open", 0, open_zone), ("placed", len(open_zone), placed or "")):
+        for i, (s, e) in enumerate(_entry_spans(part)):
+            block = part[s:e].rstrip("\n")
+            if entry_key(block) != k:
+                continue
+            if "\n" not in block:
+                raise ValueError("the entry has no quote line; a line appended to it would change its key")
+            at = base + s + len(block)
+            return text[:at] + "\n" + line + text[at:], {"status": "appended", "zone": zone, "index": i}
+    return text, {"status": "not_found"}
+
+
+def append_under_key(buffer, key, line):
+    """One line added as the last line of the entry with this full key, open or placed, under the buffer lock with the
+    key resolved inside it (the undo of a vault write records itself this way; the entry stays where it is). `line` is
+    one line: a newline inside it, or a line that would start a new section (`#`), is a ValueError. Returns
+    {"status": "appended"} | {"status": "not_found"} (the file is untouched when not found)."""
+    p = _path(buffer)
+    if p is None or not p.exists():
+        raise FileNotFoundError("intake buffer not found: %s" % p)
+    one = str(line if line is not None else "").rstrip()
+    if not one.strip() or "\n" in one or "\r" in one:
+        raise ValueError("append_under_key takes one line that is not empty")
+    if one.lstrip().startswith("#"):
+        raise ValueError("append_under_key: a line starting with # would start a new section of the buffer")
+    with _locked(p):
+        if _find_key(_read(p), key) is None:
+            return {"status": "not_found"}
+
+        def transform(text):
+            new_text, res = _append_in_text(text, key, one)
+            return new_text, res
+        res = _rewrite(p, transform)
+    return {"status": res["status"]}
+
+
 def all_keys(buffer):
     """Every entry key in the buffer, both zones, file order (for prefix lookup)."""
     p = _path(buffer)
@@ -1699,6 +1743,43 @@ def _selftest():
         check(cl == {ok_open: ("open", ""), k2: ("placed", "task [[Invoices]]"), "f" * 40: ("missing", "")},
               "classify_keys: open, placed and missing; got %s" % cl)
 
+        # append_under_key (the undo line of a vault write): last line of the block, either zone, key unchanged
+        abuf = tmp / "append.md"
+        shutil.copy(str(kbuf), str(abuf))
+        a_open = list_open(abuf)
+        a_last = a_open[-1]["key"]
+        a_first = a_open[0]["key"]
+        a_placed = list_placed(abuf)[0]["key"]
+        a_before = abuf.read_text(encoding="utf-8")
+        r1 = append_under_key(abuf, a_first, "- 撤回 10-21 12:00: the task change was given back")
+        r2 = append_under_key(abuf, a_placed, "- undo 10-21 12:01: the task file was moved to its backup")
+        r3 = append_under_key(abuf, a_last, "- 撤回 10-21 12:02: last open entry")
+        a_after = abuf.read_text(encoding="utf-8")
+        blocks = dict((entry_key(b), b) for b in _blocks(a_after))
+        nob = {"lines": [""], "zone": ""}
+        b_first, b_placed, b_last = (blocks.get(x, nob) for x in (a_first, a_placed, a_last))
+        check(r1 == {"status": "appended"} and r2 == {"status": "appended"} and r3 == {"status": "appended"}
+              and b_first["lines"][-1] == "- 撤回 10-21 12:00: the task change was given back"
+              and b_placed["lines"][-1] == "- undo 10-21 12:01: the task file was moved to its backup"
+              and b_placed["zone"] == "placed" and b_last["lines"][-1] == "- 撤回 10-21 12:02: last open entry"
+              and [x["key"] for x in list_open(abuf)] == [x["key"] for x in a_open]
+              and [x["key"] for x in list_placed(abuf)] == [x["key"] for x in list_placed(kbuf)],
+              "append_under_key: the line lands as the last line of the keyed entry, open or placed, keys and zones unchanged")
+        a_strip = "".join(ln for ln in a_after.splitlines(True) if "10-21 12:0" not in ln)
+        check(a_strip == a_before and len(a_after) - len(a_before) == sum(len(x) + 1 for x in (
+              "- 撤回 10-21 12:00: the task change was given back", "- undo 10-21 12:01: the task file was moved to its backup",
+              "- 撤回 10-21 12:02: last open entry")),
+              "append_under_key: every other byte of the buffer is untouched")
+        a_mid = abuf.read_bytes()
+        nf = append_under_key(abuf, "0" * 40, "- 撤回 never written")
+        bad_lines = []
+        for bl in ("two\nlines", "", "   ", "### a new section", "## 已归"):
+            try:
+                append_under_key(abuf, a_first, bl)
+            except ValueError:
+                bad_lines.append(bl)
+        check(nf == {"status": "not_found"} and abuf.read_bytes() == a_mid and len(bad_lines) == 5,
+              "append_under_key: an unknown key is not_found and a bad line is refused, the file untouched (%s)" % len(bad_lines))
         # the CLI for keys
         me = str(Path(__file__).resolve())
         r = subprocess.run([sys.executable, me, "--buffer", str(kbuf), "--list-open"], capture_output=True, timeout=60)
@@ -1717,7 +1798,7 @@ def _selftest():
         check(r.returncode == 0 and "task [[Tables]]" in r.stdout.decode("utf-8") and ("key: %s" % k2[:12]) in r.stdout.decode("utf-8"),
               "CLI --list-placed lists the placed zone with keys")
         # ---- v1.3.0 · the board's Today brief under each entry, K cards, settle (stub board on 127.0.0.1, OS chosen port)
-        check(VERSION == "1.3.0", "VERSION is 1.3.0")
+        check(VERSION == "1.4.0", "VERSION is 1.4.0")
         cfgp.write_text(json.dumps({"intake": {"enabled": True, "buffer": str(buf)}, "owner_label": "Alex Rivera",
                                     "notify": {"outlet": "command", "command": "cat > /dev/null"}}), encoding="utf-8")
         r = subprocess.run([sys.executable, me, "--config", str(cfgp), "--evening-status"], capture_output=True, timeout=60)

@@ -22,7 +22,7 @@ Claude Code keeps no shell variables between commands: start each command with t
 Show the owner the whole list first, then take their answers one at a time:
 
 1. **A last copy of the daemon's state before it goes?** Into which folder?
-2. **The working folder** (`<home>`): it holds every run's full conversation pack, the state database, the logs, the reader's snapshots, voice transcripts, the text of documents people sent, the config with the owner's number and names, the push token, and, when the daemon ran on a setup token, that token (`secrets/claude-bot.env`). To the Trash, or kept? Anything to copy out first (drafts history in `live/voice-pairs.jsonl`, `live/summaries.md`, the digests)?
+2. **The working folder** (`<home>`): it holds every run's full conversation pack, the state database, the logs, the reader's snapshots, voice transcripts, the text of documents people sent, the config with the owner's number and names, the push token, and, when the daemon ran on a setup token, that token (`secrets/claude-bot.env`). To the Trash, or kept? Anything to copy out first (drafts history in `live/voice-pairs.jsonl`, `live/summaries.md`, the digests)? When the Today page's write button was on, `<home>/vault-write-backups/` also holds a copy of every task file from before each board write: those copies are the owner's own notes, theirs to keep or remove, and without them no board write can be undone. Ask about that folder on its own.
 3. **The command-base patches** (update-person, intake, the morning intake line): remove them, since the commands they call will be gone, or keep them?
 4. **The whisper model** (about 1.5 GB in `~/.cache/whisper-models/`): does another tool use it?
 5. **The push bot** (when O4 used Telegram): revoke it, or keep it for something else?
@@ -90,7 +90,7 @@ HOME_DIR="<paths.home from the progress file header>"
 mv "$HOME_DIR" "$HOME/.Trash/$(basename "$HOME_DIR")-removed-$(date +%Y%m%d)"
 ```
 
-The folder goes to the Trash; emptying the Trash is the owner's own act. The progress file goes with it, which is why step 4 records the removal in the registry.
+The folder goes to the Trash; emptying the Trash is the owner's own act. When the owner chose to keep the write button's backups, move `$HOME_DIR/vault-write-backups/` somewhere of their choosing first (`mv`, on their yes), and record where; the kit never deletes it, and nothing in the vault points at it. The progress file goes with it, which is why step 4 records the removal in the registry.
 
 ### 7 · What else the install left on the Mac
 

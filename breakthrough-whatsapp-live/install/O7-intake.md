@@ -1,8 +1,8 @@
 # Station O7 · Intake
 
-**Should the things people ask of you, and the things you promised, be caught into one intake buffer note in your vault, and placed only when you say "intake"?** What it costs: no extra model call during the day, because captures ride on each judgment run. Each run may append at most two entries, of five kinds only (a request with a date, something you promised and have not delivered, an appointment, money, a decision the other side stated), each with a quote of up to 200 characters (marked 🗣 when the program found it word for word in the message, ≈ when it is the brain's gist), into one note in your vault (plus the second source's captures when O2 runs). Your command-base skill gains two patches: the "intake" mode and a line in the morning start. The optional Today brief (question 5) adds one extra model call, at most every `today.every_minutes` (30) minutes, only when its inputs changed (today's judgments, the open intake entries, a source you took out of a project, or your replies in conversations its cards cover); it reads a few vault files (the briefs and task lists of the projects in play, and at most `today.max_reads` it opens itself), shows its proposals on the board, and is never pushed. Nothing is ever placed without your yes, and the daemon only appends.
+**Should the things people ask of you, and the things you promised, be caught into one intake buffer note in your vault, and placed only when you say "intake"?** What it costs: no extra model call during the day, because captures ride on each judgment run. Each run may append at most two entries, of five kinds only (a request with a date, something you promised and have not delivered, an appointment, money, a decision the other side stated), each with a quote of up to 200 characters (marked 🗣 when the program found it word for word in the message, ≈ when it is the brain's gist), into one note in your vault (plus the second source's captures when O2 runs). Your command-base skill gains two patches: the "intake" mode and a line in the morning start. The optional Today brief (question 5) adds one extra model call, at most every `today.every_minutes` (30) minutes, only when its inputs changed (today's judgments, the open intake entries, a source you took out of a project, or your replies in conversations its cards cover); it reads a few vault files (the briefs and task lists of the projects in play, and at most `today.max_reads` it opens itself), shows its proposals on the board, and is never pushed. The optional write button (question 6) costs no model call: on a card you pressed OK on, one more press writes that task file into your vault by program, with a backup and an undo; it needs PyYAML for the system Python and your my-second-brain schema reader. Nothing is ever placed without your yes, and without the write button the daemon only appends.
 
-The buffer's shape and the three command-base patches: `references/vault-proposals.md`, proposals c and d. The registry entries: proposal f. Why a buffer and a mode instead of writing straight into tasks, and why the brief is never pushed: `references/defaults-and-why.md`, "12 · The intake buffer is a command-base mode". What the brief reads and stores: `references/privacy.md`, "The Today brief". There is no evening push: it is retired, and a fresh install never has an evening job. What the quotes mean for privacy: `references/privacy.md`, "Quotes in your vault, and switching each writer off".
+The buffer's shape and the three command-base patches: `references/vault-proposals.md`, proposals c and d. The registry entries: proposal f. Why a buffer and a mode instead of writing straight into tasks, and why the brief is never pushed: `references/defaults-and-why.md`, "12 · The intake buffer is a command-base mode". What the brief reads and stores: `references/privacy.md`, "The Today brief". What the write button writes, and what refuses a write: `references/vault-proposals.md`, proposal g; why it is off by default: default 16. There is no evening push: it is retired, and a fresh install never has an evening job. What the quotes mean for privacy: `references/privacy.md`, "Quotes in your vault, and switching each writer off".
 
 ```sh
 KIT=~/.claude/skills/breakthrough-whatsapp-live      # the folder holding SKILL.md, install/ and daemon/
@@ -26,6 +26,8 @@ One question at a time. Read default 12 before question 1.
 3. **May the command base learn two things?** Patch 2, "intake", and patch 3, one morning line counting open entries (proposal d). If C4 did not add patch 1 ("update <name>'s note"), offer it here too.
 4. *(Retired in v1.3.0: the evening push. The number stays so older progress files still read the same; go on to question 5.)*
 5. **Do you want the board to propose, per project, what today's conversations mean?** Say what it does: a Today page on the board, one block per project of yours, each with a few cards (update a task, create one, seed a new project, drop an entry) that you answer OK or No; the intake mode reads those cards under each entry as a starting point. Say what it costs: one extra model call, at most every 30 minutes, only when its inputs changed (today's judgments, the open intake entries, a source you took out of a project, or your replies in conversations its cards cover); it reads a few vault files. Say what it reads: today's judgments, the open intake entries, the briefs and task lists of the projects a conversation may belong to (found from your vault's own folders and doctrine), at most 6 more vault files it opens itself, and your own replies after a judgment (at most three per conversation, each cut to 200 characters; their text, and the model's raw answer, stay only in that run's folder (`prompt.md`, `result.txt`, `claude.stdout.jsonl`, `claude.stderr.txt`), like every run folder; before anything else is stored, any stretch of the model's answer, in any field, that repeats one of them, at least `today.quote_min_chars` CJK characters (Chinese, kana or Hangul) or 4 Latin words (6 letters or digits or more), ignoring case, spacing, punctuation (inside a word too), full-width forms, and the escapes, entities, percent codes and tags listed in `references/privacy.md`, is replaced with "(your reply, not copied)"; a shorter or reworded paraphrase is not caught). Say what it never does: write into the vault, or push. It needs `paths.vault`; it works without intake too, from judgments alone. Optionally ask for a paragraph of the owner's own judgment rules for it (`today.extra_rules`, at most 2000 characters), for example "a question about a cake class date belongs to the Weekend Classes project, never to Wholesale Orders".
+
+6. **Do you want a write-to-vault button on the Today page?** Ask only after a yes to question 5, and read default 16 first. Say what it does: on a card you pressed OK on, a Write to vault button (or Queue write) puts that card into your vault: an update card changes the frontmatter values it names in an existing task file (only `status`, `due`, `waiting_on` and `priority`, a status only from your doctrine's list) and appends one dated section; a create card writes one new task file in the project's `Tasks/` folder with the keys your doctrine requires; a drop card places its intake entries `→ drop` and touches no note. The card's intake entries are placed by key to that task, one line goes into your filing log, and Undo puts the file back. Say what it never writes: a seed card (a new project is opened in your session), the evidence lines under a card, a quote, or any stretch of a cited message or entry quote (replaced with `(…)` first); the model never writes, the program renders every byte from the card you pressed. Say what refuses it whole: a card that changed after your OK, an entry already placed elsewhere, a file of the same name for a create, a file your doctrine's own schema check refuses, and a file that does not read back as written (restored from the backup). Say what it costs: no model call; a backup folder under `<home>/vault-write-backups/` that the kit never cleans. Say what it needs: your my-second-brain schema reader (`scripts/doctrine_schema.py`, read in place), PyYAML for the system Python (installed in this session on your yes; the kit never installs it), `paths.vault`, `paths.doctrine` and the folder of your filing log. Then the mode: `direct` (a press writes at once) or `queue` (a press only queues, and your own session applies the queue with one command, for an owner who wants every write to happen where they watch). No, or no answer: `today.write_mode` stays `off`, and the brief only proposes.
 
 ## Do
 
@@ -85,13 +87,42 @@ echo '{}' > "$LIVE/commands/today-now.json"
 
 Then point the intake mode at the brief: in `<command base>/references/intake.md` from step 3, the list step uses `--list-open --with-brief http://127.0.0.1:<board.port>/api/today` and the outline's step 5c (the cards with no entry) is in (`references/vault-proposals.md`, Patch 2). On the owner's yes, like every patch.
 
+### 4b · The write button (only on a yes to question 6)
+
+With the config edit ritual, set `today.write_mode` to `direct` or `queue`, as the owner chose. Then find the schema reader, in the order the daemon looks:
+
+```sh
+ls -l "<vault>/.claude/skills/my-second-brain/scripts/doctrine_schema.py" ~/.claude/skills/my-second-brain/scripts/doctrine_schema.py
+```
+
+One of the two found: leave `paths.schema_reader` empty. Neither: ask the owner where their my-second-brain copy lives and set `paths.schema_reader` to its `scripts/doctrine_schema.py` (config edit ritual); no copy anywhere means the button cannot be offered yet (say so, set `today.write_mode` back to `off`, record it). Then:
+
+```sh
+KIT=~/.claude/skills/breakthrough-whatsapp-live; PY=/usr/bin/python3
+HOME_DIR="<paths.home from the progress file header>"; LIVE="$HOME_DIR/live"
+"$PY" "$KIT/daemon/wa_setup.py" check-config --config "$LIVE/config.json"
+"$PY" "$KIT/daemon/wa_setup.py" init --config "$LIVE/config.json"
+"$PY" "$KIT/daemon/wa_setup.py" vault-write-check --config "$LIVE/config.json"; echo "exit $?"
+```
+
+`check-config` refuses a mode other than `off`, `direct` or `queue`, `direct` or `queue` with `today.enabled` false or `paths.vault` empty, and a `paths.schema_reader` that is set but missing; a reader not found or PyYAML missing is only a warning. `init` creates `<home>/vault-write-backups/` (0700) and keeps everything that exists. `vault-write-check` prints `available (direct)` or `available (queue)` and exits 0, or `unavailable: <code> <reason>` and exits 2 (`references/troubleshooting.md`, "The write button is missing", lists every code, including `no_module` and `module_error`, which the setup side reports when the write module itself cannot be imported or its check fails). It never runs pip. On `no_yaml` it also prints the install line the schema reader gives for this Python: show it to the owner, say it installs PyYAML into their user's Python packages, and run it only on their yes (rule 8 in `SKILL.md`); then run `vault-write-check` again. No answer: nothing is installed, the button stays hidden with its reason in the Today page's header, and that is recorded. Once it answers available:
+
+```sh
+KIT=~/.claude/skills/breakthrough-whatsapp-live; PY=/usr/bin/python3
+HOME_DIR="<paths.home from the progress file header>"; LIVE="$HOME_DIR/live"
+"$PY" "$KIT/daemon/wa_setup.py" restart --config "$LIVE/config.json"
+"$PY" "$KIT/daemon/wa_setup.py" doctor --config "$LIVE/config.json" | grep -i "vault write"
+```
+
+`doctor` prints `vault write: available (direct)` (or `queue`) on the line under `today:`. In queue mode, show the owner the command their session runs to apply the queue (`references/operating.md`, "The write button, from your session").
+
 ### The evening push is retired
 
 `render-launchd --intake` and `install-launchd --intake` refuse with one line pointing here, and exit 3. The evening push of earlier releases (an evening list of the open entries, with a suggested place each, pushed through the outlet) is retired: the board's Today brief replaces it, because two proactive surfaces that may disagree are worse than one, and a push is a second inbox (`references/defaults-and-why.md`, default 12). Its templates left the payload, so a fresh install never has the job. An install that has one from an earlier release removes it through `install/update.md`, step 8b, on the owner's yes, or by hand with `wa_setup.py uninstall-launchd --intake --config <live>/config.json`, which prints `removed: <paths>`.
 
 ### 5 · The registry addition
 
-Under the daemon's entry, the O7 block from proposal f: reads the brain's captures, writes the intake buffer, switch `intake.enabled`, proof `wa_intake.py --count-open` rises after a run with a capture. With the Today brief on, the "O7 Today brief" row of the same table as well.
+Under the daemon's entry, the O7 block from proposal f: reads the brain's captures, writes the intake buffer, switch `intake.enabled`, proof `wa_intake.py --count-open` rises after a run with a capture. With the Today brief on, the "O7 Today brief" row of the same table as well, and with the write button on, the "O7 write button" row.
 
 ## Verify
 
@@ -160,16 +191,49 @@ Run each probe with the station's opening block in front of it. Every check must
    "$PY" "$KIT/daemon/wa_intake.py" --config "$LIVE/config.json" --settle-card <8 hex> --rev 999 --to "test" --with-brief "http://127.0.0.1:$PORT/api/today"; echo $?
    ```
 13. **The page reads at phone width** (step 4 only). 📸 board on the phone (or a window 375 px wide): the Today button, the brief with its blocks and cards, OK and No, the way back. Pass: everything readable, nothing cut, no sideways scroll. (K376)
+14. **The write module runs, and config knows its two keys** (step 4b only). Pass: `wa_vault_write selftest PASS (<n> checks)`, then `check-config: 0 error(s)` with no `today.write_mode` or `paths.schema_reader` line. (K395)
+   ```sh
+   "$PY" "$KIT/daemon/wa_vault_write.py" --selftest | tail -1
+   "$PY" "$KIT/daemon/wa_setup.py" check-config --config "$LIVE/config.json"
+   ```
+15. **The button shows when it can work, and the page says why when it cannot** (step 4b only). Pass: `vault-write-check` reads `available (<mode>)` and `exit 0`, and the board's `write` block reads `available` true with the same mode; on the board a card answered OK shows Write to vault (or Queue write), a pending card does not. (K383)
+   ```sh
+   "$PY" "$KIT/daemon/wa_setup.py" vault-write-check --config "$LIVE/config.json"; echo "exit $?"
+   curl -s "http://127.0.0.1:$PORT/api/today" | "$PY" -c 'import json, sys; print(json.load(sys.stdin).get("write"))'
+   ```
+16. **One write lands in its shape** (step 4b, direct mode; the owner presses, on a card they want written, or on a card about a test task in a test project). Before the press, `md5 -q` of the task file and the body above where the section will go; after it: the frontmatter changed only in the keys the card named (and `updated`), one section `## <today> · WhatsApp Live` appended with the proposal line and a source line naming conversations and entry keys, no quote; the body above it unchanged; the card's entries listed by `--list-placed` as placed to that task's path; a backup folder for the card; the newest filing-log line naming the file and the card's id, no task text. (K384, K392)
+   ```sh
+   tail -12 "<the task file>"
+   "$PY" "$KIT/daemon/wa_intake.py" --config "$LIVE/config.json" --list-placed | tail -5
+   ls -l "$HOME_DIR/vault-write-backups/"
+   tail -1 "<paths.filing_log>"
+   ```
+17. **Undo restores, and refuses after an edit** (step 4b, after Verify 16, with the owner). Press Undo on the written card. Pass: `md5 -q` of the task file equals the md5 taken before the press, an undo line sits under the entries it had placed, and a second filing-log line names the undo. Then press Write again (the owner keeps it, or it was a test), add one word to the file by hand, and press Undo: refused, changed since, and the word is still there. Take the word out by hand afterwards. (K390)
+   ```sh
+   md5 -q "<the task file>"
+   ```
+18. **Queue mode waits for the session** (step 4b, queue mode only). Press Queue write on one card. Pass: the card says queued, the task file is unchanged, `pending-writes.json` holds one entry; then the session's `--apply-pending` writes it, prints its summary, and leaves the file empty, and the card reads written. (K391)
+   ```sh
+   cat "$LIVE/today/pending-writes.json"
+   "$PY" "$KIT/daemon/wa_vault_write.py" --apply-pending --config "$LIVE/config.json"
+   cat "$LIVE/today/pending-writes.json"
+   ```
+19. **Runs cannot read the backups** (step 4b only). Pass: `1`, the rendered rule for `<home>/vault-write-backups/**`; and, after the next deny probe (station C2 check 9 or `install/update.md` Verify 9), the line `probe-claude read_canary [vault-write-backups]: 读取被挡下 (...)` in `$LIVE/wa_live.log`. (K393)
+   ```sh
+   grep -c 'vault-write-backups/\*\*' "$LIVE/claude-settings.json"
+   ```
+20. **A seed card is never written** (step 4b only, when a brief shows a seed card). Pass: the seed card has no write button and shows the one line that seeds are placed in your own session. (K394)
 
 ## Record
 
 Under `### O7 intake` in `<home>/INSTALL-PROGRESS.md`:
 
-- `asked:` captures yes, the buffer path, patches 2 and 3 (and 1) yes or no, the Today brief yes or no (and the owner's rules paragraph, when given);
+- `asked:` captures yes, the buffer path, patches 2 and 3 (and 1) yes or no, the Today brief yes or no (and the owner's rules paragraph, when given), the write button yes, no or no answer, and its mode;
 - `did:` the note created and its filing-log line; the patches, by file;
 - `verify:` the first `intake +` line, the copy test's `placed → drop` line, the morning line seen;
 - `did:` for the Today brief, the `doctor` line, the dry run's project count and the first `built_at`;
+- `did:` for the write button, where the schema reader was found (or `paths.schema_reader`), whether PyYAML was installed on the owner's yes and the line that installed it, the `vault-write-check` line, the first write's filing-log line and the undo check;
 - the registry blocks added (the O7 addition, and the Today brief row when it is on);
-- `ruled: default 12`, one note, saying whether the Today brief is on.
+- `ruled: default 12`, one note, saying whether the Today brief is on; `ruled: default 16`, one note, saying whether the write button is on and in which mode (only when question 6 was asked).
 
 Tick `- [x] O7 intake` only when every check that applies passes. Next: the next `- [ ]` line under `## Stations`.

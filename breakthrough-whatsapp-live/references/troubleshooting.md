@@ -367,6 +367,52 @@ launchctl print gui/$(id -u)/$ILABEL | grep -E "state = |runs = "
 
 `"run": false` with a `why` names the switch that stopped it; `push: notify: not sent (<why>)` is the outlet ("Pushes are not arriving"). The job cannot be rendered or installed again, so a changed time or a broken script is not repaired: remove it with `wa_setup.py uninstall-launchd --intake --config "$LIVE/config.json"` and use the Today brief instead.
 
+## The write button is missing
+
+You switched on `today.write_mode` at station O7, and a card you pressed OK on shows no Write to vault (or Queue write) button.
+
+```sh
+"$PY" "$KIT/daemon/wa_setup.py" doctor --config "$LIVE/config.json" | grep -i "vault write"
+"$PY" "$KIT/daemon/wa_setup.py" vault-write-check --config "$LIVE/config.json"; echo "exit $?"
+curl -s "http://127.0.0.1:$PORT/api/today" | "$PY" -c 'import json, sys; print(json.load(sys.stdin).get("write"))'
+```
+
+First read the one line in the Today page's header: when the mode is on and the button cannot be used, it says why. `vault-write-check` prints the same reason with its code and exits 2; the board's answer carries it under `write`. The daemon checks again every ten minutes, so a fix shows within ten minutes, or at once after `wa_setup.py restart`.
+
+| Code | What is missing | Fix |
+|---|---|---|
+| `off` | `today.write_mode` is `off` | Station O7, question 6 |
+| `today_off` | `today.enabled` is false | Station O7, question 5: the button lives on the brief's cards |
+| `no_vault` | `paths.vault` is empty or not a folder | Point it at your vault root |
+| `no_doctrine` | `paths.doctrine` is not a file | Point it at your structure law |
+| `no_reader` | No `doctrine_schema.py` at `paths.schema_reader` or the two default places | Update or install my-second-brain, or set `paths.schema_reader` to your copy |
+| `reader_error` | The reader was found but did not import (the reason follows) | Usually a reader from an older my-second-brain: update it |
+| `no_yaml` | PyYAML does not import on the daemon's Python | `vault-write-check` prints the install line for your Python; run it in your own session on your yes, then restart |
+| `schema_error` | Your doctrine did not load through the reader (the reader's message follows) | Fix the doctrine the way the message says; the frontmatter guard reads the same law |
+| `no_filing_log` | The folder of `paths.filing_log` does not exist | Create the folder, or point the key at your filing log |
+| `no_backup_dir` | `<home>/vault-write-backups/` could not be created | Run `wa_setup.py init --config "$LIVE/config.json"`, which creates it 0700 |
+| `no_module` | The write module (`daemon/wa_vault_write.py`) cannot be imported: reported by `vault-write-check` and `doctor` themselves | Update the kit (`install/update.md`); the payload is incomplete |
+| `module_error` | The write module imported, but its availability check raised or returned nothing (the reason follows) | Run `"$PY" "$KIT/daemon/wa_vault_write.py" --selftest` and read its failing line; update the kit |
+
+Also: a card shows the button only in status `ok` (after your OK), and only for update, create and drop; a seed card says seeds are placed in your session; a daemon started with `--dry-run` shows no write.
+
+## A write was refused
+
+The card shows the reason for a few seconds; the row keeps it (`sqlite3 -readonly "$LIVE/state.sqlite" "select status, written_json from today_proposals where id like '<8 hex>%'"`), and the log line reads `today write: <id> refused: <code>`. Nothing was written: one refused check refuses the whole card, and a failure after the write restores the files from the backup; an entry placed before that failure keeps its placed line and gains a rollback line (`references/vault-proposals.md`, proposal g).
+
+- **Unavailable** (any code from the table above): the button's checks run again right before the write.
+- **`dry_run`**: the daemon runs with `--dry-run`, which never writes.
+- **`pin`, `rev` or `status`**: the request did not match the card the daemon holds (a stale page, a second tab, or a card already written or queued). A card you pressed OK on keeps the content you saw, so a reload and a fresh press write exactly that; a newer brief only records newer text on the row (`newer`), it never swaps the pinned content under you.
+- **An entry is placed elsewhere**: one of the card's intake entries was placed to another place in your session. The card is stale on that entry; settle it in the intake mode.
+- **`same_name`**: a create whose file name already exists somewhere in the vault. Look at that file: it is often the task the card should have updated.
+- **`quote_in_name`**: the new task's name would repeat someone else's words (a stretch of a message or a quoted entry). It keeps refusing until a run refreshes that conversation's pack; rename the task in your session instead.
+- **`bad_request`**: the press carried no id, rev or pin. A page loaded before the daemon was updated shows cards without a pin: reload the board. A card you pressed OK on before the update gets its pin at the first start of the new daemon.
+- **The schema check**: the rendered file did not pass your doctrine's task family (a required key, a status not in your list). The reason names it.
+- **The read back**: the file on disk did not match what was written (a sync tool or an editor changed it in between). The program restored the backup before it answered; press again when the file is quiet.
+- **Undo refused, changed since**: you or a tool edited the file after the write. Undo will not overwrite a newer edit; open the backup folder named in `written_json` and take back what you want by hand, in your session.
+
+In queue mode a refusal shows the same way after `wa_vault_write.py --apply-pending`, and the card goes back to OK.
+
 ## Cage breach
 
 A push `🚨 [WA live] ... cage breach: 载入了不该有的工具 <tools>` means a run loaded a tool outside Read, Glob and Grep (`TodoWrite` is tolerated). The run still happened; the tool list is the finding.
@@ -420,5 +466,5 @@ What this version does not do, so nobody hunts for a bug that is a boundary.
 - **A side stage should keep the key `parked`**: the judgment rules, the time rule and the person note writer honor `side: true` on another key, but `check-config` asks for a stage keyed `parked` while `stage_rules.parked_after_days` is above 0, and the board draws only `parked` as the gray side stage.
 - **Probing `claude` over ssh gives a false `Not logged in`**; every claude probe runs on the Mac itself.
 - **The circuit breaker holds only the daemon's own model calls.** An evening intake job kept from an earlier release is a separate launchd job: on an expired login or a reached limit its pre-sort fails on its own, outside the breaker.
-- **The Today brief writes nothing into the vault.** OK on a card is a note to your own session; placing happens in the intake mode. There is no button that writes a card into the vault.
+- **The Today brief writes nothing into the vault by default.** OK on a card is a note to your own session; placing happens in the intake mode. The write button exists only when you switched it on at station O7 and its checks pass; it never writes a seed card, and it never writes on its own, only on your press.
 - **Board search reads only what WhatsApp Desktop keeps on this Mac**: message text and file names, never voice transcripts or document text, and never status or broadcast chats.

@@ -77,7 +77,7 @@ Edit `live/topic-map.json`, the owner copy, with the Edit tool. Its example rule
 
 ### 4 · The cage
 
-`init` rendered `live/claude-settings.json`: every tool but Read, Glob and Grep denied, all hooks off, and 27 absolute Read deny rules for the push token, the config, the state database, other runs, the reader's working copies, the document text cache, the voice transcript cache, the `secrets/` folder, WhatsApp's own databases, SSH keys, the keychain and credential files (the full list: `references/privacy.md`, "The Read deny rules, and why"). Check it with the Verify rows below. The proof that a deny rule really blocks on this Mac is the canary in `references/pitfalls.md`, pit 10 (one model call, run in the terminal on this Mac, never over ssh); offer it. Once the daemon runs (after step 8), `echo '{"read_canary": true}' > "$LIVE/commands/probe-claude.json"` proves the same from launchd for the `secrets/` folder and the `transcripts-cache/` folder, using the two markers `init` wrote (one tiny model call per folder; K333, K351).
+`init` rendered `live/claude-settings.json`: every tool but Read, Glob and Grep denied, all hooks off, and 28 absolute Read deny rules for the push token, the config, the state database, other runs, the reader's working copies, the document text cache, the voice transcript cache, the `secrets/` folder, the backups of the Today page's optional write button (`vault-write-backups/`), WhatsApp's own databases, SSH keys, the keychain and credential files (the full list: `references/privacy.md`, "The Read deny rules, and why"). Check it with the Verify rows below. The proof that a deny rule really blocks on this Mac is the canary in `references/pitfalls.md`, pit 10 (one model call, run in the terminal on this Mac, never over ssh); offer it. Once the daemon runs (after step 8), `echo '{"read_canary": true}' > "$LIVE/commands/probe-claude.json"` proves the same from launchd for the `secrets/` folder, the `transcripts-cache/` folder and the `vault-write-backups/` folder, using the three markers `init` wrote (one tiny model call per folder; K333, K351, K396).
 
 ### 5 · The registry entry, before the install
 
@@ -213,7 +213,7 @@ Run each probe with the station's opening block in front of it, at the point its
    ```sh
    "$PY" -c 'import json,sys,pathlib; tm=json.load(open(sys.argv[1])); print([f for r in tm["rules"] for f in r["files"] if not (pathlib.Path(sys.argv[2])/f).exists()])' "$LIVE/topic-map.json" "<vault>"
    ```
-4. **The deny rules were rendered** (step 4). Pass: two equal numbers (`27 27` in this version: the template's `Read(/{...})` rules, then the rendered `Read(//...)` rules, counted in the JSON so the file's comment is not counted), then `0`.
+4. **The deny rules were rendered** (step 4). Pass: two equal numbers (`28 28` in this version: the template's `Read(/{...})` rules, then the rendered `Read(//...)` rules, counted in the JSON so the file's comment is not counted), then `0`.
    ```sh
    "$PY" -c 'import json,sys; n=lambda p, pre: sum(1 for r in json.load(open(p))["permissions"]["deny"] if r.startswith(pre)); print(n(sys.argv[1], "Read(/"), n(sys.argv[2], "Read(//"))' "$KIT/daemon/templates/claude-settings.json" "$LIVE/claude-settings.json"
    grep -cE '[{](LIVE_DIR|WA_HOME|HOME)[}]' "$LIVE/claude-settings.json"

@@ -428,6 +428,14 @@
   .tact .btn[disabled]{opacity:.5;cursor:progress}
   .tact input{flex:1 1 180px;min-width:0;height:36px;font:inherit;font-size:var(--f2);color:var(--ink);background:#fff;border:0;border-radius:var(--r1);padding:0 var(--s2);box-shadow:inset 0 0 0 1px var(--line);outline:none;-webkit-appearance:none;appearance:none}
   .tact input:focus{box-shadow:inset 0 0 0 1.5px var(--accent),0 0 0 3px var(--accent-soft)}
+  .tact .btn.wr{background:var(--accent-soft);color:var(--accent-ink)}
+  .tcard.s-written{box-shadow:inset 3px 0 0 var(--accent),var(--ring)}
+  .tcard.s-queued{box-shadow:inset 3px 0 0 var(--amber),var(--ring)}
+  .tcard.s-written .tst{color:var(--accent-ink)}
+  .tcard.s-queued .tst{color:var(--amber)}
+  .tn.n-write{color:var(--accent-ink)}
+  .tn.twerr{color:var(--red);font-weight:600}
+  .tbar.woff{background:var(--amber-bg);color:var(--amber)}
   details.trej{margin-top:var(--s4);border-top:1px solid var(--hair)}
   details.trej summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:var(--s2);padding:var(--s2) 0;font-size:var(--f1);font-weight:700;letter-spacing:.08em;color:var(--faint)}
   details.trej summary::-webkit-details-marker{display:none}
@@ -702,7 +710,17 @@ const TEXT = {
     cardNoDone: '记下了: 不用',
     cardUndone: '收回了, 又是待定',
     noteSavedToast: '备注存了',
-    cardStatusFailed: '这张卡已经不能按了 (可能刚被收起)'
+    cardStatusFailed: '这张卡已经不能按了 (可能刚被收起)',
+    st_queued: '排队写入', st_written: '已写进 vault',
+    cardWrite: '写进 vault', cardQueueWrite: '排队写入', cardWriteUndo: '撤回',
+    cardSeedNote: '新项目的种子在你自己的 session 里落地, 板子不写',
+    writeOff: s => '写入按钮现在不能用: ' + s,
+    cardWrittenDone: '写进 vault 了',
+    cardQueuedDone: '排进队了: 在你自己的 session 跑 --apply-pending 才写',
+    cardWriteUndoDone: '撤回了, 档案改回去了',
+    writeRefused: s => '没写成: ' + s,
+    writeRefDry: '试跑模式, 不写',
+    writeRefDisabled: '今日简报关着, 不写'
   },
   en: {
     loading: 'Loading…',
@@ -909,7 +927,17 @@ const TEXT = {
     cardNoDone: 'Noted: No',
     cardUndone: 'Taken back, waiting again',
     noteSavedToast: 'Note saved',
-    cardStatusFailed: 'This card can no longer be pressed (it may have just been retired)'
+    cardStatusFailed: 'This card can no longer be pressed (it may have just been retired)',
+    st_queued: 'queued to write', st_written: 'written to the vault',
+    cardWrite: 'Write to vault', cardQueueWrite: 'Queue write', cardWriteUndo: 'Undo',
+    cardSeedNote: 'Seeds are placed in your own session; the board does not write them',
+    writeOff: s => 'The write button is unavailable: ' + s,
+    cardWrittenDone: 'Written to the vault',
+    cardQueuedDone: 'Queued: it is written when your own session runs --apply-pending',
+    cardWriteUndoDone: 'Undone, the note is back as it was',
+    writeRefused: s => 'Not written: ' + s,
+    writeRefDry: 'Dry run, nothing is written',
+    writeRefDisabled: 'The Today brief is off, nothing is written'
   }
 };
 
@@ -947,6 +975,7 @@ const calDoneLocal = {};                 // jid -> {at, url, title}: shown as cr
 // Today brief (ui.features.today): view says what the middle pane shows; TD is the last GET /api/today answer
 let view = 'chat', TD = null, tdErr = '', tdSig = '', tdEditing = false;
 const tdNote = {};                       // card id -> note typed but not saved yet (survives a redraw)
+const tdWErr = {};                       // card id -> a write refusal shown inline for a few seconds
 const TR = {polling: false, building: false, timer: null, until: 0, before: '', err0: '', gaveUp: null, timedOut: false};
 // Load ordering: a board answer whose request started before a local change landed is dropped (it would undo the change on screen)
 let loadSeq = 0, shownSeq = 0, staleBefore = 0;
@@ -1005,7 +1034,7 @@ function setupUi(p){
     calendar: typeof ui.calendar === 'string' && ui.calendar ? ui.calendar : 'none',
     calendarLabel: ui.calendar_label ? String(ui.calendar_label) : '',
     features: {dossier: f.dossier === true, digest: f.digest !== false, today: f.today === true},   // intake and voice have no board element
-    today: {every: num((ui.today || {}).every_minutes, 0), gap: num((ui.today || {}).manual_min_gap_seconds, 0)},
+    today: {every: num((ui.today || {}).every_minutes, 0), gap: num((ui.today || {}).manual_min_gap_seconds, 0), write: writeOf((ui.today || {}).write)},
     ownerLabel: ui.owner_label ? String(ui.owner_label) : '',
     vaultName: ui.vault_name ? String(ui.vault_name) : '',
     contextDays: num(ui.context_days, 0), groupContextDays: num(ui.group_context_days, 0),
@@ -1456,10 +1485,20 @@ function renderMid(force){
   document.querySelectorAll('textarea.draft').forEach(autosize);
   mid.scrollTop = st0;
 }
-// ===== Today brief (read only proposals; the board never writes into the vault) =====
+// ===== Today brief (proposals; the board itself never writes into the vault) =====
 // GET /api/today: the brief JSON plus ok, empty, stale and status {enabled, building, building_since, last_built, last_error,
 // brain_down, every_minutes, manual_min_gap_seconds, dry_run}. POST /api/today/refresh, /decide {id, rev, action, note?},
 // /unassign {key, project}. A card is LIVE while its status is pending or ok.
+// The optional write button (ui.today.write {mode, available, code, reason}): only when available, on an ok card of kind
+// update, create or drop; the press sends {id, rev, pin} to /api/today/write (the daemon writes by program, or queues);
+// a written card offers /api/today/undo {id}. Mode on but not available: one header line says why, no button anywhere.
+function writeOf(w){
+  const o = w && typeof w === 'object' ? w : {};
+  const mode = ['direct', 'queue'].indexOf(o.mode) >= 0 ? o.mode : 'off';
+  return {mode: mode, available: mode !== 'off' && o.available === true, code: String(o.code || ''), reason: String(o.reason || '')};
+}
+function tdW(){ return (UI && UI.today && UI.today.write) || writeOf(null); }
+const WRITE_KINDS = ['update', 'create', 'drop'];
 function tdBlocks(){ return (TD && Array.isArray(TD.projects)) ? TD.projects : []; }
 function tdProps(){ const out = []; tdBlocks().forEach(b => (Array.isArray(b.props) ? b.props : []).forEach(p => out.push(p))); return out; }
 function tdLive(){ return tdProps().filter(p => p && (p.status === 'pending' || p.status === 'ok')).length; }
@@ -1556,14 +1595,20 @@ function cardHtml(p){
   const nw = p.newer;
   const newer = nw ? `<div class="tn tnewer">${esc(nw && typeof nw === 'object' && nw.now ? t('cardNewerNow', nw.now) : t('cardNewer'))}</div>` : '';
   const id = esc(p.id);
+  const W = tdW(), canWrite = W.available && WRITE_KINDS.indexOf(String(p.kind || '')) >= 0 && !!p.pin_hash;
+  const wnote = p.write_note ? `<div class="tn n-write" data-twnote="${esc(st)}">${esc(p.write_note)}</div>` : '';
+  const seedNote = (W.available && p.kind === 'seed' && live) ? `<div class="tn" data-tseed-note="1">${esc(t('cardSeedNote'))}</div>` : '';
+  const werr = tdWErr[p.id] ? `<div class="tn twerr" data-twerr="1" role="status">${esc(tdWErr[p.id])}</div>` : '';
   let act = '';
   if(st === 'pending') act = `<button type="button" class="btn ok" data-tdecide="ok" data-card-id="${id}">${esc(t('cardOk'))}</button><button type="button" class="btn" data-tdecide="no" data-card-id="${id}">${esc(t('cardNo'))}</button>`;
   else if(st === 'ok' || st === 'no') act = `<button type="button" class="btn" data-tdecide="pending" data-card-id="${id}">${esc(t('cardUndo'))}</button>`;
+  if(st === 'ok' && canWrite) act = `<button type="button" class="btn wr" data-twrite="${id}">${esc(W.mode === 'queue' ? t('cardQueueWrite') : t('cardWrite'))}</button>` + act;
+  if(st === 'written' && W.available) act = `<button type="button" class="btn" data-tundo="${id}">${esc(t('cardWriteUndo'))}</button>`;
   const noteVal = tdNote[p.id] !== undefined ? tdNote[p.id] : (p.note || '');
   const noteRow = (live || st === 'no') ? `<input type="text" maxlength="500" data-tnote="${id}" value="${esc(noteVal)}" placeholder="${esc(t('cardNotePh'))}" aria-label="${esc(t('cardNotePh'))}"><button type="button" class="btn" data-tdecide="note" data-card-id="${id}">${esc(t('cardNoteSave'))}</button>` : '';
   return `<article class="tcard s-${esc(st)}" data-card="${id}" data-rev="${esc(p.rev)}">
     <div class="tch"><span class="tkind">${esc(tdKindWord(p))}</span>${p.task ? `<span class="ttask">${esc(p.task)}</span>` : ''}<span class="tst">${esc(tdStatusWord(st))}</span></div>
-    ${p.now ? `<p class="tnow">${esc(p.now)}</p>` : ''}${fms}${newer}${notes}${evs}
+    ${p.now ? `<p class="tnow">${esc(p.now)}</p>` : ''}${fms}${newer}${notes}${wnote}${seedNote}${werr}${evs}
     ${act || noteRow ? `<div class="tact">${act}${noteRow}</div>` : ''}
   </article>`;
 }
@@ -1585,7 +1630,7 @@ function blockHtml(b){
 function renderToday(force){
   const mid = $('#mid');
   if(tdEditing && !force) return;   // a note is being typed: wait for save or blur
-  const sig = JSON.stringify([TD, tdErr, TR.building, TR.timedOut, UI.lang, uiSig, ((data && data.rows) || []).map(x => x.jid).join('|')]);
+  const sig = JSON.stringify([TD, tdErr, tdWErr, TR.building, TR.timedOut, UI.lang, uiSig, ((data && data.rows) || []).map(x => x.jid).join('|')]);
   if(sig === tdSig && !force) return;
   const st0 = midSig === 'today' ? mid.scrollTop : 0;
   tdSig = sig; midSig = 'today'; midJid = null;
@@ -1596,6 +1641,8 @@ function renderToday(force){
   if(tdErr) body += `<div class="tbar err">${esc(tdErr)}</div>`;
   const stl = (TD && TD.status) || {};
   if(!busy && stl.last_error) body += `<div class="tbar err">${esc(t('todayLastError', stl.last_error))}</div>`;
+  const W = tdW();
+  if(W.mode !== 'off' && !W.available) body += `<div class="tbar woff" data-write-off="1">${esc(t('writeOff', W.reason || W.code || '?'))}</div>`;
   if(!TD){ body += tdErr ? '' : `<div class="empty">${esc(t('todayLoading'))}</div>`; }
   else if(TD.empty){ body += `<div class="empty" data-today-empty="1">${esc(t('todayEmpty'))}</div>`; }
   else {
@@ -1627,7 +1674,10 @@ async function decideCard(id, action, btn){
   tdEditing = false;
   if(j && j.ok){
     if(action === 'note'){ p.note = body.note; delete tdNote[id]; toast(t('noteSavedToast')); }
-    else { p.status = action; toast(action === 'ok' ? t('cardOkDone') : (action === 'no' ? t('cardNoDone') : t('cardUndone'))); }
+    else {
+      if(j.current && typeof j.current === 'object') tdReplace(id, j.current); else p.status = action;   // current carries the pin of an OK
+      toast(action === 'ok' ? t('cardOkDone') : (action === 'no' ? t('cardNoDone') : t('cardUndone')));
+    }
     tdSig = ''; renderTodayBtn(); renderMid(true); loadToday(); return;
   }
   if(j && j.reason === 'rev' && j.current && typeof j.current === 'object'){
@@ -1637,6 +1687,37 @@ async function decideCard(id, action, btn){
   if(j && j.reason === 'disabled') toast(t('todayDisabled'), 2400);
   else if(j && j.reason === 'status'){ toast(t('cardStatusFailed'), 2600); loadToday(); }
   else toast((j && (j.error || j.reason)) || t('daemonMissed'), 2400);
+}
+// The write button and its undo: the answer re-renders the card (current); a refusal shows its reason on the card for 6 s
+function writeRefusalText(j){
+  if(!j) return t('daemonMissed');
+  // refusals arrive as {ok: false, reason: <code>, detail: <text in the board's language>}; the text wins when there is one
+  if(j.reason === 'dry_run') return t('writeRefDry');
+  if(j.reason === 'disabled') return t('writeRefDisabled');
+  return t('writeRefused', j.detail || j.reason || '?');
+}
+function showWriteErr(id, text){
+  tdWErr[id] = text; tdSig = ''; renderMid(true);
+  clearTimeout(showWriteErr['t' + id]);
+  showWriteErr['t' + id] = setTimeout(() => { delete tdWErr[id]; tdSig = ''; if(view === 'today') renderMid(true); }, 6000);
+}
+async function writeCard(id, btn, undo){
+  const p = tdFind(id); if(!p) return;
+  const body = undo ? {id: p.id} : {id: p.id, rev: p.rev, pin: p.pin_hash};
+  const card = btn && btn.closest('.tcard'); if(card) card.querySelectorAll('button').forEach(b => { b.disabled = true; });
+  let j = null;
+  try{
+    const res = await fetch(undo ? '/api/today/undo' : '/api/today/write', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    try{ j = await res.json(); }catch(e){}
+  }catch(e){ j = null; }
+  if(j && j.current && typeof j.current === 'object') tdReplace(id, j.current);
+  if(j && j.ok){
+    delete tdWErr[id];
+    if(!(j.current && typeof j.current === 'object')) p.status = undo ? 'ok' : (tdW().mode === 'queue' ? 'queued' : 'written');
+    toast(undo ? t('cardWriteUndoDone') : (tdW().mode === 'queue' ? t('cardQueuedDone') : t('cardWrittenDone')), 2400);
+    tdSig = ''; renderTodayBtn(); renderMid(true); loadToday(); return;
+  }
+  showWriteErr(id, writeRefusalText(j));
 }
 async function unassignSource(key, project){
   let j = null;
@@ -1877,6 +1958,8 @@ document.addEventListener('click', async ev => {
   if(ev.target.closest('#tback')){ closeToday(); return; }
   if(ev.target.closest('#trefresh')){ ev.preventDefault(); await refreshToday(); return; }
   const td = ev.target.closest('[data-tdecide]'); if(td){ ev.preventDefault(); if(!td.disabled) await decideCard(td.dataset.cardId, td.dataset.tdecide, td); return; }
+  const tw = ev.target.closest('[data-twrite]'); if(tw){ ev.preventDefault(); if(!tw.disabled) await writeCard(tw.dataset.twrite, tw, false); return; }
+  const tu = ev.target.closest('[data-tundo]'); if(tu){ ev.preventDefault(); if(!tu.disabled) await writeCard(tu.dataset.tundo, tu, true); return; }
   const tun = ev.target.closest('[data-unassign]'); if(tun){ ev.preventDefault(); await unassignSource(tun.dataset.unassign, tun.dataset.project); return; }
   const tj = ev.target.closest('[data-tjid]'); if(tj){ ev.preventDefault(); select(tj.dataset.tjid); return; }
   if(ev.target.closest('[data-done]')){ await dismissJid(ev.target.closest('[data-done]').dataset.done); return; }

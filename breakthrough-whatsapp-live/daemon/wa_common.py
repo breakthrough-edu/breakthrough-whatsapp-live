@@ -131,7 +131,7 @@ DEFAULTS = {
     "bin": {"claude": "<auto>", "python": "/usr/bin/python3", "node": "<auto>", "ffmpeg": "<auto>",
             "whisperkit": "<auto>", "lark_cli": "<auto>", "path_env": "<auto>"},
     "paths": {"home": DEFAULT_HOME, "live_dir": "<home>/live", "vault": "", "people_dir": "", "doctrine": "",
-              "person_playbook": "", "intake_buffer": "", "filing_log": "", "decisions_dir": "",
+              "person_playbook": "", "intake_buffer": "", "filing_log": "", "decisions_dir": "", "schema_reader": "",
               "reader_dir": "<payload>", "dossier_dir": "<payload>"},
     "vocab": {"worlds": DEFAULT_WORLDS, "stages": DEFAULT_STAGES, "park_from": DEFAULT_PARK_FROM,
               "priorities": DEFAULT_PRIORITIES, "business_context": ""},
@@ -153,7 +153,7 @@ DEFAULTS = {
     "digest": {"enabled": True, "at": "08:00", "push": True},
     "intake": {"enabled": False, "buffer": "", "rules_file": "", "verify_quotes": True},
     "today": {"enabled": False, "model": "claude-sonnet-5", "every_minutes": 30, "manual_min_gap_seconds": 60,
-              "max_reads": 6, "quote_min_chars": 6, "extra_rules": ""},
+              "max_reads": 6, "quote_min_chars": 6, "extra_rules": "", "write_mode": "off"},
     "voice": {"enabled": True, "examples": 12, "pairs": "<live>/voice-pairs.jsonl"},
     "backfill": {"days": 30, "min_msgs": 10, "batch_size": 10, "respect_gate": True, "max_turns": 20, "max_images": 4},
     "launchd": {"label": "local.whatsapp-live", "intake_label": "local.whatsapp-live.intake"},
@@ -167,6 +167,8 @@ _TEXT_KEYS = {"vocab", "group_policies", "my_names", "owner_label", "owner_marke
 # load warning, so the daemon never starts the Today brief on a value it cannot use; check-config names it as an error.
 TODAY_RANGES = {"every_minutes": (5, 1440), "manual_min_gap_seconds": (10, 3600), "max_reads": (0, 20), "quote_min_chars": (2, 40)}
 TODAY_EXTRA_RULES_MAX = 2000
+# today.write_mode: off (no write button), direct (a press writes at once), queue (a press queues, the owner's session applies)
+TODAY_WRITE_MODES = ("off", "direct", "queue")
 
 BIN_NAMES = {"claude": "claude", "python": "python3", "node": "node", "ffmpeg": "ffmpeg",
              "whisperkit": "whisperkit-cli", "lark_cli": "lark-cli", "tailscale": "tailscale", "sqlite3": "sqlite3"}
@@ -270,6 +272,9 @@ def _coerce_today(t, warnings):
     elif len(er) > TODAY_EXTRA_RULES_MAX:
         warnings.append("today.extra_rules is longer than %d characters; the default (empty) was used" % TODAY_EXTRA_RULES_MAX)
         t["extra_rules"] = d["extra_rules"]
+    if t.get("write_mode") not in TODAY_WRITE_MODES:
+        warnings.append("today.write_mode should be off, direct or queue; the default (off) was used")
+        t["write_mode"] = d["write_mode"]
 
 
 def apply_defaults(cfg, config_path=None):
@@ -329,7 +334,8 @@ def apply_defaults(cfg, config_path=None):
     if vault:
         vroot = Path(os.path.expanduser(resolve(vault)))
         for key, default in (("doctrine", "99_Meta/structure-doctrine.md"), ("filing_log", "99_Meta/filing-log.md"),
-                             ("people_dir", ""), ("person_playbook", ""), ("decisions_dir", ""), ("intake_buffer", "")):
+                             ("people_dir", ""), ("person_playbook", ""), ("decisions_dir", ""), ("intake_buffer", ""),
+                             ("schema_reader", "")):
             val = str(paths.get(key) or "").strip()
             if not val and default:
                 val = default
@@ -1405,8 +1411,10 @@ def _selftest():
         check(cfg["edit_watch"] == {"enabled": True, "minutes": 30} and cfg["intake"]["verify_quotes"] is True,
               "defaults: edit_watch on for 30 minutes, intake.verify_quotes on")
         check(cfg["today"] == {"enabled": False, "model": "claude-sonnet-5", "every_minutes": 30, "manual_min_gap_seconds": 60,
-                               "max_reads": 6, "quote_min_chars": 6, "extra_rules": ""},
-              "defaults: the today block (off, claude-sonnet-5, every 30 minutes, gap 60 s, 6 reads, quotes from 6, no extra rules)")
+                               "max_reads": 6, "quote_min_chars": 6, "extra_rules": "", "write_mode": "off"},
+              "defaults: the today block (off, claude-sonnet-5, every 30 minutes, gap 60 s, 6 reads, quotes from 6, no extra rules, "
+              "write mode off)")
+        check(cfg["paths"].get("schema_reader") == "", "defaults: paths.schema_reader is empty (the two default places are looked at)")
         check("evening_push" not in DEFAULTS["intake"] and "evening_at" not in DEFAULTS["intake"]
               and "evening_push" not in cfg["intake"] and "evening_at" not in cfg["intake"],
               "defaults: the retired intake.evening_push and intake.evening_at are not filled")
@@ -1414,8 +1422,9 @@ def _selftest():
         check(kept["intake"].get("evening_push") is True and kept["intake"].get("evening_at") == "21:15",
               "a config that still sets the retired evening keys keeps their values (a kept evening job reads them)")
         bad_t = apply_defaults({"today": {"enabled": "yes", "model": " ", "every_minutes": 2, "manual_min_gap_seconds": 99999,
-                                          "max_reads": 2.5, "quote_min_chars": True, "extra_rules": "x" * 2001}}, None)
-        check(bad_t["today"] == DEFAULTS["today"] and sum(1 for w in bad_t["_load_warnings"] if w.startswith("today.")) == 7,
+                                          "max_reads": 2.5, "quote_min_chars": True, "extra_rules": "x" * 2001,
+                                          "write_mode": "always"}}, None)
+        check(bad_t["today"] == DEFAULTS["today"] and sum(1 for w in bad_t["_load_warnings"] if w.startswith("today.")) == 8,
               "today: every bad value goes back to its default with one warning each, no exception")
         good_t = apply_defaults({"today": {"enabled": True, "every_minutes": 1440.0, "max_reads": 0, "quote_min_chars": 40,
                                            "manual_min_gap_seconds": 10, "extra_rules": "~/not a path <home>"}}, None)
@@ -1423,6 +1432,23 @@ def _selftest():
               and good_t["today"]["max_reads"] == 0 and good_t["today"]["enabled"] is True
               and good_t["today"]["extra_rules"] == "~/not a path <home>" and not good_t["_load_warnings"],
               "today: edge values kept, extra_rules is owner text (no placeholder or ~ resolved)")
+        for wm in ("direct", "queue"):
+            wm_cfg = apply_defaults({"today": {"write_mode": wm}}, None)
+            check(wm_cfg["today"]["write_mode"] == wm and not wm_cfg["_load_warnings"],
+                  "today.write_mode %s is kept without a warning" % wm)
+        wm_bad = apply_defaults({"today": {"write_mode": "Direct"}}, None)
+        check(wm_bad["today"]["write_mode"] == "off" and any(w.startswith("today.write_mode") for w in wm_bad["_load_warnings"]),
+              "today.write_mode outside off, direct, queue is read as off with a warning")
+        sr_vault = tmp / "sr-vault"
+        sr_abs = apply_defaults({"paths": {"schema_reader": "~/sr/doctrine_schema.py"}}, None)
+        sr_rel = apply_defaults({"paths": {"vault": str(sr_vault), "schema_reader": "tools/doctrine_schema.py"}}, None)
+        sr_ph = apply_defaults({"paths": {"vault": str(sr_vault), "schema_reader": "<vault>/x/doctrine_schema.py"}}, None)
+        sr_none = apply_defaults({"paths": {"vault": str(sr_vault)}}, None)
+        check(sr_abs["paths"].get("schema_reader") == os.path.expanduser("~/sr/doctrine_schema.py")
+              and sr_rel["paths"].get("schema_reader") == str(sr_vault / "tools" / "doctrine_schema.py")
+              and sr_ph["paths"].get("schema_reader") == str(sr_vault / "x" / "doctrine_schema.py")
+              and sr_none["paths"].get("schema_reader") == "",
+              "paths.schema_reader: ~ expanded, relative to paths.vault, <vault> resolved, empty stays empty")
         notdict = apply_defaults({"today": "on"}, None)
         check(notdict["today"] == DEFAULTS["today"] and any(w.startswith("today ") for w in notdict["_load_warnings"]),
               "today: not an object means the defaults, with a warning")

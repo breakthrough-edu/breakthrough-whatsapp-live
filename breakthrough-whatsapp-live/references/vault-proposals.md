@@ -20,6 +20,7 @@ WhatsApp Live writes into your second-brain vault in a few places, and your vaul
 | d · three command-base patches | Stations C4 and O7 | Placing intake entries and dictating note updates means running commands by hand |
 | e · the three playbook folders | Station C0 offers them; C4 requires person-dossier | Code falls back to the payload seeds with a warning on every read, and nothing accumulates in Recent runs |
 | f · registry entries | Stations C2, C4, O7 | Resident jobs nobody can stop correctly or prove healthy |
+| g · what the daemon may write (the write button) | Station O7, question 6, optional | The Today brief stays proposal only, and placing happens in your session |
 
 ## a · The `person` family in section 8
 
@@ -393,11 +394,11 @@ It belongs to the morning entry only, like the other doorbells in that list.
 Mac: <the Mac's name> · plist ~/Library/LaunchAgents/<label>.plist · node <bin.node> runs <home>/launchd/run.mjs, which runs python with <KIT>/daemon/wa_live.py
 code: wa_live.py sha256 <shasum -a 256 of it> · VERSION <x> · recorded <date> (refreshed after every update)
 read: WhatsApp Desktop's database and media, read only, checked every doorbell.poll_seconds · <live>/config.json · the vault notes topic-map.json points at, and person notes of people named in a chat · <live>/facts.json · the reader's working copies under <home>/runs-work/
-write: <home>/ (runs-work, transcripts-cache, doc-text-cache, prewarm) · <live>/ (state.sqlite, summaries.md, runs/, digest/, logs, calendar/) · the vault: recent lines in existing person notes, intake buffer entries when intake.enabled is true, filing-log lines (the person note writer below adds whole notes) · pushes through notify.outlet · never WhatsApp, never a message sent
+write: <home>/ (runs-work, transcripts-cache, doc-text-cache, prewarm) · <live>/ (state.sqlite, summaries.md, runs/, digest/, logs, calendar/) · the vault: recent lines in existing person notes, intake buffer entries when intake.enabled is true, filing-log lines (the person note writer below adds whole notes), and only with the write button on (proposal g) task files from cards the owner pressed OK on, backed up first under <home>/vault-write-backups/ · pushes through notify.outlet · never WhatsApp, never a message sent
 limits: debounce 45 s quiet, 180 s at most · 2 runs at once, 1 per conversation · 600 s per run, 1 retry, 12 turns · tools Read, Glob, Grep with the cage check · Read denied on secrets · board on 127.0.0.1:<port> only
 stop: wa_setup.py uninstall-launchd --config <live>/config.json boots the job out, then stops any python of this install left running, disables it and removes its plist, so it stays stopped after a reboot (install-launchd brings it back); a raw launchctl bootout is not a stop, it can leave a frozen python holding the board port · remove the board's tailscale serve rule · leaves no half state: bursts in progress run again at the next start, and a person note job cut off is marked failed at start
 proof: curl -s http://127.0.0.1:<port>/health answers 200 with a body starting ok (503 stalled means the main loop is frozen) · after a restart, wa_setup.py restart ends with proof: one daemon · launchctl print gui/$(id -u)/<label> shows state = running · a test message produces a new row in the runs table and a row on the board · the morning digest arrives (silence is not proof)
-rollback: wa_setup.py uninstall-launchd, then remove <home> (install/uninstall.md) · a person note restored from <live>/dossier-backups/<note>/ · an intake entry removed by hand
+rollback: wa_setup.py uninstall-launchd, then remove <home> (install/uninstall.md) · a person note restored from <live>/dossier-backups/<note>/ · an intake entry removed by hand · a board write taken back with the card's Undo (proposal g)
 ```
 
 **Only when the daemon runs on a setup token** (`install/C2-daemon.md`, step 12), the daemon's entry carries a seventh cell, and its `stop` and `rollback` cells gain one clause each:
@@ -439,4 +440,68 @@ Under the daemon's entry, one short block per station, as it connects: what it n
 | O6 digest | The state database, `<live>/` | `<live>/digest/`, one push | `digest.enabled`, `digest.push` | The digest arrives, even on a quiet day |
 | O7 intake | The brain's captures | The intake buffer | `intake.enabled` | `wa_intake.py --count-open` rises after a run with a capture |
 | O7 Today brief | Today's judgments, the open entries, the briefs and task lists of candidate projects, at most `today.max_reads` vault files, the owner's replies after a judgment | Three tables in `state.sqlite`, `<live>/today/`, a run folder per build; nothing in the vault; one extra model call at most every `today.every_minutes`, only when its inputs changed (today's judgments, the open intake entries, a source you took out of a project, or your replies in conversations its cards cover) | `today.enabled` | `curl -s http://127.0.0.1:<port>/api/today` shows `built_at` today and `empty` false |
+| O7 write button | The card you pressed OK on, the task file it names, your doctrine through your schema reader | One task file per press (update or create, by program), its backup under `<home>/vault-write-backups/`, intake entries placed by key, one filing-log line; queue mode: `<live>/today/pending-writes.json` only | `today.write_mode: off` | `wa_setup.py vault-write-check` answers available; after a press, the filing-log line and the backup folder exist |
 | O9 backfill | Chats the gate passes | Summaries in the state database | Only runs when started | `wa_backfill.py --list` shows no skipped groups |
+
+## g · What the daemon may write
+
+The write button of the Today page (station O7, question 6). It is off by default (`today.write_mode: "off"`), and while it is off nothing on this page happens: the brief proposes, and placing happens in your own session through the intake mode (proposal d, Patch 2). This proposal touches no file at install: it says what the daemon writes once you switch the button on, so that you can rule on it with the whole shape in front of you.
+
+**When the button exists.** Only when every one of these holds, checked when the daemon starts, every ten minutes, and again right before every write: `today.write_mode` is `direct` or `queue`; `today.enabled` is true; `paths.vault` is a folder and `paths.doctrine` a file; your my-second-brain copy of `scripts/doctrine_schema.py` is found (`paths.schema_reader`, or the two default places in `references/config-reference.md`) and imports; PyYAML imports on the daemon's Python; your doctrine loads through that reader; the folder of `paths.filing_log` exists; and `<home>/vault-write-backups/` exists or can be made (0700). One missing piece hides the button, and the Today page header says which in one line. `wa_setup.py vault-write-check --config <live>/config.json` prints the same answer. Why fail closed: a background program that writes into your notes must be able to prove what it changed and give it back, and a check it cannot run is a proof it cannot give, so it writes nothing rather than half.
+
+**Who writes, and from what.** The module `daemon/wa_vault_write.py`, by program. ⛔ The model never writes: every byte that lands in the vault is rendered by the program from the card you pressed OK on (its proposal line, the frontmatter values it names, the task, the project, the entry keys and the conversations it cites). The evidence lines folded under a card are never written. Before anything is rendered, the program takes other people's words out ("Other people's words", below).
+
+**The kinds.**
+
+| Card | What the daemon does |
+|---|---|
+| `update` | Edits one existing task file in a project's `Tasks/` folder, in the shape below |
+| `create` | Writes one new task file, in the shape below |
+| `drop` | Touches no note: it places the card's intake entries `→ drop` in the buffer |
+| `seed` | Nothing, ever. The board says seeds are placed in your own session: opening a project is a filing decision your doctrine makes, with you |
+
+Nothing else, whoever asks.
+
+**An update, exactly.**
+
+- Frontmatter: only the keys the card names among `status`, `due`, `waiting_on` and `priority`, and a `status` only when it is in your doctrine's task status list. A key that is already there is replaced on its own line; a missing one is added just before the closing `---`. `updated` is set to today when your doctrine's task family has that key. Any other key the card names is dropped, and the write result says so.
+- Body: everything above the new section stays byte for byte as it was. One section is appended at the end:
+
+```
+## <YYYY-MM-DD> · WhatsApp Live
+
+<the card's proposal line, after the scrub>
+<one source line: the conversations by their labels and the intake entry keys, never a quote>
+```
+
+**A create, exactly.** `<the project folder>/Tasks/<slug>.md`, the slug made from the card's task name (or the first 60 characters of its proposal line). Frontmatter: the keys your doctrine's task family requires, with `cb: task`, `status` set to the first status in your doctrine's list (`not-started` when that is in it), `created: <today>`, plus the card's allowed keys as above. Body: `# <the task name>`, then the same appended section as an update.
+
+**What refuses the whole card.** One refused check refuses everything: no file is written before every check has passed, and a failure after the write restores the files from the backup. The one thing that is not rolled back is placing: an intake entry already marked placed when a later step fails keeps its placed line and gains a rollback line under it, so you can see it and place it again in your session. The reason shows on the card for a few seconds and in `written_json` on its row:
+
+- the button is unavailable (the codes in `references/troubleshooting.md`, "The write button is missing");
+- the card is not in status `ok` (you have not pressed OK, or it was written already), or its revision moved;
+- its content changed since you pressed OK: the program pins a hash of the card at your press and writes only when the card still hashes the same;
+- one of its intake entries is already placed somewhere else;
+- for a create, a file of that name already exists anywhere in the vault (folders whose name starts with `.` are skipped);
+- the rendered file fails your doctrine's own schema check for the task family, read through your schema reader (the same law your frontmatter guard reads);
+- the file read back after the write does not match what was written: the program restores it from the backup before it answers.
+
+**After a write.** Every intake entry the card cites is placed by key, `→ <the task's vault relative path>` (`→ drop` for a drop), so the intake mode no longer lists it. One line is appended to your filing log. The card shows when it was written and an Undo button.
+
+**Backups and undo.** Before any change, the program writes `<home>/vault-write-backups/<card id>/<time>/manifest.json` and a copy of every file it will touch. Undo restores a file only when its current md5 still equals the md5 recorded right after the write; when you edited the file since, undo refuses ("changed since") and changes nothing, because your edit is newer than the backup. A created file is moved into that backup folder, never deleted. Undo appends one undo line under each intake entry the write had placed; the entries stay placed, and what happens to them is yours to rule in your session. Undo also appends a filing-log line. The backups are never cleaned by the kit, and every run is denied reading them (`references/privacy.md`).
+
+**The filing-log line.** One line per write and one per undo, in your filing log's own shape (date · what · where · why): the date, `board write` or `board undo` with the kind, the task file's vault relative path, the card's id and version, the rule that allowed it, and the backup folder. Never a word of the task text or of a message.
+
+**Queue mode.** With `today.write_mode: "queue"`, a press on the board only appends `{pid, rev, pin, at}` to `<live>/today/pending-writes.json` and marks the card queued; the daemon never applies a queued write. Your own session applies them, with the same checks:
+
+```sh
+"$PY" "$KIT/daemon/wa_vault_write.py" --apply-pending --config "$LIVE/config.json"
+```
+
+A refused one goes back to `ok` on the board with its reason; the file is emptied of every entry applied or refused.
+
+**Other people's words.** Before rendering, the program compares the card's text with the quotes of every intake entry the card cites (🗣 🎙 📄 ≈ lines) and with the messages of the conversations it cites, from the newest runs' packs when they are still there. Any stretch that repeats them, `today.quote_min_chars` (6) CJK characters or 4 Latin words, is replaced with `(…)`. The rule is the one the brief already uses for your replies, in one place. A task file in your vault is a note you keep, sync and search; a person's words in it read as something they said in your notes, so they stay in the conversation and the buffer, where they are marked.
+
+**The intake mode.** Patch 2 needs no change: a written card's entries are placed already, and the placed zone shows where they went. An undo line under a placed entry is a write that was taken back; the intake mode reads it like any placed entry, and you decide whether the entry goes somewhere else.
+
+**Declined.** `today.write_mode` stays `off`. Nothing changes: the brief proposes and your session places.

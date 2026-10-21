@@ -58,7 +58,7 @@ try:
 except Exception:  # without the intake module there are no entries and every quote is a gist
     WI = None
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 PAYLOAD = Path(__file__).resolve().parent.parent
 # the my-second-brain product names a business wing folder with this suffix (its scaffold and its deck find projects this way)
 BUSINESS_WING = "-Business-Wing"
@@ -66,8 +66,12 @@ _TEST_WING = "04_Crumb" + BUSINESS_WING          # the invented school of the se
 
 KINDS = ("update", "create", "seed", "drop")
 STATS = ("move", "ball", "stuck", "quiet", "seed")
-STATUSES = ("pending", "ok", "no", "superseded", "expired")
+STATUSES = ("pending", "ok", "no", "superseded", "expired", "queued", "written")
 LIVE = ("pending", "ok")
+# a card the write button has taken: queued waits for the owner's session, written is in the vault (undo brings it back to ok)
+WRITE_HELD = ("queued", "written")
+WRITE_MODES = ("off", "direct", "queue")
+WRITE_KINDS = ("update", "create", "drop")
 DECIDE_ACTIONS = ("ok", "no", "note", "pending")
 UNASSIGNED = "unassigned"
 EXPIRE_DAYS = 7
@@ -95,6 +99,7 @@ DEFAULTS = {
     "max_reads": 6,
     "quote_min_chars": 6,
     "extra_rules": "",
+    "write_mode": "off",
 }
 _RANGES = {"every_minutes": (5, 1440), "manual_min_gap_seconds": (10, 3600), "max_reads": (0, 20), "quote_min_chars": (2, 40)}
 EXTRA_RULES_MAX = 2000
@@ -103,7 +108,13 @@ L = {
     "zh": {
         "kind": {"update": "改任务", "create": "新任务", "seed": "新 Project 种子", "drop": "不用归"},
         "stat": {"move": "推进", "ball": "等你", "stuck": "卡住", "quiet": "顺利", "seed": "还没 Project 在管"},
-        "status": {"pending": "等你按", "ok": "好", "no": "不用", "superseded": "收起", "expired": "过期"},
+        "status": {"pending": "等你按", "ok": "好", "no": "不用", "superseded": "收起", "expired": "过期",
+                   "queued": "排队写入", "written": "已写进 vault"},
+        "write_written": "%s 写进 vault: %s",
+        "write_written_none": "%s 写进 vault (没有改档, 只把条目归位)",
+        "write_undone": "%s 撤回了; 条目还是归着的, 要不要改回在你自己的 session 定",
+        "write_queued": "排队中: 在你自己的 session 跑 --apply-pending 才会写进去",
+        "write_refused": "上次写入没写成: %s",
         "unassigned": "还没对上 Project",
         "ok": "好", "no": "不用",
         "gist": "大意: ",
@@ -143,7 +154,13 @@ L = {
     "en": {
         "kind": {"update": "update task", "create": "new task", "seed": "project seed", "drop": "no placing needed"},
         "stat": {"move": "moving", "ball": "your move", "stuck": "stuck", "quiet": "quiet", "seed": "no project yet"},
-        "status": {"pending": "waiting for you", "ok": "OK", "no": "No", "superseded": "retired", "expired": "expired"},
+        "status": {"pending": "waiting for you", "ok": "OK", "no": "No", "superseded": "retired", "expired": "expired",
+                   "queued": "queued to write", "written": "written to the vault"},
+        "write_written": "written to the vault %s: %s",
+        "write_written_none": "written %s (no note changed, the entries were placed)",
+        "write_undone": "undone %s; the entries stay placed, your own session decides whether to reopen them",
+        "write_queued": "queued: it is written when your own session runs --apply-pending",
+        "write_refused": "the last write did not happen: %s",
         "unassigned": "not matched to a project",
         "ok": "OK", "no": "No",
         "gist": "gist: ",
@@ -338,6 +355,8 @@ def tcfg(cfg):
             out[k] = v
     if isinstance(raw.get("extra_rules"), str):
         out["extra_rules"] = raw["extra_rules"][:EXTRA_RULES_MAX]
+    if raw.get("write_mode") in WRITE_MODES:
+        out["write_mode"] = raw["write_mode"]
     return out
 
 
@@ -348,7 +367,8 @@ _COLS = {
                         ("kind", "TEXT"), ("task", "TEXT"), ("now", "TEXT"), ("fm_set", "TEXT"), ("ev", "TEXT"),
                         ("jids", "TEXT"), ("entry_keys", "TEXT"), ("status", "TEXT"), ("note", "TEXT"),
                         ("newer_json", "TEXT"), ("decided_at", "TEXT"), ("updated_at", "TEXT"), ("retired_json", "TEXT"),
-                        ("placed_json", "TEXT"), ("replied_json", "TEXT"), ("close_json", "TEXT")),
+                        ("placed_json", "TEXT"), ("replied_json", "TEXT"), ("close_json", "TEXT"),
+                        ("written_json", "TEXT"), ("pin_hash", "TEXT")),
     "today_assign": (("key", "TEXT"), ("project", "TEXT"), ("kind", "TEXT"), ("since", "TEXT")),
 }
 
@@ -361,7 +381,7 @@ def ensure_tables(conn):
     conn.execute("CREATE TABLE IF NOT EXISTS today_proposals(id TEXT PRIMARY KEY, date TEXT, rev INTEGER, content_hash TEXT, "
                  "project TEXT, kind TEXT, task TEXT, now TEXT, fm_set TEXT, ev TEXT, jids TEXT, entry_keys TEXT, status TEXT, "
                  "note TEXT, newer_json TEXT, decided_at TEXT, updated_at TEXT, retired_json TEXT, placed_json TEXT, "
-                 "replied_json TEXT, close_json TEXT)")
+                 "replied_json TEXT, close_json TEXT, written_json TEXT, pin_hash TEXT)")
     conn.execute("CREATE TABLE IF NOT EXISTS today_assign(key TEXT, project TEXT, kind TEXT, since TEXT, "
                  "PRIMARY KEY (key, project, kind))")
     for table, cols in _COLS.items():
@@ -369,6 +389,10 @@ def ensure_tables(conn):
         for col, typ in cols:
             if col not in have:
                 conn.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, col, typ))
+    # a card the owner pressed OK on before the write button existed carries no pin: give it the pin of the
+    # content it holds, once, so the Write button can act on it (the content is what the owner saw at OK)
+    for r in _rows(conn, "SELECT * FROM today_proposals WHERE status='ok' AND (pin_hash IS NULL OR pin_hash='')"):
+        conn.execute("UPDATE today_proposals SET pin_hash=? WHERE id=?", (row_hash(r), r["id"]))
     conn.commit()
 
 
@@ -1551,6 +1575,18 @@ def _chash(p):
     return _sha1(_jd(_content(p)))
 
 
+def _row_content(row):
+    """A stored row in the shape _chash reads (its JSON columns parsed)."""
+    r = row or {}
+    return {"kind": r.get("kind"), "task": r.get("task") or "", "now": r.get("now") or "",
+            "fm_set": _jl(r.get("fm_set"), {}) or {}, "entry_keys": _jl(r.get("entry_keys"), []) or []}
+
+
+def row_hash(row):
+    """The content hash of a stored row, the one the board pins when the owner presses OK."""
+    return _chash(_row_content(row))
+
+
 def _get_card(conn, pid):
     r = _rows(conn, "SELECT * FROM today_proposals WHERE id=?", (pid,))
     return r[0] if r else None
@@ -1590,7 +1626,7 @@ def upsert_proposal(conn, day, p, now_s):
                      "content_hash=?, rev=rev+1, updated_at=? WHERE id=?", vals + (now_s, pid))
         conn.commit()
         return pid, "updated"
-    if st in ("ok", "no"):
+    if st in ("ok", "no") + WRITE_HELD:
         newer = _jl(row.get("newer_json"), {}) or {}
         if row.get("content_hash") == h or newer.get("hash") == h:
             return pid, "same"
@@ -1661,6 +1697,9 @@ def public_prop(row, day, lang):
         pnote = (T["placed_note"] % (len(placed["keys"]), to)) if to else (T["placed_note_none"] % len(placed["keys"]))
     rat = str(replied.get("at") or "") if isinstance(replied, dict) else ""
     kind = str(r.get("kind") or "")
+    written = _jl(r.get("written_json"), None)
+    written = written if isinstance(written, dict) else None
+    wnote = _write_note(r.get("status"), written, T)
     return {"id": r.get("id"), "rev": r.get("rev"), "status": r.get("status"), "date": r.get("date"), "age": age, "kind": kind,
             "kindL": T["kind"].get(kind, kind), "task": r.get("task") or "", "now": r.get("now") or "",
             "fm_set": _jl(r.get("fm_set"), {}), "ev": ev, "jids": _jl(r.get("jids"), []), "entry_keys": _jl(r.get("entry_keys"), []),
@@ -1670,7 +1709,29 @@ def public_prop(row, day, lang):
             "replied_note": (T["replied_note"] % rat.replace("T", " ")[5:16]) if rat else "",
             "close_note": (T["close_note"] % (close.get("why_text") or "-")) if isinstance(close, dict) else "",
             "retired_why": why, "retired_at": str(ret.get("at") or "") if isinstance(ret, dict) else "",
-            "project": r.get("project") or ""}
+            "project": r.get("project") or "", "pin_hash": r.get("pin_hash") or "", "written": written, "write_note": wnote}
+
+
+def _short_at(s):
+    return str(s or "").replace("T", " ")[5:16]
+
+
+def _write_note(status, written, T):
+    """The card's write line in the owner's language: queued, written (when and which files), undone, or refused."""
+    if status == "queued":
+        return T["write_queued"]
+    if not written:
+        return ""
+    if status == "written":
+        files = [str(f.get("path") or "") for f in (written.get("files") or []) if isinstance(f, dict) and f.get("path")]
+        if files:
+            return T["write_written"] % (_short_at(written.get("at")), ", ".join(files))
+        return T["write_written_none"] % _short_at(written.get("at"))
+    if written.get("undone_at"):
+        return T["write_undone"] % _short_at(written.get("undone_at"))
+    if written.get("refused"):
+        return T["write_refused"] % _cut(written.get("refused"), 200)
+    return ""
 
 
 def decide(conn, pid, rev, action, note=None, now=None, lang="zh"):
@@ -1695,7 +1756,10 @@ def decide(conn, pid, rev, action, note=None, now=None, lang="zh"):
         conn.execute("UPDATE today_proposals SET note=?, decided_at=?, updated_at=? WHERE id=?",
                      (_cut(note, NOTE_MAX), at, at, row["id"]))
     else:
-        conn.execute("UPDATE today_proposals SET status=?, decided_at=?, updated_at=? WHERE id=?", (action, at, at, row["id"]))
+        # OK pins the content the owner saw: the write button sends this hash back and a moved card is refused whole
+        pin = row_hash(row) if action == "ok" else None
+        conn.execute("UPDATE today_proposals SET status=?, pin_hash=?, decided_at=?, updated_at=? WHERE id=?",
+                     (action, pin, at, at, row["id"]))
     conn.commit()
     return {"ok": True, "current": public_prop(_get_card(conn, row["id"]), day, lang)}
 
@@ -1711,7 +1775,8 @@ def unassign(conn, key, project, now=None):
 
 def retire_placed(conn, buffer_path, now=None):
     """Cards whose intake entries were placed in the owner's session: every key placed or gone → superseded; some,
-    card pending → those keys removed, rev+1; some, card ok → placed_json only. Cards without entry keys untouched."""
+    card pending → those keys removed, rev+1; some, card ok → placed_json only. Cards without entry keys untouched.
+    A queued or written card is never touched: the write module placed (or will place) its entries to its own target."""
     out = {"superseded": [], "trimmed": [], "placed": [], "skipped": ""}
     if WI is None:
         out["skipped"] = "intake module not loaded"
@@ -1727,7 +1792,8 @@ def retire_placed(conn, buffer_path, now=None):
     if not text.strip():
         out["skipped"] = "buffer empty"
         return out
-    cards = [c for c in _live_rows(conn) if _jl(c.get("entry_keys"), [])]
+    cards = [c for c in _rows(conn, "SELECT * FROM today_proposals ORDER BY date, id")
+             if c.get("status") in LIVE and _jl(c.get("entry_keys"), [])]
     allk = sorted(set(k for c in cards for k in _jl(c.get("entry_keys"), [])))
     if not allk:
         return out
@@ -1739,7 +1805,10 @@ def retire_placed(conn, buffer_path, now=None):
     at = _iso(_now_dt(now))
     for c in cards:
         keys = _jl(c.get("entry_keys"), [])
-        gone = [k for k in keys if (cls.get(k) or ("missing", ""))[0] != "open"]
+        own = str(c.get("task") or "").strip() if c.get("kind") in ("update", "create") else ""
+        # an entry placed to this card's own target (a write the owner undid leaves it so) is not "elsewhere"
+        gone = [k for k in keys if (cls.get(k) or ("missing", ""))[0] != "open"
+                and not (own and (cls.get(k) or ("", ""))[0] == "placed" and str((cls.get(k) or ("", ""))[1] or "").strip() == own)]
         if not gone:
             continue
         to = []
@@ -2041,8 +2110,11 @@ def _block_cards(conn, bid, day, lang):
     rows = _rows(conn, "SELECT * FROM today_proposals WHERE project=? ORDER BY date, id", (bid,))
     out = []
     for r in rows:
-        last = max(str(r.get("decided_at") or "")[:10], _ts(r.get("updated_at"))[:10], str(r.get("date") or "")[:10])
-        if r.get("status") in LIVE or last == day:
+        w = _jl(r.get("written_json"), {}) or {}
+        w = w if isinstance(w, dict) else {}
+        last = max(str(r.get("decided_at") or "")[:10], _ts(r.get("updated_at"))[:10], str(r.get("date") or "")[:10],
+                   str(w.get("at") or "")[:10], str(w.get("undone_at") or "")[:10])
+        if r.get("status") in LIVE or r.get("status") == "queued" or last == day:
             out.append(public_prop(r, day, lang))
     return out
 
@@ -2268,10 +2340,25 @@ def _refresh(conn, brief, day, lang):
     return b
 
 
-def api_payload(conn, day, lang="zh"):
+def write_view(state, mode=None):
+    """The board's view of the write button from the daemon's availability dict ({ok, code, reason, mode, ...}):
+    {mode, available, code, reason}. No dict, or mode off → not available. Never more than these four keys."""
+    s = state if isinstance(state, dict) else {}
+    m = mode if mode in WRITE_MODES else s.get("mode")
+    m = m if m in WRITE_MODES else "off"
+    ok = bool(s.get("ok")) and m != "off"
+    code = str(s.get("code") or ("off" if m == "off" else "unknown"))
+    if m == "off":
+        code = "off"
+    return {"mode": m, "available": ok, "code": "ok" if ok else code, "reason": "" if (ok or m == "off") else _cut(s.get("reason"), 300)}
+
+
+def api_payload(conn, day, lang="zh", write=None):
     """What GET /api/today answers: today's latest brief (cards refreshed from the table), else yesterday's marked
-    stale, else an empty answer. Always ok; never the seen block."""
+    stale, else an empty answer. Always ok; never the seen block. `write` is the daemon's availability dict (computed at
+    start and every ten minutes), shown as {mode, available, code, reason}."""
     lang = _lang(lang)
+    wv = write_view(write)
     j = _latest_brief_json(conn, day)
     stale = False
     if j is None:
@@ -2279,11 +2366,12 @@ def api_payload(conn, day, lang="zh"):
         j = _latest_brief_json(conn, y)
         stale = j is not None
     if j is None:
-        return {"ok": True, "date": day, "empty": True, "stale": True, "projects": [], "one": [], "short": "", "tail": []}
+        return {"ok": True, "date": day, "empty": True, "stale": True, "projects": [], "one": [], "short": "", "tail": [], "write": wv}
     b = _refresh(conn, j, day, lang)
     b["ok"] = True
     b["stale"] = stale
     b["empty"] = not (b.get("projects") or b.get("one") or b.get("short"))
+    b["write"] = wv
     return b
 
 
@@ -2547,12 +2635,35 @@ def _selftest():
 
         # ---- config defaults
         if WC is not None and isinstance((WC.DEFAULTS or {}).get("today"), dict):
-            check(WC.DEFAULTS["today"] == DEFAULTS, "defaults agree with wa_common.DEFAULTS['today']")
+            wct = dict(WC.DEFAULTS["today"])
+            if "write_mode" not in wct:   # the common defaults gain the key in the same release (another lane); say so, compare the rest
+                print("  note wa_common.DEFAULTS['today'] has no write_mode yet; compared without it")
+                wct["write_mode"] = DEFAULTS["write_mode"]
+            check(wct == DEFAULTS, "defaults agree with wa_common.DEFAULTS['today']")
         else:
             check(WC is not None, "defaults: wa_common has no today block yet (lane D adds it); module defaults stand alone")
         t = tcfg({"today": {"enabled": True, "every_minutes": 2, "max_reads": 7, "model": "", "extra_rules": "x" * 3000}})
         check(t["enabled"] is True and t["every_minutes"] == 30 and t["max_reads"] == 7 and t["model"] == DEFAULTS["model"]
               and len(t["extra_rules"]) == EXTRA_RULES_MAX, "tcfg: out of range back to default, empty model default, rules cut")
+        check(tcfg({})["write_mode"] == "off" and tcfg({"today": {"write_mode": "direct"}})["write_mode"] == "direct"
+              and tcfg({"today": {"write_mode": "queue"}})["write_mode"] == "queue"
+              and tcfg({"today": {"write_mode": "always"}})["write_mode"] == "off" and tcfg({"today": {"write_mode": True}})["write_mode"] == "off",
+              "tcfg write_mode: off by default, direct and queue kept, anything else off")
+        # an old (v1.3.0) table gains the two write columns; its rows stay
+        oconn = sqlite3.connect(":memory:")
+        oconn.execute("CREATE TABLE today_proposals(id TEXT PRIMARY KEY, date TEXT, rev INTEGER, content_hash TEXT, project TEXT, kind TEXT, "
+                      "task TEXT, now TEXT, fm_set TEXT, ev TEXT, jids TEXT, entry_keys TEXT, status TEXT, note TEXT, newer_json TEXT, "
+                      "decided_at TEXT, updated_at TEXT, retired_json TEXT, placed_json TEXT, replied_json TEXT, close_json TEXT)")
+        oconn.execute("INSERT INTO today_proposals(id, rev, status, now) VALUES ('0ld0ld0ld0ld0ld0', 3, 'ok', 'kept')")
+        oconn.execute("INSERT INTO today_proposals(id, rev, status, now) VALUES ('0ld0ld0ld0ld0ld1', 1, 'pending', 'open')")
+        oconn.commit()
+        ensure_tables(oconn)
+        ocols = [r[1] for r in oconn.execute("PRAGMA table_info(today_proposals)")]
+        orow = oconn.execute("SELECT rev, status, now, written_json, pin_hash FROM today_proposals ORDER BY id").fetchall()
+        opin = row_hash(_get_card(oconn, "0ld0ld0ld0ld0ld0"))
+        check("written_json" in ocols and "pin_hash" in ocols and orow == [(3, "ok", "kept", None, opin), (1, "pending", "open", None, None)],
+              "ensure_tables: an old table gains written_json and pin_hash, its rows stay; an OK card without a pin gets the pin of its content, a pending one none")
+        oconn.close()
 
         # ---- a synthetic vault in the product's shape (an invented baking school and a personal project)
         V = tmp / "vault"
@@ -3150,6 +3261,92 @@ def _selftest():
         check("task [[Run-X]]" in public_prop(x, day, "en")["retired_note"]
               and "1 of its entries were placed in decision" == public_prop(z, day, "en")["placed_note"], "public_prop: placed notes")
 
+        # ---- the write button's state on a card: pin at OK, queued and written held, notes in both languages
+        wp = {"project": "Run/W", "kind": "update", "task": "Order-Flour.md", "now": "order two sacks", "fm_set": {"status": "in-progress"},
+              "entry_keys": [ks[3]], "jids": [], "ev": []}
+        cw = upsert_proposal(rconn, day, wp, day + "T12:00:00")[0]
+        dok = decide(rconn, cw, 1, "ok", now=day + "T12:01:00", lang="en")
+        wrow = _get_card(rconn, cw)
+        check(dok["ok"] and wrow["pin_hash"] == row_hash(wrow) == _chash(wp) == wrow["content_hash"] and dok["current"]["pin_hash"] == wrow["pin_hash"],
+              "decide ok pins the content hash on the row; public_prop exposes pin_hash")
+        decide(rconn, cw, 1, "pending", lang="en")
+        p_back = _get_card(rconn, cw)["pin_hash"]
+        decide(rconn, cw, 1, "ok", lang="en")
+        decide(rconn, cw, 1, "no", lang="en")
+        p_no = _get_card(rconn, cw)["pin_hash"]
+        decide(rconn, cw, 1, "pending", lang="en")
+        decide(rconn, cw, 1, "ok", lang="en")
+        check(p_back is None and p_no is None and _get_card(rconn, cw)["pin_hash"] == row_hash(wrow),
+              "taking OK back or pressing No clears the pin; OK again pins it again")
+        wj = {"at": day + "T12:05:00", "mode": "direct", "files": [{"path": "Run/W/Tasks/Order-Flour.md", "md5_before": "a", "md5_after": "b"}],
+              "manifest": "m", "placed": [ks[3]], "created": False}
+        rconn.execute("UPDATE today_proposals SET status='written', written_json=? WHERE id=?", (_jd(wj), cw))
+        rconn.commit()
+        wpub = public_prop(_get_card(rconn, cw), day, "en")
+        wpub_zh = public_prop(_get_card(rconn, cw), day, "zh")
+        check(wpub["written"] == wj and wpub["write_note"] == "written to the vault %s: Run/W/Tasks/Order-Flour.md" % _short_at(wj["at"])
+              and wpub_zh["write_note"].endswith("写进 vault: Run/W/Tasks/Order-Flour.md"),
+              "public_prop: a written card carries written and the written note (en and zh)")
+        a_held = upsert_proposal(rconn, day, dict(wp, now="order three sacks"), day + "T12:10:00")[1]
+        held = _get_card(rconn, cw)
+        check(a_held == "newer" and held["status"] == "written" and held["now"] == "order two sacks" and held["rev"] == 1
+              and (_jl(held["newer_json"], {}) or {}).get("now") == "order three sacks",
+              "upsert: a written card is left alone, newer content goes to newer_json")
+        qp = dict(wp, task="Book-Oven-Repair.md", entry_keys=[], now="book the repair")
+        cq = upsert_proposal(rconn, day, qp, day + "T12:00:00")[0]
+        d3 = (dt.date.today() - dt.timedelta(days=3)).isoformat()
+        rconn.execute("UPDATE today_proposals SET status='queued', date=?, updated_at=? WHERE id=?", (d3, d3 + "T12:00:00", cq))
+        rconn.commit()
+        a_q = upsert_proposal(rconn, day, dict(qp, now="book it today"), day + "T12:10:00")[1]
+        qrow = _get_card(rconn, cq)
+        check(a_q == "newer" and qrow["status"] == "queued" and qrow["now"] == "book the repair", "upsert: a queued card is left alone like ok")
+        check(public_prop(qrow, day, "en")["write_note"].startswith("queued:") and public_prop(qrow, day, "zh")["write_note"].startswith("排队中"),
+              "public_prop: the queued note (en and zh)")
+        shown = [p["id"] for p in _block_cards(rconn, "Run/W", day, "en")]
+        check(cq in shown and cw in shown, "the board block keeps a queued card from an older day and today's written card")
+        und = dict(wj, undone_at=day + "T12:20:00")
+        rconn.execute("UPDATE today_proposals SET status='ok', written_json=? WHERE id=?", (_jd(und), cw))
+        rconn.commit()
+        unote = public_prop(_get_card(rconn, cw), day, "en")["write_note"]
+        rconn.execute("UPDATE today_proposals SET written_json=? WHERE id=?", (_jd({"refused": "pin"}), cw))
+        rconn.commit()
+        fnote = public_prop(_get_card(rconn, cw), day, "zh")["write_note"]
+        check(unote.startswith("undone ") and fnote == "上次写入没写成: pin", "public_prop: undone and refused notes")
+        check(all(L[lg]["status"].get(s) for lg in ("zh", "en") for s in ("queued", "written")), "status labels for queued and written in both languages")
+        rconn.execute("UPDATE today_proposals SET status='written', written_json=? WHERE id=?", (_jd(wj), cw))
+        rconn.commit()
+        if WI is not None:
+            WI.mark_placed_by_key(rbuf, ks[3], "task [[Order-Flour]]")
+            rr3 = retire_placed(rconn, rbuf, now=day + "T12:30:00")
+            check(_get_card(rconn, cw)["status"] == "written" and cw not in rr3["superseded"],
+                  "retire: a written card is never retired (its entries are placed to its own target)")
+            # the owner undid that write: the card is ok again and its entry stays placed to the card's own task
+            rtxt = rbuf.read_text(encoding="utf-8")
+            rtxt = rtxt.replace("## 已归\n", "### %s · [wa] · Person 9 (无档) · item 9\n- 🗣 10-21 09:09「words number 9」\n- 我这边: 待归位\n"
+                                "- 机器猜: (work · 钱) 无\n- 深挖: `dossier.py prepare --name Person 9`\n- 状态: open\n\n## 已归\n" % day, 1)
+            rbuf.write_text(rtxt, encoding="utf-8")
+            k9 = [e["key"] for e in WI.list_open(rbuf) if "item 9" in (e.get("heading") or e.get("title") or "")]
+            k9 = k9[0] if k9 else [e["key"] for e in WI.list_open(rbuf)][-1]
+            wp2 = {"project": "Run/W2", "kind": "update", "task": "Run/W2/Tasks/Order-Sugar.md", "now": "order sugar", "fm_set": {},
+                   "entry_keys": [k9], "jids": [], "ev": []}
+            cw2 = upsert_proposal(rconn, day, wp2, day + "T12:31:00")[0]
+            decide(rconn, cw2, 1, "ok", now=day + "T12:31:30", lang="en")
+            rconn.execute("UPDATE today_proposals SET written_json=? WHERE id=?", (_jd({"at": day + "T12:32:00", "undone_at": day + "T12:33:00"}), cw2))
+            rconn.commit()
+            WI.mark_placed_by_key(rbuf, k9, "Run/W2/Tasks/Order-Sugar.md")
+            rr4 = retire_placed(rconn, rbuf, now=day + "T12:34:00")
+            w2 = _get_card(rconn, cw2)
+            check(w2["status"] == "ok" and cw2 not in rr4["superseded"] and not _jl(w2.get("placed_json"), None),
+                  "retire: an entry placed to the card's own task (a write the owner undid) does not retire the card")
+            wp3 = {"project": "Run/W3", "kind": "update", "task": "Run/W3/Tasks/Other.md", "now": "other", "fm_set": {},
+                   "entry_keys": [k9], "jids": [], "ev": []}
+            cw3 = upsert_proposal(rconn, day, wp3, day + "T12:35:00")[0]
+            rr5 = retire_placed(rconn, rbuf, now=day + "T12:36:00")
+            check(_get_card(rconn, cw3)["status"] == "superseded" and cw3 in rr5["superseded"],
+                  "retire: the same entry placed to another card's task still retires that other card")
+        else:
+            check(False, "retire: a written card is never retired (needs wa_intake)")
+
         # ---- apply_close on an ok card, expire
         apply_close(rconn, [{"id": cz, "why_text": "done in chat"}])
         z = _get_card(rconn, cz)
@@ -3175,8 +3372,18 @@ def _selftest():
         sp = api_payload(conn, tomorrow, "en")
         ep = api_payload(sqlite3.connect(":memory:"), day, "zh")
         check(sp["stale"] and not sp["empty"] and sp["date"] == day, "api_payload: yesterday's brief marked stale")
-        check(ep == {"ok": True, "date": day, "empty": True, "stale": True, "projects": [], "one": [], "short": "", "tail": []},
+        off_w = {"mode": "off", "available": False, "code": "off", "reason": ""}
+        check(ep == {"ok": True, "date": day, "empty": True, "stale": True, "projects": [], "one": [], "short": "", "tail": [], "write": off_w},
               "api_payload: empty answer without any brief")
+        av_ok = {"ok": True, "code": "ok", "reason": "", "schema_reader": "/x/doctrine_schema.py", "yaml": True, "mode": "direct"}
+        av_no = {"ok": False, "code": "no_yaml", "reason": "PyYAML is missing", "schema_reader": "/x", "yaml": False, "mode": "queue"}
+        w_ok = api_payload(conn, day, "en", write=av_ok)["write"]
+        w_no = api_payload(conn, day, "en", write=av_no)["write"]
+        w_off = api_payload(conn, day, "en", write=dict(av_ok, mode="off"))["write"]
+        check(w_ok == {"mode": "direct", "available": True, "code": "ok", "reason": ""}
+              and w_no == {"mode": "queue", "available": False, "code": "no_yaml", "reason": "PyYAML is missing"}
+              and w_off == off_w and api_payload(conn, day, "en")["write"] == off_w,
+              "api_payload: write {mode, available, code, reason} from the daemon's availability (no paths, no flags)")
 
         # ---- fixtures
         fx = tmp / "fixtures"

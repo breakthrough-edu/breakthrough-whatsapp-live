@@ -16,6 +16,8 @@ Every key named here is described in `references/config-reference.md`. Why the d
 
 v1.3.0 adds no interface. The board's Today brief reads the vault through the same paths every other feature uses (`paths.vault`, `paths.doctrine`, `live/topic-map.json`), and reads the WhatsApp database only through the daemon, read only, like the rest of the daemon; it calls no facts source, second source, calendar or outlet of its own (a failed build is one `error` push, below).
 
+v1.4.0 adds no interface either. The Today page's optional write button checks what it writes with the owner's own my-second-brain schema reader (`scripts/doctrine_schema.py`, `paths.schema_reader`), a file of that product read in place and never copied into this kit, so the owner's law and the kit's check can never drift apart.
+
 ## Before the probes
 
 ```sh

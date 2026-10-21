@@ -6,7 +6,7 @@ confirmed_by_owner: false
 references: []
 tags: []
 ---
-<!-- seed: breakthrough-whatsapp-live playbooks/whatsapp-live-triage/whatsapp-live-triage-playbook.md v1.2.0 -->
+<!-- seed: breakthrough-whatsapp-live playbooks/whatsapp-live-triage/whatsapp-live-triage-playbook.md v1.3.0 -->
 
 # Playbook: 给 personal WhatsApp 装一个实时分诊 daemon
 
@@ -79,7 +79,9 @@ tags: []
 
     你拍的规矩一条一份进 Decisions 房 (照 Command Base skill 的「log a decision」, 落档前先查现行的决定有没有冲突); ⛔ 不写进任何 skill 的 SKILL.md, skill 只当指针。我们默认这样, 因为 skill 每次 `npx skills update` 会被整个换掉, 而且往 SKILL.md 追加拍板会越长越大、越长越漂。项目 brief 加 handoff, 让下一场接得上。
 
-11. **归位前先读板上的卡** (开了今日简报 `today.enabled` 才有这一步): intake 模式列清单时用 `wa_intake.py --list-open --with-brief http://127.0.0.1:<board.port>/api/today`, 每条进料底下印着板子对它的提议 (哪个项目、更新哪张 task 或开新的、你在板上按了好还是不用、你的备注)。先读卡, 再一条一条提议归位; 卡是起点, 不是答案, 落不落、落哪里照旧由你一条一条点头。理由: 进料是单一一次判断看到的一句话, 卡是把当天几条对话和那个项目现有的 task 放在一起看过的, 两边一起读, 才不会把同一件事归成两张 task, 也不会漏掉 task 已经写着的期限; 可是卡也是机器写的, 所以它只能当起点。归位用 key (`--mark-placed-key`), 卡在一分钟内自己收起; 没有进料的卡 (只从对话来的) 处理完用 `--settle-card <id> --rev <n> --to "<落到哪>" --with-brief <同一个网址>` 收掉, 被拒说 `rev` 就是卡变了, 重列一次再读。简报只提议, 不写 vault, 也不推播。
+11. **归位前先读板上的卡** (开了今日简报 `today.enabled` 才有这一步): intake 模式列清单时用 `wa_intake.py --list-open --with-brief http://127.0.0.1:<board.port>/api/today`, 每条进料底下印着板子对它的提议 (哪个项目、更新哪张 task 或开新的、你在板上按了好还是不用、你的备注)。先读卡, 再一条一条提议归位; 卡是起点, 不是答案, 落不落、落哪里照旧由你一条一条点头。理由: 进料是单一一次判断看到的一句话, 卡是把当天几条对话和那个项目现有的 task 放在一起看过的, 两边一起读, 才不会把同一件事归成两张 task, 也不会漏掉 task 已经写着的期限; 可是卡也是机器写的, 所以它只能当起点。归位用 key (`--mark-placed-key`), 卡在一分钟内自己收起; 没有进料的卡 (只从对话来的) 处理完用 `--settle-card <id> --rev <n> --to "<落到哪>" --with-brief <同一个网址>` 收掉, 被拒说 `rev` 就是卡变了, 重列一次再读。简报只提议, 也不推播; 写进 vault 只有第 12 条那个写入钮, 而且要你自己开。
+
+12. **按了好之后, 板上有写入钮就从板上写, 没有就照旧在 session 里归位** (O7 第 6 题开了 `today.write_mode` 才有这颗钮): 卡按了好, 上面会多一颗「写进 vault」(queue 模式是「排队写入」)。按下去, 程序照这张卡把那一张 task 写好 (update 只改卡上点名的几个档头值、在档尾加一段当天的; create 开一张新的 task, 档头照你宪法要的), 卡引用的进料照 key 归到那张 task, filing-log 记一行, 写之前先备份。写错了按「撤回」, 档案回到写之前的样子; 你后来自己改过那个档, 撤回会拒绝, 不盖掉你的字。seed 卡 (还没有的项目) 永远不从板上写, 开项目照旧在你的 session 里做。钮不在 (没开、或页首那一行说缺了什么), 就照第 11 条在 session 里归位。理由: 一个在背景里往你笔记写东西的程序, 必须证明得出它改了什么, 也还得回去, 所以它只写你按过的那张卡、由程序写不由模型写、钉住你按下那一刻看到的内容 (卡之后变了就整张拒写)、写前备份、写完读回来核对; 少了任何一样, 撤回就只是猜。别人的原话也不会进 task: 跟卡引用的进料或讯息重叠的字, 写之前就换成 `(…)`。
 
 ## 不建议的路, 与原因
 

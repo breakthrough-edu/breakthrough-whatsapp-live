@@ -9,7 +9,7 @@ WhatsApp Live reads private messages that other people sent you. This page says,
 - **Excerpts of conversations do leave the Mac, to Anthropic.** Every judgment, person note and nightly pull is a Claude Code run, and the messages it reads travel with it, under the terms of the account Claude Code is logged in with.
 - **Pushes leave through the outlet you choose.** With Telegram they pass through Telegram's servers.
 - **The board never leaves the Mac.** It listens on `127.0.0.1` and your phone reaches it over your tailnet. It has no login.
-- **Your vault receives other people's words** in person notes and intake entries. Your vault may sync and be indexed. Each writer has its own switch. The board's Today brief reads the vault and writes nothing into it.
+- **Your vault receives other people's words** in person notes and intake entries. Your vault may sync and be indexed. Each writer has its own switch. The board's Today brief reads the vault and, unless you switch on its write button at station O7, writes nothing into it; with the button on, a card you pressed OK on is written into its task file by program, with other people's words taken out.
 - **The nightly backup is a plain, unencrypted copy** of the daemon's state in the folder you pick.
 
 ## What data exists, and where
@@ -22,9 +22,10 @@ WhatsApp Live reads private messages that other people sent you. This page says,
 |---|---|
 | `~/Library/Group Containers/group.net.whatsapp.WhatsApp.shared/` | WhatsApp Desktop's own database and media: every message and file the app has synced. The kit opens it read only and never writes to it. |
 | `<home>/runs-work/<key>/`, `<home>/prewarm/` | The reader's working copies: snapshots of the database files taken for a read, plus the reading packs built from them. Full chat history, one copy per working folder. The kit does not delete these (`references/troubleshooting.md`). |
-| `<home>/transcripts-cache/` | Text of every transcribed voice note, and a second `deny-canary.txt` written by `init` for the deny probe. |
+| `<home>/transcripts-cache/` | Text of every transcribed voice note, and a second `deny-canary.txt` written by `init` for the deny probe (the third sits in `<home>/vault-write-backups/`). |
 | `<home>/doc-text-cache/` | Text of the documents people sent (Word, Excel, PowerPoint, RTF, ODT, Pages), converted on this Mac for the reading packs ("The document text cache", below). |
-| `<home>/secrets/` | `deny-canary.txt`, a random marker with no secret in it, written by `init` for the deny probe (a second one sits in `<home>/transcripts-cache/`); and only when you chose the optional setup token, `claude-bot.env`, the token itself (0600) ("The setup token file", below). |
+| `<home>/secrets/` | `deny-canary.txt`, a random marker with no secret in it, written by `init` for the deny probe (the second and third sit in `<home>/transcripts-cache/` and `<home>/vault-write-backups/`); and only when you chose the optional setup token, `claude-bot.env`, the token itself (0600) ("The setup token file", below). |
+| `<home>/vault-write-backups/<card id>/<time>/` | Only with the write button on: a `manifest.json` and a copy of every task file before the board wrote it (your own task text). Never cleaned by the kit; every run is denied reading it. |
 | `<home>/bin/claude-bot` | Only with the setup token: a short wrapper that loads the token file and runs `claude`. It holds the file's path, never the token. |
 | `<home>/config.json` | The reader's config: your phone, your names, ignored chats, whisper settings. |
 | `<home>/brain-cwd/` | Empty on purpose: the working folder of every headless run. |
@@ -38,7 +39,7 @@ WhatsApp Live reads private messages that other people sent you. This page says,
 | `<live>/runs/<run>/` | For each run: the full prompt (conversation pack, voice transcripts, candidate notes), the model's raw output stream and its judgment. The most complete record on the Mac. Never backed up, never cleaned by the kit. |
 | `<live>/dossier-backups/<note>/` | The last three versions of each person note (`dossier.backups_keep`). |
 | `<live>/digest/` | Each morning digest: names and short situation lines. |
-| `<live>/today/<date>.json` | With the Today brief on: the latest brief of that day (project names, the brain's gist lines, the cards with their evidence lines), and `stats.json` (counts only) when you ask for it. |
+| `<live>/today/<date>.json` | With the Today brief on: the latest brief of that day (project names, the brain's gist lines, the cards with their evidence lines), and `stats.json` (counts only) when you ask for it. With the write button in queue mode, `pending-writes.json`: card ids, revisions, hashes and times, no text. |
 | `<live>/calendar/<key>.ics` | With `calendar.destination: ics`: event title, date, place, note, and the person's name and phone. |
 | `<live>/wa_live.log`, `<live>/stderr.log` | The operational log. It can carry conversation names and the opening words of messages that passed the gate. |
 
@@ -50,7 +51,8 @@ The daemon sets `umask 077` when it starts, so every file it and the programs it
 |---|---|
 | Person notes (`paths.people_dir`) | What the model wrote about each person from their messages (who they are, what they want, where things stand, how to talk to them), the person's own words quoted where the person-dossier playbook asks for them, a recent block of short lines, and front matter with their WhatsApp id and phone. |
 | Intake buffer (`intake.buffer`) | Each entry names the person, one line of what to do, one quote of up to 200 characters (marked 🗣 when the program found it word for word in the message, ≈ when it is the brain's gist), and the machine's guess at where it belongs. A correction entry (✏️) also holds the words a message had before the person edited it. |
-| Filing log (`paths.filing_log`) | One line per placed note, naming the note. |
+| Task files (a project's `Tasks/`) | Only with the write button on: the frontmatter values and the one dated section a card you pressed OK on names (its proposal line, the conversations by label, the entry keys), rendered by program; other people's words taken out first. |
+| Filing log (`paths.filing_log`) | One line per placed note, naming the note. With the write button on, one line per board write and per undo: the date, the kind, the task file's path, the card's id and its backup folder; never task text or message words. |
 | Decisions (`paths.decisions_dir`) | Your rulings on the defaults. No conversation content. |
 | Playbook folders | Method text, and a table of outputs listed by address. |
 | Your machine registry note | Labels, paths, stop commands. |
@@ -120,12 +122,13 @@ The brain's tools are Read, Glob and Grep, and those tools can look anywhere the
 | `<home>/runs-work/**`, `<home>/prewarm/**` | The reader's working copies: database snapshots and reading packs of every chat. |
 | `<home>/config.json` | The reader config: your phone and names. |
 | `<home>/secrets/**` | The optional setup token (`claude-bot.env`): with it, anyone can use your Claude account. Also the deny probe's marker, which proves this rule holds. |
+| `<home>/vault-write-backups/**` | Copies of your task files from before each board write: a run needs nothing from them, and what a write changed is the owner's to read, not the brain's. |
 | `<home>/doc-text-cache/**` | Text of documents people sent in every chat: a run needs only its own chat's, which its pack already holds. |
 | `<home>/transcripts-cache/**` | Text of the voice notes of every chat: a run needs only its own chat's, and those transcripts already reach it inside its pack. Also the second deny probe marker, which proves this rule holds. |
 | `~/Library/Group Containers/group.net.whatsapp.WhatsApp.shared/*.sqlite*` | WhatsApp Desktop's own databases: every message on the Mac. The brain reads its chat through the pack instead. |
 | `~/.ssh/**`, `~/Library/Keychains/**`, `~/.config/**/credentials*`, `~/.aws/**`, `~/.netrc`, `~/.npmrc`, `~/.gnupg/**`, `~/.docker/config.json`, `~/.claude/.credentials.json` | Keys and credentials that open other machines and accounts. Nothing the brain does needs them. |
 
-Each rule is written as `Read(//<absolute path without its leading slash>)`, 27 in all (`daemon/templates/claude-settings.json` is the list). This form blocks the Read tool under `claude -p --settings`; the canary probe in `references/pitfalls.md`, pit 10, confirms it on your own Mac.
+Each rule is written as `Read(//<absolute path without its leading slash>)`, 28 in all (`daemon/templates/claude-settings.json` is the list). This form blocks the Read tool under `claude -p --settings`; the canary probe in `references/pitfalls.md`, pit 10, confirms it on your own Mac.
 
 What the rules leave readable, on purpose: your vault (the brain opens the notes the topic map and its lookup point at), WhatsApp's media under `Message/Media/` (the images and files a pack lists), and the rest of `live/` (`summaries.md`, the prompts, the topic map, `seeds.json`, `commands/`, `calendar/`). A rule you add to `live/claude-settings.json` counts as an owner edit (`seed-status` reports it, `install/update.md` carries it over); afterwards run one test judgment to confirm it still completes.
 
@@ -157,6 +160,7 @@ Only when the owner chose the optional setup token at station C2 (`install/C2-da
 | Recent line from a group speaker | The speaker's own words, up to 90 characters, with the group's name | The recent block of that speaker's existing note | See below |
 | Recent line from the second source | One line about what the person has been saying | The recent block of a note carrying that source's id key (`second_source.id_key`) | `second_source.enabled: false` |
 | Person note body | The model's account of the person, with their own words quoted where the playbook asks; quotes are checked against the pack | The note | `dossier.enabled: false` |
+| The board's write button | A card's proposal line and frontmatter values, rendered by program; stretches that repeat a cited quote or message replaced with `(…)`; no quote | The task file the card names | `today.write_mode: off` |
 
 **Recent lines.** Every recent line goes through one writer, `Dossier.append_recent`, which only adds to notes that already exist and already carry the recent block (between `<!-- wa-live:begin` and `<!-- wa-live:end -->`); it never creates a note, and it writes nothing while `dossier.enabled` is false or the daemon runs with `--dry-run`. A switch is only as good as every writer honoring it, so prove it on your own install before relying on it: take `md5 -q <that person's note>`, let one of that person's chats run, and compare. Stopping the daemon always stops them.
 
@@ -173,9 +177,19 @@ Only while `today.enabled` is true (station O7).
 - **What it reads.** Today's judgments of the conversations that moved, the open entries of the intake buffer, the brief note and task list of each project a source may belong to (found from your vault's own folders and doctrine, `paths.vault` and `paths.doctrine`), one line per other active project, and at most `today.max_reads` (6) vault files the run opens itself. It also reads your own replies after a conversation's last judgment, at most three per conversation and 200 characters each, from the WhatsApp database through the daemon, so a card can say you already answered. To check quoted words, it reads the run packs the triage runs already wrote, on the Mac.
 - **What it stores.** Three tables in `<live>/state.sqlite` (`today_brief`, `today_proposals`, `today_assign`): each build's brief, each card with its status, your note on it and the evidence lines the program built (entry titles, checked quote lines, capture lines), and which project a source was assigned to or taken away from. `<live>/today/<date>.json` (0600) holds the latest brief of each day. Each build has a run folder under `<live>/runs/` with its `prompt.md` and the model's output, like every run. The nightly backup copies `today/` and `state.sqlite`, never `runs/`.
 - **What it never stores.** The text of your replies goes into the brief run folder's `prompt.md` and nowhere else the brief writes (a later triage run of that conversation reads your reply like any message, in its own run folder); the run folder also keeps the model's raw answer (`result.txt`, `claude.stdout.jsonl`, and `claude.stderr.txt` when the call wrote one), which may repeat them, like every run folder (the kit never deletes run folders; `references/operating.md` says how to clear old ones). A card records only the time you replied. Before anything else is stored (tables, `today/<date>.json`, the board's answers, the log, and the error text of a failed call), the program replaces any stretch of the model's answer (and of a failed call's error text, which is otherwise stored as written), in any field (labels, task names and task fields included, and again after a list or an object is joined into text), that also appears in one of your replies (at least `today.quote_min_chars` CJK characters, or 4 Latin words (6 letters or digits or more), ignoring case, spacing, punctuation (inside a word too) and full-width forms, and reading what is written between the words the way a program would: backslash escapes (`\n`, `\t`, `\uXXXX`, `\u{...}`, `\UXXXXXXXX`, `\xXX`, octal of one to three digits, `\N{...}`, at any depth, a backslash before a letter or digit read both as an escape and as a plain separator), HTML entities (named, legacy names such as `&nbsp` also without the semicolon, and numeric), percent codes (`%20`, `%2520`, `%u0020`), tags (also malformed ones, read the way a browser reads them) and HTML comments, also when one is written inside another, at any depth (`&lt;br&gt;`, `&amp;nbsp;`); a CSS escape (`\0020 `) is not read as one) with "(your reply, not copied)" (zh "(你的回覆, 不抄)"). Known limitation: the match covers the common forms above, nested ones included; a deliberately constructed shape outside them (a CSS escape, decomposed Unicode, a gap that reads two different ways, one reply split across two fields) can keep words, and no model has a reason to write one. CJK here means Chinese characters, Japanese kana and Korean Hangul, each counted on its own. A paraphrase shorter than that, or reworded, is not caught: it is the model's own text and is stored like the rest of the brief.
-- **What it writes into the vault.** Nothing. The board proposes; your OK or No and your note change only the daemon's own state. Placing happens in your own session, through the intake mode. A card whose entries were placed retires itself, which again changes only the daemon's state.
+- **What it writes into the vault.** By default, nothing. The board proposes; your OK or No and your note change only the daemon's own state. Placing happens in your own session, through the intake mode. A card whose entries were placed retires itself, which again changes only the daemon's state. With the write button on (`today.write_mode`, station O7, question 6), a press writes one task file by program, never by the model: "The write button", below.
 - **What goes to Anthropic.** The prompt above, once per build ("What goes to Anthropic, run by run").
 - **Turning it off.** `today.enabled: false` and a restart. The tables and `live/today/` stay; delete the folder by hand if you want the briefs gone (the run folders follow the rule for every run folder).
+
+## The write button
+
+Only while `today.write_mode` is `direct` or `queue` and `wa_setup.py vault-write-check` answers available (station O7, question 6). The full shape of every write: `references/vault-proposals.md`, proposal g.
+
+- **Other people's words never enter a task file.** Before the program renders a write, it compares the card's text with the quotes of every intake entry the card cites and with the messages of the conversations it cites (from the newest runs' packs, while they exist), and replaces any stretch that repeats them, `today.quote_min_chars` (6) CJK characters or 4 Latin words, with `(…)`. It is the same matching the brief uses for your replies, in one place. A shorter or reworded paraphrase is not caught, as there. The evidence lines under a card, which hold checked quotes, are never written. The source line of a write names the conversations by label and the entries by key, never by quote.
+- **The model writes nothing.** Every byte is rendered by the program from the card you pressed OK on. No model call is made for a write.
+- **The backups.** `<home>/vault-write-backups/` holds a copy of every file before a write, and a created file after its undo: your own task text, 0700. The nightly backup copies only from `<live>/`, so it does not copy this folder; the kit never cleans it. Every run is denied reading it, because a run needs nothing in it, and what the board changed in your notes is yours to read, not the brain's.
+- **The filing-log line.** One per write and one per undo: the date, the kind, the task file's vault relative path, the card's id and its backup folder. It names files, never the words in them, because the filing log is read by your own reviews and should not become a second copy of anyone's messages.
+- **Turning it off.** `today.write_mode: "off"` and a restart. Files already written stay as they are, with their backups; undo still works from the card while the daemon runs, and from your session with `wa_vault_write.py --undo <id> --config <live>/config.json`.
 
 ## The old session transcript hazard
 
@@ -227,6 +241,7 @@ Restart after any change: `wa_setup.py restart --config <live>/config.json`.
 | Pushes | `notify.mode: off`, or `notify.outlet: none` | No pushes at all |
 | The digest push | `digest.push: false` (still written to `<live>/digest/`), or `digest.enabled: false` | No morning push |
 | The Today brief | `today.enabled: false` | No brief run; the board hides the page; the tables and `live/today/` stay until you delete them |
+| The write button | `today.write_mode: off` | No button; no task file written by the board; the backups stay |
 | Intake writers | `intake.enabled: false` | Nothing appended to the buffer |
 | Person notes | `dossier.enabled: false` | No note runs (prove the recent lines separately, above) |
 | Second source | `second_source.enabled: false` | No nightly pull |

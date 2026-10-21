@@ -25,8 +25,8 @@ wa_live.py · 私人 WhatsApp 实时逐封分诊 daemon (住一台常驻 Mac, la
 命令档 (丢进 live/commands/ 给跑着的 daemon 下指令; headless claude 只在 launchd 那条路底下拿得到登入与权限):
   test-run.<jid>.json          拿那个对话最近 3 封 inbound 当 burst 立刻跑一次
   probe-claude.json            用脑的笼子参数叫一次最小 claude, 90 秒没回就抓堆叠;
-                               带 {"read_canary": true} 改成拒读探测: 叫脑读 <home>/secrets/deny-canary.txt 与
-                               <home>/transcripts-cache/deny-canary.txt (各一次), log 每个夹各说一行挡没挡住
+                               带 {"read_canary": true} 改成拒读探测: 叫脑读 <home>/secrets/deny-canary.txt、
+                               <home>/transcripts-cache/deny-canary.txt 与 <home>/vault-write-backups/deny-canary.txt (各一次), log 每个夹各说一行挡没挡住
   notify-test.json             经推播出口推一句
   prewarm-<天>.json            把 N 天窗的语音先转进快取
   facts-now.json · second-source-now.json · backup-now.json · digest-now.json
@@ -42,7 +42,11 @@ wa_live.py · 私人 WhatsApp 实时逐封分诊 daemon (住一台常驻 Mac, la
   GET  /api/today              今日简报 (只读; 没起来回 503)
   POST /api/today/refresh  /api/today/decide {id, rev, action, note?}  /api/today/unassign {key, project | id}
        /api/today/settle {id, rev, to}   today.enabled 关着时一律回 {"ok": false, "reason": "disabled"}
-今日简报 (today.*, 模组 wa_today): 输入变了才重算、最多每 today.every_minutes 分钟一次; 只提案, ⛔ 不写 vault、不进 runs、dry-run 不叫模型。
+  POST /api/today/write {id, rev, pin}  /api/today/undo {id}   the optional write button (today.write_mode, module wa_vault_write):
+       refused {"ok": false, "reason": "unavailable" | "disabled" | "dry_run"}; direct applies, queue only appends to the pending file
+今日简报 (today.*, 模组 wa_today): 输入变了才重算、最多每 today.every_minutes 分钟一次; 只提案, 不进 runs、dry-run 不叫模型。
+The daemon writes into the vault only through wa_vault_write, only for a card the owner pressed OK on, only when the owner
+switched today.write_mode on and the schema reader and PyYAML load; every byte is rendered by program, never by the model.
 """
 
 import argparse
@@ -70,7 +74,7 @@ import uuid
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 HOME = Path.home()
 DAEMON_DIR = Path(__file__).resolve().parent
 PAYLOAD = DAEMON_DIR.parent                     # 安装包根 (daemon/ 的上一层)
@@ -3766,7 +3770,39 @@ class Dossier(object):
 TODAY_APPEND_SYSTEM = ("你在 headless 模式跑, 没有人可以问, 自己判断做完。只吐一个 JSON 物件, 不要 markdown 栅栏, 不要任何前后文字。"
                        "可以用 Read 打开提示里列出的 vault 档, 最多 %d 个; 除此之外不要探索档案系统, 不要读别的东西。")
 _TODAY_DEFAULTS = {"enabled": False, "model": "claude-sonnet-5", "every_minutes": 30, "manual_min_gap_seconds": 60,
-                   "max_reads": 6, "quote_min_chars": 6, "extra_rules": ""}
+                   "max_reads": 6, "quote_min_chars": 6, "extra_rules": "", "write_mode": "off"}
+WRITE_MODES = ("off", "direct", "queue")
+WRITE_REFRESH_TICKS = 10        # the write availability is checked at start and again every ten minute ticks
+
+
+def load_vault_write():
+    """The optional write module, imported only when asked (it may be absent: then the button stays hidden, code no_module).
+    Returns (module, error)."""
+    mod = sys.modules.get("wa_vault_write")
+    if mod is not None:
+        return mod, ""
+    try:
+        return __import__("wa_vault_write"), ""
+    except ImportError as e:
+        return None, "no_module"
+    except Exception as e:
+        return None, "module_error"
+
+
+def _write_view(state):
+    """The four keys the board sees: {mode, available, code, reason}. wa_today owns the rule; this copy only runs when it is absent."""
+    if WT is not None and hasattr(WT, "write_view"):
+        try:
+            v = WT.write_view(state)
+            if isinstance(v, dict):
+                return v
+        except Exception:
+            pass
+    s = state if isinstance(state, dict) else {}
+    m = s.get("mode") if s.get("mode") in WRITE_MODES else "off"
+    ok = bool(s.get("ok")) and m != "off"
+    return {"mode": m, "available": ok, "code": "ok" if ok else ("off" if m == "off" else str(s.get("code") or "unknown")),
+            "reason": "" if (ok or m == "off") else str(s.get("reason") or "")[:300]}
 
 
 def today_cfg(cfg):
@@ -3861,6 +3897,11 @@ class Today(object):
         self.retire_open = self._NEVER          # retire_tick 上次跑时的 parts["open"]; 起跑后第一拍一定跑一次
         self.priority = False                   # 手动刷新碰上并发满了: 下一拍当手动再试
         self.fail_ts = None
+        # the optional write button: availability at start and every WRITE_REFRESH_TICKS minute ticks; presses run one at a time
+        self.write_mode = self.t.get("write_mode") if self.t.get("write_mode") in WRITE_MODES else "off"
+        self.write_lock = threading.Lock()
+        self.write_state = None
+        self.write_ticks = 0
         if WT is None:
             why = "wa_today 模组没载入"
         elif not self.t.get("enabled"):
@@ -3873,6 +3914,7 @@ class Today(object):
             why = ""
         self.enabled = not why
         self.why_off = why
+        self.refresh_write(source="start")
         if not self.enabled:
             log.info("今日简报: 关 (%s)", why)
             return
@@ -3918,6 +3960,163 @@ class Today(object):
 
     def off_reply(self, refresh=False):
         return {"ok": False, "reason": ("dry_run" if (refresh and self.dry_run) else "disabled"), "why": self.why_off}
+
+    # ---- the write button (optional, today.write_mode): the daemon only gates and calls wa_vault_write
+    _WRITE_TEXT = {
+        "zh": {"dry_run": "试跑模式: 写入按钮不开", "no_module": "写入模组不在 (wa_vault_write 载入不了), 按钮不开",
+               "module_error": "写入模组载入或检查时出错, 按钮先不开: %s", "off": "写入按钮没开 (today.write_mode = off)",
+               "disabled": "今日简报关着, 不写", "bad_request": "少了 id、rev 或 pin"},
+        "en": {"dry_run": "dry run: the write button stays off", "no_module": "the write module (wa_vault_write) could not be imported; the button stays hidden",
+               "module_error": "the write module failed to load or to check, the button stays hidden: %s", "off": "the write button is off (today.write_mode = off)",
+               "disabled": "the Today brief is off, nothing is written", "bad_request": "id, rev or pin is missing"},
+    }
+
+    def _wt(self, key):
+        return self._WRITE_TEXT["en" if self.lang.lower().startswith("en") else "zh"][key]
+
+    def refresh_write(self, source="tick"):
+        """Recompute write_state ({ok, code, reason, mode, ...}). Mode off and dry run never call the module.
+        One log line when the code changes (codes only, no paths)."""
+        prev = (self.write_state or {}).get("code")
+        mode = self.write_mode
+        if mode == "off":
+            st = {"ok": False, "code": "off", "reason": self._wt("off"), "mode": "off"}
+        elif self.dry_run:
+            st = {"ok": False, "code": "dry_run", "reason": self._wt("dry_run"), "mode": mode}
+        else:
+            mod, err = load_vault_write()
+            if mod is None and err == "module_error":
+                st = {"ok": False, "code": "module_error", "reason": self._wt("module_error") % "import", "mode": mode}
+            elif mod is None or not hasattr(mod, "availability"):
+                st = {"ok": False, "code": "no_module", "reason": self._wt("no_module"), "mode": mode}
+            else:
+                try:
+                    got = mod.availability(self.cfg, "en" if self.lang.lower().startswith("en") else "zh")
+                    st = dict(got) if isinstance(got, dict) else {"ok": False, "code": "module_error", "reason": self._wt("module_error") % "no dict"}
+                except Exception as e:
+                    st = {"ok": False, "code": "module_error", "reason": self._wt("module_error") % type(e).__name__}
+                st["ok"] = bool(st.get("ok"))
+                st.setdefault("code", "ok" if st["ok"] else "module_error")
+                st.setdefault("reason", "")
+                st["mode"] = mode
+        self.write_state = st
+        if st.get("code") != prev:
+            log.info("today write: %s (%s, %s)", "available" if st.get("ok") else "unavailable", st.get("code"), source)
+        return st
+
+    def write_tick(self):
+        self.write_ticks += 1
+        if self.write_ticks % WRITE_REFRESH_TICKS == 0:
+            self.refresh_write(source="tick")
+
+    def write_view(self):
+        return _write_view(self.write_state)
+
+    def _refusal(self, code, detail=None):
+        """The refusal shape both endpoints answer: {ok: false, reason: <code>, detail: <text in the board's language>}."""
+        if detail is None:
+            detail = self._WRITE_TEXT["en" if self.lang.lower().startswith("en") else "zh"].get(code, "")
+        return {"ok": False, "reason": str(code), "detail": str(detail or "")[:300]}
+
+    def _write_gate(self):
+        """None when a press may go on, else the refusal."""
+        if self.dry_run:
+            return self._refusal("dry_run")
+        if not self.enabled or not self.t.get("enabled"):
+            return self._refusal("disabled")
+        st = self.write_state or {}
+        if not st.get("ok"):
+            return self._refusal(st.get("code") or "off", st.get("reason") or "")
+        return None
+
+    def _answer(self, r, extra_ok=()):
+        """A module answer in the endpoint's shape: success keeps ok and its result keys; a refusal becomes
+        {ok: false, reason: <code>, detail: <text>} (the module's own code wins over its free text)."""
+        r = dict(r) if isinstance(r, dict) else {"ok": False, "code": "no_result"}
+        if r.get("ok"):
+            return r
+        code = str(r.get("code") or r.get("reason") or "refused")
+        detail = r.get("detail")
+        if detail is None:
+            detail = r.get("reason") if str(r.get("reason") or "") != code else ""
+        out = self._refusal(code, detail or "")
+        for k in ("current", "step"):
+            if k in r:
+                out[k] = r[k]
+        return out
+
+    def _card(self, pid):
+        """The card as the board sees it after a press (so the board re-renders it); None when it cannot be read."""
+        if WT is None or not hasattr(WT, "public_prop"):
+            return None
+        try:
+            with self._conn() as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute("SELECT * FROM today_proposals WHERE id=?", (pid,)).fetchone()
+            return WT.public_prop(dict(row), dt.date.today().isoformat(), self.lang) if row is not None else None
+        except Exception:
+            return None
+
+    def write(self, body):
+        """POST /api/today/write {id, rev, pin}: direct → wa_vault_write.apply, queue → enqueue. One log line, never the text."""
+        refused = self._write_gate()
+        pid = str(body.get("id") or "")
+        if refused is None:
+            rev = _int_or(body.get("rev"), None)
+            pin = str(body.get("pin") or "")
+            if not pid or rev is None or not pin:
+                refused = self._refusal("bad_request")
+        if refused is None:
+            mod, err = load_vault_write()
+            if mod is None:
+                refused = self._refusal(err or "no_module", self._wt("no_module") if err != "module_error" else self._wt("module_error") % "import")
+        if refused is not None:
+            log.info("today write: %s refused: %s", pid or "-", refused.get("reason"))
+            return refused
+        lang = "en" if self.lang.lower().startswith("en") else "zh"
+        with self.write_lock:
+            try:
+                if self.write_mode == "queue":
+                    r = mod.enqueue(self.cfg, str(self.live), pid, rev, pin, lang=lang)
+                else:
+                    with self._conn() as conn:
+                        r = mod.apply(conn, self.cfg, pid, rev, pin, self._buffer(), str(self.live), lang=lang)
+            except Exception as e:
+                r = {"ok": False, "code": "exception", "reason": type(e).__name__}
+        r = self._answer(r)
+        r["mode"] = self.write_mode
+        cur = self._card(pid)
+        if cur is not None:
+            r["current"] = cur
+        log.info("today write: %s %s", pid, "ok" if r.get("ok") else "refused: %s" % r.get("reason"))
+        return r
+
+    def undo(self, body):
+        """POST /api/today/undo {id}: wa_vault_write.undo under the same lock and the same gate. One log line."""
+        refused = self._write_gate()
+        pid = str(body.get("id") or "")
+        if refused is None and not pid:
+            refused = self._refusal("bad_request")
+        if refused is None:
+            mod, err = load_vault_write()
+            if mod is None:
+                refused = self._refusal(err or "no_module", self._wt("no_module") if err != "module_error" else self._wt("module_error") % "import")
+        if refused is not None:
+            log.info("today undo: %s refused: %s", pid or "-", refused.get("reason"))
+            return refused
+        lang = "en" if self.lang.lower().startswith("en") else "zh"
+        with self.write_lock:
+            try:
+                with self._conn() as conn:
+                    r = mod.undo(conn, self.cfg, pid, self._buffer(), str(self.live), lang=lang)
+            except Exception as e:
+                r = {"ok": False, "code": "exception", "reason": type(e).__name__}
+        r = self._answer(r)
+        cur = self._card(pid)
+        if cur is not None:
+            r["current"] = cur
+        log.info("today undo: %s %s", pid, "ok" if r.get("ok") else "refused: %s" % r.get("reason"))
+        return r
 
     # ---- 要不要算
     def request(self, manual=False, source="tick"):
@@ -4018,6 +4217,10 @@ class Today(object):
 
     # ---- 每分钟那一拍
     def tick(self):
+        try:
+            self.write_tick()
+        except Exception as e:
+            log.warning("today write_tick failed (going on): %s", str(e)[:300])
         if not self.enabled:
             return
         try:
@@ -4067,12 +4270,14 @@ class Today(object):
         if WT is not None:
             try:
                 with self._conn() as conn:
-                    p = WT.api_payload(conn, day, lang=self.lang)
+                    p = call_opt(WT.api_payload, conn, day, lang=self.lang, write=self.write_state)
             except Exception as e:
                 log.warning("今日简报 api_payload 失败: %s", str(e)[:200])
         if not isinstance(p, dict):
             p = {"ok": True, "date": day, "empty": True, "stale": True, "projects": [], "one": [], "short": "", "tail": []}
         p.pop("seen", None)
+        if not isinstance(p.get("write"), dict):
+            p["write"] = self.write_view()
         breaker = getattr(self.d, "breaker", None)
         p["status"] = {"enabled": self.enabled, "building": self._busy(), "building_since": self.building_since,
                        "last_built": self.last_built, "last_error": self.last_error,
@@ -4176,7 +4381,8 @@ def make_board_handler(daemon):
                                  "today": bool(daemon.today is not None and daemon.today.enabled)},
                     "today": {"every_minutes": int(daemon.today.every_minutes if daemon.today is not None else today_cfg(cfg).get("every_minutes", 30)),
                               "manual_min_gap_seconds": int(daemon.today.gap_seconds if daemon.today is not None
-                                                            else today_cfg(cfg).get("manual_min_gap_seconds", 60))},
+                                                            else today_cfg(cfg).get("manual_min_gap_seconds", 60)),
+                              "write": (daemon.today.write_view() if daemon.today is not None else _write_view(None))},
                     "owner_label": owner_label(cfg), "vault_name": vault.name if vault is not None else "",
                     "context_days": int(br.get("context_days", 7)), "group_context_days": int(br.get("group_context_days", 3)),
                     "others_days": int(b.get("others_days", 3)), "others_limit": int(b.get("others_limit", 120)),
@@ -4537,6 +4743,17 @@ def make_board_handler(daemon):
                 daemon.dispatch(p, source="board-full" if body.get("full") else "board")
                 log.info("板子: 手动跑 %s%s%s", p["name"], " (全量重判)" if body.get("full") else "", " (闸外, 主人确认)" if not ok_gate else "")
                 self._send(200, json.dumps({"ok": True}))
+            elif path in ("/api/today/write", "/api/today/undo"):
+                # the write button: dry run, today off and an unavailable write each refuse before anything is called
+                tdy = daemon.today
+                if tdy is None:
+                    self._send(503, json.dumps({"ok": False, "error": "今日简报没起来: %s" % (daemon.today_error or "?")}, ensure_ascii=False)); return
+                try:
+                    ans = tdy.write(body) if path == "/api/today/write" else tdy.undo(body)
+                except Exception as e:
+                    log.warning("板子: %s 失败: %s", path, str(e)[:200])
+                    self._send(500, json.dumps({"ok": False, "error": str(e)[:300]}, ensure_ascii=False)); return
+                self._send(200, json.dumps(ans, ensure_ascii=False, default=str))
             elif path in ("/api/today/refresh", "/api/today/decide", "/api/today/unassign", "/api/today/settle"):
                 tdy = daemon.today
                 if tdy is None:
@@ -5069,13 +5286,13 @@ class Daemon(object):
                             "然后只回一个词, 不要别的字。")
 
     # 拒读探测的探测档: (板子 / log 用的名字, <home> 底下的夹)。两个都由 wa_setup.py init 写。
-    CANARY_TARGETS = (("secrets", "secrets"), ("transcripts", "transcripts-cache"))
+    CANARY_TARGETS = (("secrets", "secrets"), ("transcripts", "transcripts-cache"), ("backups", "vault-write-backups"))
 
     def probe_read_canary(self):
-        """拒读探测 (commands/probe-claude.json 带 {"read_canary": true}): 用脑的笼子叫脑读 <home>/secrets/deny-canary.txt
-        与 <home>/transcripts-cache/deny-canary.txt, 一个档一次 run, 只准回 DENIED 或 READ_OK。每次记成 kind probe 的 run,
+        """拒读探测 (commands/probe-claude.json 带 {"read_canary": true}): 用脑的笼子叫脑读 <home>/secrets/deny-canary.txt、
+        <home>/transcripts-cache/deny-canary.txt 与 <home>/vault-write-backups/deny-canary.txt, 一个档一次 run, 只准回 DENIED 或 READ_OK。每次记成 kind probe 的 run,
         挡下的读取落 runs.denials; log 每个夹各一行讲挡没挡住, 没挡住的推一则 (讲是哪个夹)。⛔ 永远不碰 token 档本身。
-        回 {"blocked": 全部挡住, "targets": {"secrets": bool, "transcripts": bool}, "run_dirs": [...]} (dry-run 回 None)。
+        回 {"blocked": 全部挡住, "targets": {"secrets": bool, "transcripts": bool, "backups": bool}, "run_dirs": [...]} (dry-run 回 None)。
         探测档不在、或探测没跑完, 那个夹记 False (证明不了挡住)。"""
         if self.dry_run:
             log.info("probe-claude read_canary: dry-run 不叫 claude"); return None
@@ -5605,6 +5822,7 @@ def selftest():
     saved = (WC, WF, WD, WB, WI, WBF, WV, WCAL, WSS, DC, WT)
     saved_errors = dict(_IMPORT_ERRORS)
     saved_modules = sys.modules.get("dossier_core")
+    saved_vw = sys.modules.get("wa_vault_write")
     saved_run, saved_popen = subprocess.run, subprocess.Popen
     saved_handlers = list(log.handlers)
     saved_level = log.level
@@ -6375,12 +6593,15 @@ def selftest():
         check("reader_config_from 带 read_documents (默认 true, 照 reader.read_documents)",
               rc_on.get("read_documents") is True and rc_off.get("read_documents") is False, (rc_on.get("read_documents"), rc_off.get("read_documents")))
 
-        # ---- 17 · 拒读探测: 假 claude (不起真的), 两个探测档 (secrets 与 transcripts-cache) 各一个 run, 记成 kind probe, 挡下的读取进 runs.denials
+        # ---- 17 · 拒读探测: 假 claude (不起真的), 三个探测档 (secrets · transcripts-cache · vault-write-backups) 各一个 run, 记成 kind probe, 挡下的读取进 runs.denials
         (home / "secrets").mkdir(parents=True, exist_ok=True)
         canary = home / "secrets" / "deny-canary.txt"
         canary.write_text("canary-marker", encoding="utf-8")
         tcanary = home / "transcripts-cache" / "deny-canary.txt"
         tcanary.write_text("canary-marker", encoding="utf-8")
+        (home / "vault-write-backups").mkdir(parents=True, exist_ok=True)
+        bcanary = home / "vault-write-backups" / "deny-canary.txt"
+        bcanary.write_text("canary-marker", encoding="utf-8")
         seen_args = []
         leak = {"folder": None}
 
@@ -6434,16 +6655,16 @@ def selftest():
               str(canary) in prompt_ and "DENIED" in prompt_ and "READ_OK" in prompt_ and "claude-bot.env" not in prompt_
               and "--settings" in (seen_args[0] if seen_args else []) and "--disallowedTools" in (seen_args[0] if seen_args else []), prompt_[:200])
         check("拒读探测: 每个探测档记成一个 kind probe 的 run, runs.denials 有那次读取, log 每个夹各说一行挡下了",
-              pr and pr.get("blocked") is True and len(prows) >= 2 and all(r_["ok"] == 1 and "deny-canary" in (r_["denials"] or "") for r_ in prows[:2])
+              pr and pr.get("blocked") is True and len(prows) >= 3 and all(r_["ok"] == 1 and "deny-canary" in (r_["denials"] or "") for r_ in prows[:3])
               and "read_canary [secrets]: 读取被挡下" in logtext and "read_canary [transcripts-cache]: 读取被挡下" in logtext
-              and len(pr.get("run_dirs") or []) == 2, (pr, [dict(r_) for r_ in prows]))
+              and "read_canary [vault-write-backups]: 读取被挡下" in logtext and len(pr.get("run_dirs") or []) == 3, (pr, [dict(r_) for r_ in prows]))
         check("拒读探测 · transcripts-cache: 第二个探测档也读一次; 都挡住时 targets 两个都 true, 那个夹没挡住时 blocked false 且推一则讲 transcripts-cache",
-              n_args_ok == 2 and str(tcanary) in prompt_t and pr.get("targets") == {"secrets": True, "transcripts": True}
-              and pr_leak and pr_leak.get("blocked") is False and pr_leak.get("targets") == {"secrets": True, "transcripts": False}
+              n_args_ok == 3 and str(tcanary) in prompt_t and pr.get("targets") == {"secrets": True, "transcripts": True, "backups": True}
+              and pr_leak and pr_leak.get("blocked") is False and pr_leak.get("targets") == {"secrets": True, "transcripts": False, "backups": True}
               and len(leak_sent) == 1 and "transcripts-cache" in leak_sent[0] and "read_canary [transcripts-cache]: 没挡住" in
               (live / "wa_live.log").read_text(encoding="utf-8"), (n_args_ok, pr, pr_leak, leak_sent))
         check("拒读探测: 脑光回 DENIED 而 runs.denials 没有那笔 (它没去读) 不算挡下, 也不推, log 说挡没挡住不知道",
-              pr_lazy and pr_lazy.get("blocked") is False and pr_lazy.get("targets") == {"secrets": False, "transcripts": False}
+              pr_lazy and pr_lazy.get("blocked") is False and pr_lazy.get("targets") == {"secrets": False, "transcripts": False, "backups": False}
               and not lazy_sent and "没有读 deny-canary 的那笔" in (live / "wa_live.log").read_text(encoding="utf-8"), (pr_lazy, lazy_sent))
 
         # ---- 18 · 断路器开着时 run 自己的失败不另推: 走真的 Brain.run (retries 1), 假 claude 两次都回登入失效
@@ -6893,7 +7114,9 @@ def selftest():
         check("今日简报 · GET /api/today 回 200 JSON (seen 不送出去, status 带 enabled · building · 间隔); ui.features.today 与 ui.today",
               s_g == 200 and (j_g or {}).get("ok") is True and "seen" not in (j_g or {}) and ((j_g or {}).get("status") or {}).get("enabled") is True
               and ((j_g or {}).get("status") or {}).get("every_minutes") == 45 and ((j_g or {}).get("status") or {}).get("building") is False
-              and ui_on.get("features", {}).get("today") is True and ui_on.get("today") == {"every_minutes": 45, "manual_min_gap_seconds": 60},
+              and ui_on.get("features", {}).get("today") is True
+              and ui_on.get("today") == {"every_minutes": 45, "manual_min_gap_seconds": 60,
+                                         "write": {"mode": "off", "available": False, "code": "off", "reason": ""}},
               (s_g, j_g, ui_on.get("today")))
         # 刷新: 第一次 started, 跑着时再按回 already, 跑完马上再按 (间隔内) 也回 already; 模型只叫一次
         ft["block"] = True
@@ -6994,6 +7217,136 @@ def selftest():
               all((o or {}).get("ok") is False and (o or {}).get("reason") == "disabled" for o in offs) and len(ft["decide"]) == 1, offs)
         msrc = inspect.getsource(Daemon.minute_tick)
         check("今日简报 · minute_tick 叫 today.tick() 包在自己的 try 里", "self.today.tick()" in msrc and "今日简报 tick 失败 (继续)" in msrc)
+        # ---- the write button: a fake wa_vault_write in sys.modules (never the real module, never a vault)
+        fw = {"avail": {"ok": False, "code": "no_yaml", "reason": "PyYAML is missing (fake)", "schema_reader": "/fake/doctrine_schema.py",
+                        "yaml": False, "mode": "direct"}, "n_avail": 0, "apply": [], "enqueue": [], "undo": [], "locked": []}
+        fake_vw = types.ModuleType("wa_vault_write")
+
+        def fw_availability(cfg_, lang="zh"):
+            fw["n_avail"] += 1
+            return dict(fw["avail"])
+
+        def fw_apply(conn, cfg_, pid, rev, pin, buffer_path, live_dir_, now=None, lang="zh", law=None):
+            fw["apply"].append((pid, rev, pin, buffer_path, live_dir_, lang))
+            fw["locked"].append(dt_w.today.write_lock.locked() if dt_w is not None else None)
+            if fw.get("refuse"):
+                return {"ok": False, "reason": "the card changed after the press (fake)", "code": "pin", "written": {}}
+            return {"ok": True, "reason": "", "code": "ok", "written": {"files": [{"path": "Grow/Baking-School/Tasks/Secret-Task-Name.md"}]}}
+
+        def fw_enqueue(cfg_, live_dir_, pid, rev, pin, now=None, lang="zh"):
+            fw["enqueue"].append((pid, rev, pin, live_dir_))
+            return {"ok": True, "queued": len(fw["enqueue"])}
+
+        def fw_undo(conn, cfg_, pid, buffer_path, live_dir_, now=None, lang="zh"):
+            fw["undo"].append((pid, buffer_path, live_dir_))
+            return {"ok": False, "reason": "changed since", "code": "changed"}
+        fake_vw.availability, fake_vw.apply, fake_vw.enqueue, fake_vw.undo = fw_availability, fw_apply, fw_enqueue, fw_undo
+        WT.public_prop = lambda row, day, lang: {"id": row.get("id"), "status": row.get("status")}
+        sys.modules["wa_vault_write"] = fake_vw
+        dt_w = None
+        wbody = {"id": "cafe0123456789ab", "rev": "1", "pin": "pin0123456789abc"}
+
+        def wdaemon(name, **today_kw):
+            d_ = Daemon(dict(cfg, state_db=str(live / ("%s.sqlite" % name)), today=dict(today_on, **today_kw)))
+            s_ = start_board(d_)
+            servers.append(s_)
+            with d_.today._conn() as c_:
+                c_.execute("CREATE TABLE IF NOT EXISTS today_proposals(id TEXT PRIMARY KEY, project TEXT, rev INTEGER, status TEXT)")
+                c_.execute("INSERT OR REPLACE INTO today_proposals(id, project, rev, status) VALUES(?,?,?,?)", (wbody["id"], "Grow/Baking-School", 1, "ok"))
+            return d_
+        # unavailable: the payload and ui say why, the press is refused, nothing called
+        dt_w = wdaemon("today-write-un", write_mode="direct")
+        sw_, jt_ = req_at(dt_w.board_port, "GET", "/api/today")
+        sb_w, jb_w = req_at(dt_w.board_port, "GET", "/api/board")
+        sp_, ap_ = req_at(dt_w.board_port, "POST", "/api/today/write", wbody)
+        su_w, au_w = req_at(dt_w.board_port, "POST", "/api/today/undo", {"id": wbody["id"]})
+        want_un = {"mode": "direct", "available": False, "code": "no_yaml", "reason": "PyYAML is missing (fake)"}
+        check("today write · unavailable: GET /api/today and ui.today.write say why (mode, code, reason, no paths); write and undo refused, nothing called",
+              (jt_ or {}).get("write") == want_un and (((jb_w or {}).get("ui") or {}).get("today") or {}).get("write") == want_un
+              and ap_ == {"ok": False, "reason": "no_yaml", "detail": "PyYAML is missing (fake)"} and sp_ == 200
+              and (au_w or {}).get("reason") == "no_yaml" and not fw["apply"] and not fw["undo"] and fw["n_avail"] == 1,
+              ((jt_ or {}).get("write"), ap_, au_w, fw))
+        # the tick refreshes write_state every ten minute ticks: the owner installs PyYAML, the button appears without a restart
+        fw["avail"] = {"ok": True, "code": "ok", "reason": "", "schema_reader": "/fake/doctrine_schema.py", "yaml": True, "mode": "direct"}
+        n0 = fw["n_avail"]
+        for _i in range(WRITE_REFRESH_TICKS - 1):
+            dt_w.today.tick()
+        n9 = fw["n_avail"]
+        dt_w.today.tick()
+        sw2_, jw2_ = req_at(dt_w.board_port, "GET", "/api/today")
+        check("today write · write_state refreshed on the tick: not before the tenth minute tick, then the payload shows it available",
+              n9 == n0 and fw["n_avail"] == n0 + 1 and (jw2_ or {}).get("write") == {"mode": "direct", "available": True, "code": "ok", "reason": ""}
+              and "today write: available (ok, tick)" in (live / "wa_live.log").read_text(encoding="utf-8"), (n0, n9, fw["n_avail"], (jw2_ or {}).get("write")))
+        # available, direct: apply gets the pin from the body, under the write lock; one log line without the written path
+        sa_, aa_ = req_at(dt_w.board_port, "POST", "/api/today/write", wbody)
+        sbad_w, abad_w = req_at(dt_w.board_port, "POST", "/api/today/write", {"id": wbody["id"], "rev": 1})
+        logtext = (live / "wa_live.log").read_text(encoding="utf-8")
+        check("today write · direct: apply called with id, rev as int, the pin from the body, the buffer and live folder, under the write lock; reply carries current",
+              fw["apply"] == [(wbody["id"], 1, wbody["pin"], dt_w.today._buffer(), str(dt_w.today.live), "zh")] and fw["locked"] == [True]
+              and (aa_ or {}).get("ok") is True and (aa_ or {}).get("current") == {"id": wbody["id"], "status": "ok"} and not fw["enqueue"]
+              and isinstance((aa_ or {}).get("written"), dict),
+              (fw["apply"], fw["locked"], aa_))
+        check("today write · a press without a pin is bad_request and calls nothing; the log has one line per call and never the written text",
+              (abad_w or {}).get("ok") is False and (abad_w or {}).get("reason") == "bad_request" and (abad_w or {}).get("detail")
+              and len(fw["apply"]) == 1 and "today write: cafe0123456789ab ok" in logtext
+              and "today write: cafe0123456789ab refused: bad_request" in logtext and "Secret-Task-Name" not in logtext and wbody["pin"] not in logtext,
+              (abad_w, [l for l in logtext.splitlines() if "today write" in l][-3:]))
+        # undo wiring: undo gets the id, its refusal comes back with its code
+        su2_w, au2_w = req_at(dt_w.board_port, "POST", "/api/today/undo", {"id": wbody["id"]})
+        logtext = (live / "wa_live.log").read_text(encoding="utf-8")
+        check("today write · undo: wa_vault_write.undo gets the id, buffer and live folder; its refusal and code come back; one log line",
+              fw["undo"] == [(wbody["id"], dt_w.today._buffer(), str(dt_w.today.live))] and (au2_w or {}).get("ok") is False
+              and (au2_w or {}).get("reason") == "changed" and (au2_w or {}).get("detail") == "changed since"
+              and "today undo: cafe0123456789ab refused: changed" in logtext, (fw["undo"], au2_w))
+        # a module refusal comes back as {ok: false, reason: <its code>, detail: <its text>}
+        fw["refuse"] = True
+        sr_, ar_ = req_at(dt_w.board_port, "POST", "/api/today/write", wbody)
+        fw["refuse"] = False
+        fw["apply"].pop()
+        fw["locked"].pop()
+        check("today write · a module refusal (pin moved) answers HTTP 200 {ok: false, reason: pin, detail: the module's text}; log names the code",
+              sr_ == 200 and (ar_ or {}).get("ok") is False and (ar_ or {}).get("reason") == "pin"
+              and (ar_ or {}).get("detail") == "the card changed after the press (fake)"
+              and "today write: cafe0123456789ab refused: pin" in (live / "wa_live.log").read_text(encoding="utf-8"), ar_)
+        # queue: enqueue, never apply
+        fw["avail"] = dict(fw["avail"], mode="queue")
+        dt_w = wdaemon("today-write-q", write_mode="queue")
+        sq_, aq_ = req_at(dt_w.board_port, "POST", "/api/today/write", wbody)
+        check("today write · queue: enqueue called with id, rev, pin and the live folder; apply never",
+              fw["enqueue"] == [(wbody["id"], 1, wbody["pin"], str(dt_w.today.live))] and len(fw["apply"]) == 1 and (aq_ or {}).get("ok") is True
+              and (aq_ or {}).get("mode") == "queue", (fw["enqueue"], aq_))
+        # dry run: both refuse with dry_run and call nothing (not even availability)
+        n_av = fw["n_avail"]
+        dt_wd = Daemon(dict(cfg, state_db=str(live / "today-write-dry.sqlite"), today=dict(today_on, write_mode="direct")), dry_run=True)
+        srv_wd = start_board(dt_wd)
+        servers.append(srv_wd)
+        dw1 = req_at(dt_wd.board_port, "POST", "/api/today/write", wbody)[1]
+        dw2 = req_at(dt_wd.board_port, "POST", "/api/today/undo", {"id": wbody["id"]})[1]
+        check("today write · dry run: write and undo answer {ok: false, reason: dry_run, detail}; availability, apply, enqueue and undo never called",
+              (dw1 or {}).get("reason") == "dry_run" and (dw1 or {}).get("ok") is False and (dw1 or {}).get("detail")
+              and (dw2 or {}).get("reason") == "dry_run" and fw["n_avail"] == n_av
+              and len(fw["apply"]) == 1 and len(fw["enqueue"]) == 1 and len(fw["undo"]) == 1, (dw1, dw2, fw["n_avail"], n_av))
+        # today off (not dry run): refused disabled even when the module says ok
+        fw["avail"] = dict(fw["avail"], mode="direct")
+        dt_wo = Daemon(dict(cfg, state_db=str(live / "today-write-off.sqlite"), today=dict(today_on, enabled=False, write_mode="direct")))
+        srv_wo = start_board(dt_wo)
+        servers.append(srv_wo)
+        do1 = req_at(dt_wo.board_port, "POST", "/api/today/write", wbody)[1]
+        check("today write · today.enabled false: the press is refused disabled and apply is not called",
+              (do1 or {}).get("ok") is False and (do1 or {}).get("reason") == "disabled" and len(fw["apply"]) == 1, do1)
+        # mode off: the module is never asked, the view is off; module missing: unavailable no_module
+        n_av = fw["n_avail"]
+        dt_wf = Daemon(dict(cfg, state_db=str(live / "today-write-modeoff.sqlite"), today=dict(today_on)))
+        sys.modules["wa_vault_write"] = None
+        dt_wn = Daemon(dict(cfg, state_db=str(live / "today-write-nomod.sqlite"), today=dict(today_on, write_mode="queue")))
+        sys.modules["wa_vault_write"] = fake_vw
+        check("today write · mode off never asks the module (view off); a module that cannot be imported is unavailable with code no_module",
+              fw["n_avail"] == n_av and dt_wf.today.write_view() == {"mode": "off", "available": False, "code": "off", "reason": ""}
+              and dt_wn.today.write_view()["code"] == "no_module" and dt_wn.today.write_view()["available"] is False
+              and dt_wn.today.write({"id": "x", "rev": 1, "pin": "p"}).get("reason") == "no_module", (dt_wf.today.write_state, dt_wn.today.write_state))
+        sys.modules.pop("wa_vault_write", None)
+        if saved_vw is not None:
+            sys.modules["wa_vault_write"] = saved_vw
         # Today 起不来: daemon 照起, /api/today 503, 每分钟那一拍不炸
         ft["raise_sig"] = True
         dt_bad = Daemon(dict(cfg, state_db=str(live / "today-bad.sqlite"), today=dict(today_on)))
@@ -7045,6 +7398,10 @@ def selftest():
         subprocess.run, subprocess.Popen = saved_run, saved_popen
         WC, WF, WD, WB, WI, WBF, WV, WCAL, WSS, DC, WT = saved
         _IMPORT_ERRORS.clear(); _IMPORT_ERRORS.update(saved_errors)
+        if saved_vw is not None:
+            sys.modules["wa_vault_write"] = saved_vw
+        else:
+            sys.modules.pop("wa_vault_write", None)
         if saved_modules is not None:
             sys.modules["dossier_core"] = saved_modules
         else:

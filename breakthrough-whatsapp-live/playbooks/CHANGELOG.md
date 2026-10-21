@@ -19,6 +19,13 @@ This changelog is payload metadata. It is never copied into a vault.
 
 ## playbooks/whatsapp-live-triage/_WhatsApp-Live-Triage-Guide.md
 
+### 1.2.0 · 2026-10-21
+
+- The summary line names the optional write button: the brief still only proposes and is
+  never pushed; with the write button switched on, a card the owner pressed OK on is written
+  into its task by program, with a backup and an undo, and otherwise nothing is written into
+  the vault. Nothing else in the door changed.
+
 ### 1.1.0 · 2026-10-21
 
 - The summary line names the board's Today brief: with it on, the board also proposes, per
@@ -43,6 +50,18 @@ This changelog is payload metadata. It is never copied into a vault.
 - The summary names the v1 judgment contract (world, stage, priority, needs_me).
 
 ## playbooks/whatsapp-live-triage/whatsapp-live-triage-playbook.md
+
+### 1.3.0 · 2026-10-21
+
+- New move 12: after an OK on the board, write from the board when the write button is
+  there (station O7, question 6, `today.write_mode`), else place in your session as move 11
+  says. A board write can be undone, and the undo refuses when the file was edited since.
+  Seed cards are never written from the board. Why: a background program that writes into
+  your notes must be able to prove what it changed and give it back, so it writes only the
+  card that was pressed, by program and never by the model, pinned to what was shown, backed
+  up first and read back after; other people's words are replaced with `(…)` before the write.
+- Move 11's closing sentence now says the brief itself only proposes, and that the only way
+  into the vault from the board is move 12's button, switched on by the owner.
 
 ### 1.2.0 · 2026-10-21
 

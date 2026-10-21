@@ -98,7 +98,7 @@ With the owner, on the phone first, then on the Mac. The labels below are the En
 
 **Layout**: three columns on a wide screen, two on a medium one, one on the phone with "‹ List" to go back. On a wide screen the grips between the columns resize them (double-click a grip to reset); the widths are remembered on that device. The action row under a conversation wraps instead of cutting a button off.
 
-**Today** (only once station O7 turns the brief on): a Today button in the rail opens the board's brief, per project of yours, with cards to answer OK or No and a refresh button that builds now and follows the build until it lands. On the phone it is a full page with a way back. Nothing on it writes into the vault: placing happens in the intake mode (`install/O7-intake.md`, question 5).
+**Today** (only once station O7 turns the brief on): a Today button in the rail opens the board's brief, per project of yours, with cards to answer OK or No and a refresh button that builds now and follows the build until it lands. On the phone it is a full page with a way back. By default nothing on it writes into the vault: placing happens in the intake mode (`install/O7-intake.md`, question 5). With the optional write button (question 6 of the same station), a card you pressed OK on also shows Write to vault, which writes that one task file by program, with a backup and an undo.
 
 ## Verify
 

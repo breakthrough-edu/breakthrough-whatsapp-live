@@ -61,6 +61,7 @@
     "intake_buffer": "",
     "filing_log": "",
     "decisions_dir": "",
+    "schema_reader": "",
     "reader_dir": "<payload>",
     "dossier_dir": "<payload>"
   },
@@ -265,7 +266,8 @@
     "manual_min_gap_seconds": 60,
     "max_reads": 6,
     "quote_min_chars": 6,
-    "extra_rules": ""
+    "extra_rules": "",
+    "write_mode": "off"
   },
   "voice": {
     "enabled": true,
@@ -376,6 +378,7 @@
     "paths.intake_buffer": "Append only intake buffer note in the vault (station O7). Same file as intake.buffer; set one of them.",
     "paths.filing_log": "Vault filing log that gets one line per person note rewrite. Empty skips the line.",
     "paths.decisions_dir": "Vault Decisions folder, where each default you change is logged as a decision.",
+    "paths.schema_reader": "Your my-second-brain copy of scripts/doctrine_schema.py, read in place and never copied; only the write button of the Today page uses it (station O7). Empty looks in <vault>/.claude/skills/my-second-brain/scripts/ and then ~/.claude/skills/my-second-brain/scripts/. Set but missing is a check-config error. Changes need a daemon restart.",
     "paths.reader_dir": "Where the reader skill scripts are found. <payload> uses the copy inside this kit.",
     "paths.dossier_dir": "Where the person dossier skill scripts are found. <payload> uses the copy inside this kit.",
     "vocab.worlds": "Which world a conversation belongs to. key is stored, label and label_en show on the board, business marks worlds that have stages.",
@@ -448,6 +451,7 @@
     "today.max_reads": "How many vault files the brief run may open on its own beyond what the prompt gives it, 0 to 20. Changes need a daemon restart.",
     "today.quote_min_chars": "A quoted part of the brief this long (Chinese characters, or 4 or more Latin words) is checked against the real messages; not found becomes a gist, 2 to 40. Changes need a daemon restart.",
     "today.extra_rules": "Your own judgment rules for the brief, one paragraph, at most 2000 characters, added to its prompt as written. Changes need a daemon restart.",
+    "today.write_mode": "off, direct or queue (station O7). off: no write button, the brief stays proposal only. direct: pressing the write button on a card you pressed OK on writes that task into your vault at once, by program and never by the model, with a backup and an undo. queue: the press only queues it and your own session applies it with wa_vault_write.py --apply-pending. direct and queue need today.enabled and paths.vault; the button also stays hidden until your doctrine schema reader (paths.schema_reader) and PyYAML for the system Python both load, and doctor says why. Changes need a daemon restart.",
     "voice.enabled": "Learn your voice from drafts you edited before sending.",
     "voice.examples": "How many draft and sent pairs are shown to the brain as examples.",
     "voice.pairs": "File that keeps the draft and sent pairs.",

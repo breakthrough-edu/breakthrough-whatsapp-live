@@ -3,11 +3,11 @@ type: guide
 guide_family: playbook
 updated: 2026-10-21
 ---
-<!-- seed: breakthrough-whatsapp-live playbooks/whatsapp-live-triage/_WhatsApp-Live-Triage-Guide.md v1.1.0 -->
+<!-- seed: breakthrough-whatsapp-live playbooks/whatsapp-live-triage/_WhatsApp-Live-Triage-Guide.md v1.2.0 -->
 
 # WhatsApp Live Triage
 
-给一个 personal WhatsApp 号装实时分诊: 讯息一进来自己苏醒、判断、出草稿、上手机开得到的板, 人按最后那一下 send; 开了今日简报的话, 板上再按项目提议今天这些对话对你的事意味着什么, 只提议, 不写 vault, 不推播。
+给一个 personal WhatsApp 号装实时分诊: 讯息一进来自己苏醒、判断、出草稿、上手机开得到的板, 人按最后那一下 send; 开了今日简报的话, 板上再按项目提议今天这些对话对你的事意味着什么, 只提议, 不推播; 你另外开了写入钮, 按了好的卡才由程序写进那张 task, 有备份、可撤回, 不然不写 vault。
 
 ## Read this before working, in this order
 

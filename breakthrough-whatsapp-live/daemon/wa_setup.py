@@ -6,11 +6,13 @@ It renders files, checks them and reports. It never judges a message and never s
 
   init --home <dir>     create the working tree (folders 0700), write live/config.json from the example with the
                         tools found on this Mac, copy the prompt and topic map seeds into live/, render
-                        live/claude-settings.json, write the two deny canaries (secrets/ and transcripts-cache/),
-                        record every copied seed in live/seeds.json.
+                        live/claude-settings.json, write the three deny canaries (secrets/, transcripts-cache/ and vault-write-backups/),
+                        record every copied seed in live/seeds.json. The tree includes live/today/ and
+                        vault-write-backups/ (the copies a vault write from the board takes before it changes a file).
                         Never overwrites an existing file: it reports it and moves on.
   doctor                read only prerequisite report: macOS, WhatsApp Desktop database present, fresh and readable,
-                        node, python, claude, tailscale, ffmpeg, whisperkit and its model, lark-cli when chosen.
+                        node, python, claude, tailscale, ffmpeg, whisperkit and its model, lark-cli when chosen,
+                        and one line for the Today page's write button (off, available, or unavailable and why).
                         Counts and ages only, never message text or names. Always exits 0 with one verdict line.
   check-config          unknown keys, bad values, vocabulary keys that do not exist, enabled stations without paths;
                         retired keys still set (intake.evening_push, intake.evening_at) are warnings, never errors.
@@ -32,6 +34,9 @@ It renders files, checks them and reports. It never judges a message and never s
   measure --days 3      inbound traffic counted on a snapshot copy of the WhatsApp database: one to one, groups,
                         top groups by inbound. Group names and counts only. Used to build the group whitelist.
   tailscale-hint        the tailscale serve command for the board port and the address it gives. Runs nothing.
+  vault-write-check     whether the Today page's write button can work (today.write_mode, the owner's doctrine schema
+                        reader, PyYAML), in doctor's words; on a missing PyYAML it prints the install command for the
+                        owner's session to show, and never installs anything. Exit 0 available, 2 not. --lang zh|en.
   render-claude-wrapper optional: run the daemon's claude with a long lived setup token instead of the Keychain login.
                         Needs <home>/secrets/claude-bot.env (a regular file, mode 0600, one line
                         CLAUDE_CODE_OAUTH_TOKEN=...). Writes <home>/bin/claude-bot (0700), points bin.claude at it,
@@ -50,6 +55,8 @@ import copy
 import inspect
 import datetime as dt
 import hashlib
+import importlib
+import importlib.util
 import json
 import os
 import platform
@@ -73,7 +80,8 @@ PROMPT_SEEDS =("brain-prompt.md", "second-source-prompt.md", "backfill-prompt.md
 STAMP_RE = re.compile(r"seed:\s*breakthrough-whatsapp-live\s+(\S+?)\s+v(\d+(?:\.\d+){0,3})")
 PLACEHOLDER_RE = re.compile(r"\{[A-Z][A-Z0-9_]*\}")
 TREE_DIRS = ("runs-work", "prewarm", "transcripts-cache", "doc-text-cache", "secrets", "brain-cwd", "launchd", "live", "live/prompts",
-             "live/digest", "live/runs", "live/commands", "live/dossier-backups", "live/variants")
+             "live/digest", "live/runs", "live/commands", "live/dossier-backups", "live/variants", "live/today",
+             "vault-write-backups")
 STANDARD_PATH = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
 LOOPBACK = ("127.0.0.1", "localhost", "::1")
 CORE_EPOCH_UTC = dt.datetime(2001, 1, 1, tzinfo=dt.timezone.utc)
@@ -614,6 +622,7 @@ def do_init(home, rep, config_path=None, payload=None, which=None, models_dir="~
 
     ensure_canary(home / "secrets" / "deny-canary.txt", rep)
     ensure_canary(home / "transcripts-cache" / "deny-canary.txt", rep)
+    ensure_canary(home / "vault-write-backups" / "deny-canary.txt", rep)
     save_seed_records(live, new_seeds, new_rendered, rep)
     rep.line("init: %d created, %d already there, %d warning(s), %d error(s)"
              % (len(rep.done), len(rep.kept), len(rep.warnings), len(rep.errors)))
@@ -649,6 +658,14 @@ RETIRED_KEYS = {
 TODAY_RANGES = {"today.every_minutes": (5, 1440), "today.manual_min_gap_seconds": (10, 3600), "today.max_reads": (0, 20),
                 "today.quote_min_chars": (2, 40)}
 TODAY_EXTRA_RULES_MAX = 2000
+# today.write_mode: the write button of the Today page (station O7); off by default
+WRITE_MODES = ("off", "direct", "queue")
+# where the owner's my-second-brain doctrine schema reader is looked for when paths.schema_reader is empty (read in place)
+SCHEMA_READER_REL = ".claude/skills/my-second-brain/scripts/doctrine_schema.py"
+YAML_HINT_FALLBACK = "/usr/bin/python3 -m pip install --user pyyaml"
+# Read(...) path rules in daemon/templates/claude-settings.json, every one of them rendered by init (the selftest proves
+# it and install/C2-daemon.md quotes the number)
+SETTINGS_READ_DENY_RULES = 28
 EVENING_RETIRED = ("refused: the evening intake job is retired; the board's Today brief replaces it "
                    "(see install/O7-intake.md)")
 VOCAB_ENTRY_KEYS = {"worlds": ("key", "label", "label_en", "business", "criteria"), "stages": ("key", "label", "label_en", "criteria", "side"),
@@ -757,8 +774,34 @@ def path_of(cfg, dotted):
     return expand(v.strip())
 
 
-def check_config(raw, cfg, payload=None, user_home=None):
-    """[(level, dotted key, message)] for a raw config dict and its defaults applied twin (cfg may be None)."""
+def schema_reader_path(cfg, user_home=None):
+    """(path or None, configured): paths.schema_reader when set (whether or not the file is there), else the first of
+    <vault>/.claude/skills/my-second-brain/scripts/doctrine_schema.py and ~/.claude/skills/... that is a file."""
+    configured = path_of(cfg, "paths.schema_reader")
+    if configured is not None:
+        return configured, True
+    places = []
+    vault = path_of(cfg, "paths.vault")
+    if vault is not None:
+        places.append(vault / SCHEMA_READER_REL)
+    places.append((Path(user_home) if user_home else Path.home()) / SCHEMA_READER_REL)
+    for c in places:
+        if c.is_file():
+            return c, False
+    return None, False
+
+
+def yaml_importable():
+    """True when PyYAML can be imported by the Python running this command (looked up, never imported here)."""
+    try:
+        return importlib.util.find_spec("yaml") is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def check_config(raw, cfg, payload=None, user_home=None, has_yaml=None):
+    """[(level, dotted key, message)] for a raw config dict and its defaults applied twin (cfg may be None).
+    has_yaml: callable answering whether PyYAML imports (default: looked up for this Python)."""
     issues = []
     add = lambda level, key, msg: issues.append((level, key, msg))
     try:
@@ -966,6 +1009,28 @@ def check_config(raw, cfg, payload=None, user_home=None):
         if dget(eff, "intake.enabled") is not True:
             add("warning", "today.enabled", "true while intake.enabled is false; the brief still works from the judgments, "
                                             "without intake entries")
+
+    wm = dget(raw, "today.write_mode")
+    if isinstance(wm, str) and wm not in WRITE_MODES:
+        add("error", "today.write_mode", "is %r, allowed: %s" % (wm, " | ".join(WRITE_MODES)))
+    sr = path_of(eff, "paths.schema_reader")
+    if sr is not None and not sr.is_file():
+        add("error", "paths.schema_reader", "file not found: %s (your my-second-brain scripts/doctrine_schema.py, or empty "
+                                            "for the two default places)" % tilde(sr))
+    if wm in ("direct", "queue"):
+        if dget(eff, "today.enabled") is not True:
+            add("error", "today.write_mode", "is %s while today.enabled is false; the write button lives on the Today page" % wm)
+        if path_of(eff, "paths.vault") is None:
+            add("error", "today.write_mode", "is %s while paths.vault is empty; there is no vault to write into" % wm)
+        reader, configured = schema_reader_path(eff, user_home)
+        if reader is None and not configured:
+            add("warning", "paths.schema_reader", "no doctrine_schema.py in <vault>/%s or ~/%s; the write button stays hidden "
+                                                  "until your my-second-brain reader is found (doctor says why)"
+                % (str(Path(SCHEMA_READER_REL).parent), str(Path(SCHEMA_READER_REL).parent)))
+        if not (has_yaml or yaml_importable)():
+            add("warning", "today.write_mode", "PyYAML does not import for %s; the write button stays hidden until it is "
+                                               "installed on your yes (wa_setup.py vault-write-check prints the command)"
+                % tilde(sys.executable or "python3"))
 
     if dget(eff, "facts.enabled") is True:
         src = dget(eff, "facts.source")
@@ -1805,8 +1870,8 @@ def real_claude(cfg, wrapper, which=None):
 
 
 def ensure_canary(canary, rep):
-    """A deny canary (0600, a random marker) for the read_canary deny probe: <home>/secrets/deny-canary.txt and
-    <home>/transcripts-cache/deny-canary.txt, one per denied folder the probe tries. An existing canary is kept
+    """A deny canary (0600, a random marker) for the read_canary deny probe: <home>/secrets/deny-canary.txt,
+    <home>/transcripts-cache/deny-canary.txt and <home>/vault-write-backups/deny-canary.txt, one per denied folder the probe tries. An existing canary is kept
     as it is (never rotated: it is a decoy, not a secret; a denied read leaves it unseen, and a READ_OK means the deny
     rule is broken, which rotating would not fix). False when something else sits in its place."""
     canary = Path(canary)
@@ -1977,7 +2042,7 @@ def do_render_claude_wrapper(cfg, config_path, rep, which=None, payload=None, us
     else:
         rep.line("  1. wa_setup.py restart --config %s   (the daemon reads bin.claude only at start)" % qc)
     rep.line("  2. echo '{}' > %s   (claude answers from launchd with the token)" % sh_dq(live / "commands" / "probe-claude.json"))
-    rep.line("  3. echo '{\"read_canary\": true}' > %s   (deny probe: wa_live.log must say 读取被挡下 for secrets and for transcripts-cache)"
+    rep.line("  3. echo '{\"read_canary\": true}' > %s   (deny probe: wa_live.log must say 读取被挡下 for secrets, for transcripts-cache and for vault-write-backups)"
              % sh_dq(live / "commands" / "probe-claude.json"))
     rep.line("  To go back to the Keychain login: set bin.claude to %s in the config, then render-launchd and follow its next: line (install-launchd, or restart when the plist did not change)." % previous)
     return rep
@@ -2427,7 +2492,7 @@ def file_line(path, now=None):
 
 class DoctorContext(object):
     def __init__(self, config_path=None, wa_root=None, runner=None, which=None, user_home=None, launch_agents=None,
-                 payload=None, tailscale_app="/Applications/Tailscale.app/Contents/MacOS/Tailscale"):
+                 payload=None, tailscale_app="/Applications/Tailscale.app/Contents/MacOS/Tailscale", vault_write=None):
         self.config_path = expand(config_path) if config_path else default_config_path()
         self.wa_root = Path(wa_root) if wa_root else wa_root_default()
         self.runner = runner or default_runner
@@ -2436,6 +2501,87 @@ class DoctorContext(object):
         self.launch_agents = Path(launch_agents) if launch_agents else Path.home() / "Library" / "LaunchAgents"
         self.payload = Path(payload) if payload else PAYLOAD
         self.tailscale_app = tailscale_app
+        self.vault_write = vault_write   # callable(cfg, lang) -> availability dict; default wa_vault_write's, lazily
+
+
+VW_CODE_WORDS = {"no_module": "daemon/wa_vault_write.py does not import", "module_error": "the availability check failed"}
+
+
+def vault_write_availability(cfg, lang="en", importer=None):
+    """wa_vault_write.availability(cfg, lang), imported only when asked: a payload without the module (or one that does
+    not import) is the state no_module, an exception inside the check is module_error. Never raises."""
+    mode = str(dget(cfg, "today.write_mode") or "off")
+    reader, _configured = schema_reader_path(cfg)
+    base = {"ok": False, "schema_reader": str(reader) if reader is not None and reader.is_file() else "",
+            "yaml": yaml_importable(), "mode": mode}
+    try:
+        mod = (importer or importlib.import_module)("wa_vault_write")
+    except Exception as e:
+        return dict(base, code="no_module", reason="%s (%s: %s)" % (VW_CODE_WORDS["no_module"], type(e).__name__, e))
+    try:
+        res = mod.availability(cfg, lang)
+        if not isinstance(res, dict):
+            raise TypeError("availability answered %s, not a dict" % type(res).__name__)
+    except Exception as e:
+        return dict(base, code="module_error", reason="%s (%s: %s)" % (VW_CODE_WORDS["module_error"], type(e).__name__, e))
+    return dict(base, **res)
+
+
+def vault_write_line(cfg, availability=None):
+    """The doctor's one line for the write button: off, available (direct|queue), or unavailable: <code> <reason>.
+    With today.write_mode off nothing is imported or checked."""
+    mode = str(dget(cfg, "today.write_mode") or "off")
+    if mode not in ("direct", "queue"):
+        return "vault write: off"
+    res = (availability or vault_write_availability)(cfg, "en")
+    if res.get("ok"):
+        return "vault write: available (%s)" % (res.get("mode") or mode)
+    if res.get("code") == "off":
+        return "vault write: off"
+    return "vault write: unavailable: %s %s" % (res.get("code") or "?", res.get("reason") or "")
+
+
+def yaml_install_hint(res, cfg):
+    """The PyYAML install command for the owner's session to show: the reader's own install_hint() when the reader the
+    check found loads, else the generic one. Runs nothing."""
+    hint = res.get("install_hint")
+    path = str(res.get("schema_reader") or "")
+    if not hint and path and Path(path).is_file():
+        try:
+            spec = importlib.util.spec_from_file_location("wa_setup_doctrine_schema_hint", path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            hint = mod.install_hint()
+        except Exception:
+            hint = None
+    if isinstance(hint, (tuple, list)):
+        hint = hint[0] if hint else None
+    return str(hint).strip() if isinstance(hint, str) and hint.strip() else YAML_HINT_FALLBACK
+
+
+def do_vault_write_check(cfg, lang=None, out=say, availability=None):
+    """vault-write-check: the availability in doctor words, plus the PyYAML install hint on no_yaml (never runs pip).
+    Exit 0 when available, else 2."""
+    lang = lang if lang in ("zh", "en") else (WC.owner_lang(cfg) if WC is not None else "en")
+    mode = str(dget(cfg, "today.write_mode") or "off")
+    res = (availability or vault_write_availability)(cfg, lang)
+    if mode not in ("direct", "queue") or res.get("code") == "off":
+        out("vault write: off")
+        if res.get("code") not in (None, "", "off"):
+            out("  check: %s %s" % (res.get("code"), res.get("reason") or ""))
+    elif res.get("ok"):
+        out("vault write: available (%s)" % (res.get("mode") or mode))
+    else:
+        out("vault write: unavailable: %s %s" % (res.get("code") or "?", res.get("reason") or ""))
+    out("  mode: %s (today.write_mode)" % (res.get("mode") or mode))
+    out("  today brief: %s" % ("on" if dget(cfg, "today.enabled") is True else "off"))
+    out("  schema reader: %s" % (tilde(res["schema_reader"]) if res.get("schema_reader") else "not found"))
+    out("  PyYAML: %s" % ("imports" if res.get("yaml") else "does not import"))
+    if res.get("code") == "no_yaml":
+        out("  install hint (show it to the owner and run it in their session only on their yes; this check never "
+            "installs anything): %s" % yaml_install_hint(res, cfg))
+        out("  the daemon runs on %s: the command must name that Python (a hint that spells it by its resolved path under CommandLineTools names the same interpreter)" % (dget(cfg, "bin.python") or "/usr/bin/python3"))
+    return 0 if res.get("ok") else 2
 
 
 def today_line(cfg):
@@ -2521,6 +2667,7 @@ def doctor(ctx, out=say):
         if n_err:
             note("check-config reports %d error(s); run wa_setup.py check-config for the list" % n_err)
         out("  " + today_line(st["cfg"]))
+        out("  " + vault_write_line(st["cfg"], ctx.vault_write))
 
     def s_whatsapp():
         root = ctx.wa_root
@@ -2616,6 +2763,33 @@ def doctor(ctx, out=say):
         else:
             block("claude (Claude Code) not found on PATH or in the usual install folders")
         auth_line(cfg)
+        tool_lines(cfg)
+
+    def tool_lines(cfg):
+        """The voice tools, the whisper model, Homebrew and lark-cli: printed on every login path."""
+        for name, why in (("ffmpeg", "voice notes"), ("whisperkit", "voice notes")):
+            p = resolve_bin(cfg, name)
+            out("  %s: %s" % ({"whisperkit": "whisperkit-cli"}.get(name, name), tilde(p) if p else "not found"))
+            if not p:
+                note("%s not found; %s stay untranscribed (brew install %s)"
+                     % ({"whisperkit": "whisperkit-cli"}.get(name, name), why, {"whisperkit": "whisperkit-cli"}.get(name, name)))
+        model = path_of(cfg, "brain.whisper_model")
+        if model is not None and model.is_dir():
+            n_files = sum(1 for _ in model.rglob("*") if _.is_file())
+            out("  whisper model folder: present, %d file(s)" % n_files)
+            if under_protected(model, ctx.user_home):
+                block("the whisper model sits in a privacy protected folder; copy it under ~/.cache/whisper-models")
+        else:
+            out("  whisper model folder: not found")
+            note("no whisper model folder yet (station C1 downloads one under ~/.cache/whisper-models)")
+        brew = ctx.which("brew") or next((p for p in ("/opt/homebrew/bin/brew", "/usr/local/bin/brew") if is_exec(p)), "")
+        out("  Homebrew: %s" % (tilde(brew) if brew else "not found"))
+        uses_lark = "lark" in (dget(cfg, "facts.source"), dget(cfg, "second_source.source"), dget(cfg, "calendar.destination"))
+        if uses_lark:
+            lark = resolve_bin(cfg, "lark_cli")
+            out("  lark-cli: %s" % (tilde(lark) if lark else "not found"))
+            if not lark:
+                block("the config selects a Lark adapter but lark-cli is not found")
 
     def auth_line(cfg):
         """Which login the daemon's claude uses. Reads file metadata only: never the token, never runs claude."""
@@ -2644,29 +2818,6 @@ def doctor(ctx, out=say):
         if not (target and is_exec(target)):
             block("the token wrapper %s runs a claude that is not there (%s); run wa_setup.py render-claude-wrapper again"
                   % (tilde(wrapper), tilde(target) if target else "no exec line"))
-        for name, why in (("ffmpeg", "voice notes"), ("whisperkit", "voice notes")):
-            p = resolve_bin(cfg, name)
-            out("  %s: %s" % ({"whisperkit": "whisperkit-cli"}.get(name, name), tilde(p) if p else "not found"))
-            if not p:
-                note("%s not found; %s stay untranscribed (brew install %s)"
-                     % ({"whisperkit": "whisperkit-cli"}.get(name, name), why, {"whisperkit": "whisperkit-cli"}.get(name, name)))
-        model = path_of(cfg, "brain.whisper_model")
-        if model is not None and model.is_dir():
-            n_files = sum(1 for _ in model.rglob("*") if _.is_file())
-            out("  whisper model folder: present, %d file(s)" % n_files)
-            if under_protected(model, ctx.user_home):
-                block("the whisper model sits in a privacy protected folder; copy it under ~/.cache/whisper-models")
-        else:
-            out("  whisper model folder: not found")
-            note("no whisper model folder yet (station C1 downloads one under ~/.cache/whisper-models)")
-        brew = ctx.which("brew") or next((p for p in ("/opt/homebrew/bin/brew", "/usr/local/bin/brew") if is_exec(p)), "")
-        out("  Homebrew: %s" % (tilde(brew) if brew else "not found"))
-        uses_lark = "lark" in (dget(cfg, "facts.source"), dget(cfg, "second_source.source"), dget(cfg, "calendar.destination"))
-        if uses_lark:
-            lark = resolve_bin(cfg, "lark_cli")
-            out("  lark-cli: %s" % (tilde(lark) if lark else "not found"))
-            if not lark:
-                block("the config selects a Lark adapter but lark-cli is not found")
 
     def s_tailscale():
         cfg = st["cfg"] or {}
@@ -2933,6 +3084,11 @@ def selftest():
         canary_t_text = canary_t.read_text(encoding="utf-8") if canary_t.is_file() else ""
         check("init writes transcripts-cache/deny-canary.txt 0600 with its own random marker",
               mode_of(canary_t) == 0o600 and bool(CANARY_RE.match(canary_t_text)) and canary_t_text != canary0_text, canary_t_text)
+        canary_b = home / "vault-write-backups" / "deny-canary.txt"
+        canary_b_text = canary_b.read_text(encoding="utf-8") if canary_b.is_file() else ""
+        check("init writes vault-write-backups/deny-canary.txt 0600 with its own random marker",
+              mode_of(canary_b) == 0o600 and bool(CANARY_RE.match(canary_b_text)) and canary_b_text not in (canary0_text, canary_t_text),
+              canary_b_text)
         seeds = load_seeds(live)
         check("seeds.json records four seeds and the rendered settings",
               len(seeds["seeds"]) == 4 and "claude-settings.json" in seeds["rendered"], sorted(seeds["seeds"]))
@@ -3308,6 +3464,9 @@ def selftest():
               not any(s in dtext for s in ("canary-text-7781", "Canary", "Mika", "60100000009", "fake-host")))
         check("doctor never runs launchctl or claude",
               not any(os.path.basename(c[0]) in ("launchctl", "claude") for c in dcalls), dcalls)
+        check("doctor prints the voice tool and Homebrew lines on the Keychain login path too",
+              "authentication: the Claude Code login" in dtext and "  ffmpeg: " in dtext and "  whisperkit-cli: " in dtext
+              and "  Homebrew: " in dtext, [ln for ln in lines if ln.startswith(("  ffmpeg", "  whisperkit", "  Homebrew"))])
         check("doctor reads tailscale serve status and sees the board port",
               any(c[1:3] == ["serve", "status"] for c in dcalls) and "board port 8787 served: yes" in dtext)
         denied = base / "wa-denied"
@@ -3463,7 +3622,7 @@ def selftest():
 
         say("[config keys: today.*, the retired evening keys]")
         today_want = {"enabled": False, "model": "claude-sonnet-5", "every_minutes": 30, "manual_min_gap_seconds": 60,
-                      "max_reads": 6, "quote_min_chars": 6, "extra_rules": ""}
+                      "max_reads": 6, "quote_min_chars": 6, "extra_rules": "", "write_mode": "off"}
         check("config.example.json and wa_common.DEFAULTS carry the same today block; neither has the two evening keys",
               exd.get("today") == today_want and WC.DEFAULTS.get("today") == today_want
               and not any(k in (exd.get("intake") or {}) or k in WC.DEFAULTS["intake"] for k in ("evening_push", "evening_at"))
@@ -3534,6 +3693,135 @@ def selftest():
               "  today: off" in dl0 and "  today: on (model claude-sonnet-5, every 45 min)" in dl1, [x for x in dl0 + dl1 if "today" in x])
         check("doctor: one line when an evening job is still installed, nothing when it is absent",
               dl1.count(ev_line) == 1 and not any("evening" in x for x in dl0), [x for x in dl0 + dl1 if "evening" in x])
+
+        say("[the Today page's write button: today.write_mode, paths.schema_reader, vault-write-check]")
+        check("config.example.json and wa_common.DEFAULTS carry today.write_mode off and paths.schema_reader empty",
+              dget(exd, "today.write_mode") == "off" and dget(WC.DEFAULTS, "today.write_mode") == "off"
+              and dget(exd, "paths.schema_reader") == "" and dget(WC.DEFAULTS, "paths.schema_reader") == ""
+              and "today.write_mode" in (json.loads((real_t / "config.example.json").read_text(encoding="utf-8")).get("_help") or {}))
+        vw_vault = Path(raw["paths"]["vault"])
+        vw_reader = vw_vault / SCHEMA_READER_REL
+
+        def vw(mode=None, enabled=True, vault=None, reader=None, yaml_ok=True):
+            c = copy.deepcopy(raw)
+            c["today"] = dict(today_want, enabled=enabled)
+            if mode is not None:
+                c["today"]["write_mode"] = mode
+            if vault is not None:
+                c["paths"]["vault"] = vault
+            if reader is not None:
+                c["paths"]["schema_reader"] = reader
+            return [(level, k, m) for level, k, m in check_config(c, WC.apply_defaults(copy.deepcopy(c), cfg_file), payload, uhome,
+                                                                  has_yaml=lambda: yaml_ok)
+                    if k in ("today.write_mode", "paths.schema_reader") or (k == "paths.vault" and mode)]
+        vw_bad = vw("always")
+        vw_noto = vw("direct", enabled=False)
+        vw_nov = vw("queue", vault="")
+        vw_miss = vw("off", reader=str(base / "nowhere" / "doctrine_schema.py"))
+        vw_warn = vw("direct", yaml_ok=False)
+        vw_reader.parent.mkdir(parents=True, exist_ok=True)
+        vw_reader.write_text("# fake reader for the selftest\n", encoding="utf-8")
+        vw_clean = vw("direct") + vw("queue") + vw("off") + vw(None)
+        vw_set = vw("direct", reader=str(vw_reader))
+        vw_reader.unlink()
+        check("check-config: today.write_mode outside off, direct, queue is an error",
+              any(level == "error" and k == "today.write_mode" and "allowed: off | direct | queue" in m for level, k, m in vw_bad), vw_bad)
+        check("check-config: direct with today.enabled false is an error (the button lives on the Today page)",
+              any(level == "error" and k == "today.write_mode" and "today.enabled is false" in m for level, k, m in vw_noto), vw_noto)
+        check("check-config: queue with paths.vault empty is an error",
+              any(level == "error" and k == "today.write_mode" and "paths.vault is empty" in m for level, k, m in vw_nov), vw_nov)
+        check("check-config: paths.schema_reader set but missing is an error, even with the button off",
+              any(level == "error" and k == "paths.schema_reader" and "file not found" in m for level, k, m in vw_miss), vw_miss)
+        check("check-config: direct with no reader found and PyYAML missing gives two warnings and no error",
+              any(level == "warning" and k == "paths.schema_reader" and "stays hidden" in m for level, k, m in vw_warn)
+              and any(level == "warning" and k == "today.write_mode" and "PyYAML" in m and "vault-write-check" in m for level, k, m in vw_warn)
+              and not any(level == "error" for level, k, m in vw_warn), vw_warn)
+        check("check-config: direct, queue and off with the reader in the vault's default place (or set) and PyYAML say nothing",
+              not vw_clean and not vw_set, vw_clean + vw_set)
+
+        vw_fake = {"ok": {"ok": True, "code": "ok", "reason": "", "schema_reader": str(vw_reader), "yaml": True, "mode": "direct"},
+                   "no_yaml": {"ok": False, "code": "no_yaml", "reason": "PyYAML does not import", "schema_reader": str(vw_reader),
+                               "yaml": False, "mode": "queue"}}
+        vw_calls = []
+
+        def vw_avail(code):
+            def f(c, lang):
+                vw_calls.append((code, lang))
+                return dict(vw_fake[code])
+            return f
+
+        def vw_cfg(mode):
+            return dict(WC.load_config(str(cfg_file)), today=dict(today_want, enabled=True, write_mode=mode))
+
+        def no_mod(name):
+            raise ImportError("No module named %r" % name)
+
+        class _Mod(object):
+            pass
+        boom = _Mod()
+        boom.availability = lambda c, lang: 1 / 0
+        line_off = vault_write_line(vw_cfg("off"), vw_avail("ok"))
+        line_ok = vault_write_line(vw_cfg("direct"), vw_avail("ok"))
+        line_un = vault_write_line(vw_cfg("queue"), vw_avail("no_yaml"))
+        line_nm = vault_write_line(vw_cfg("direct"), lambda c, lang: vault_write_availability(c, lang, importer=no_mod))
+        line_me = vault_write_line(vw_cfg("direct"), lambda c, lang: vault_write_availability(c, lang, importer=lambda n: boom))
+        check("doctor line: off, available (direct), unavailable: <code> <reason> (off checks nothing)",
+              line_off == "vault write: off" and line_ok == "vault write: available (direct)"
+              and line_un == "vault write: unavailable: no_yaml PyYAML does not import" and vw_calls == [("ok", "en"), ("no_yaml", "en")],
+              (line_off, line_ok, line_un, vw_calls))
+        check("doctor line: a payload without daemon/wa_vault_write.py is unavailable: no_module, a check that raises is module_error",
+              line_nm.startswith("vault write: unavailable: no_module daemon/wa_vault_write.py does not import (ImportError")
+              and line_me.startswith("vault write: unavailable: module_error the availability check failed (ZeroDivisionError"),
+              (line_nm, line_me))
+        vw_raw = copy.deepcopy(raw)
+        vw_raw["today"] = dict(today_want, enabled=True, write_mode="direct")
+        write_text_atomic(cfg_file, json_text(vw_raw), 0o600)
+        dl2 = []
+        doctor(DoctorContext(config_path=cfg_file, wa_root=wa, runner=doc_runner, which=fake_which, user_home=uhome,
+                             launch_agents=agents, payload=payload, tailscale_app=str(base / "no-app"),
+                             vault_write=vw_avail("no_yaml")), out=dl2.append)
+        write_text_atomic(cfg_file, json_text(raw), 0o600)
+        check("doctor prints the vault write line once, under the today line (off by default)",
+              dl2.count("  vault write: unavailable: no_yaml PyYAML does not import") == 1
+              and dl2.index("  vault write: unavailable: no_yaml PyYAML does not import") == dl2.index("  today: on (model claude-sonnet-5, every 30 min)") + 1
+              and "  vault write: off" in dl0, [x for x in dl0 + dl2 if "vault write" in x or "today:" in x])
+        o_ok, o_un, o_off = [], [], []
+        rc_ok = do_vault_write_check(vw_cfg("direct"), "en", o_ok.append, vw_avail("ok"))
+        rc_un = do_vault_write_check(vw_cfg("queue"), "en", o_un.append, vw_avail("no_yaml"))
+        rc_off = do_vault_write_check(vw_cfg("off"), "en", o_off.append, lambda c, lang: dict(vw_fake["no_yaml"], code="off", mode="off"))
+        hint_lines = [x for x in o_un if x.startswith("  install hint")]
+        check("vault-write-check: exit 0 when available, 2 when unavailable or off",
+              rc_ok == 0 and rc_un == 2 and rc_off == 2 and o_ok[0] == "vault write: available (direct)"
+              and o_un[0] == "vault write: unavailable: no_yaml PyYAML does not import" and o_off[0] == "vault write: off",
+              (rc_ok, rc_un, rc_off, o_ok[:1], o_un[:1], o_off[:1]))
+        check("vault-write-check: on no_yaml it prints the install hint for the owner's session and never installs",
+              len(hint_lines) == 1 and hint_lines[0].endswith(YAML_HINT_FALLBACK) and "only on their yes" in hint_lines[0]
+              and not any(x.startswith("  install hint") for x in o_ok + o_off), (hint_lines, o_ok, o_off))
+        vw_reader.parent.mkdir(parents=True, exist_ok=True)
+        vw_reader.write_text("def install_hint():\n    return ('/opt/fake/python3 -m pip install --user pyyaml', '/x', False)\n",
+                             encoding="utf-8")
+        o_rh = []
+        do_vault_write_check(vw_cfg("queue"), "en", o_rh.append, vw_avail("no_yaml"))
+        vw_reader.unlink()
+        check("vault-write-check: the hint comes from the reader's own install_hint() when the reader loads",
+              any(x.startswith("  install hint") and x.endswith("/opt/fake/python3 -m pip install --user pyyaml") for x in o_rh), o_rh)
+        pr = build_parser().parse_args(["vault-write-check", "--config", str(cfg_file), "--lang", "en"])
+        check("vault-write-check is a subcommand with --config and --lang", DISPATCH.get(pr.command) is cmd_vault_write_check
+              and pr.lang == "en")
+        try:
+            import wa_vault_write as _vw_real   # lane of its own; when present, its answer must fit the doctor line
+            vw_real = None
+        except Exception as e:
+            _vw_real, vw_real = None, "%s: %s" % (type(e).__name__, e)
+        if _vw_real is None:
+            say("  SKIP  the real wa_vault_write.availability (does not import here: %s)" % vw_real)
+        else:
+            real_res = vault_write_availability(vw_cfg("off"), "en")
+            check("the real wa_vault_write.availability answers with today.write_mode off as off",
+                  real_res.get("ok") is False and real_res.get("code") == "off", real_res)
+        check("init creates live/today and vault-write-backups, both 0700",
+              mode_of(home / "live" / "today") == 0o700 and mode_of(home / "vault-write-backups") == 0o700,
+              (mode_of(home / "live" / "today"), mode_of(home / "vault-write-backups")))
 
         say("[render-claude-wrapper and the doctor auth line]")
         fake_token = "selftest-fake-token-value-9c41e7"
@@ -3722,6 +4010,18 @@ def selftest():
               and ("Read(//%s/secrets/**)" % str(h2).lstrip("/")) in deny2, (r_h2.errors, deny2[-14:]))
         check("the shipped template renders the Read deny rule for <home>/transcripts-cache/** (the transcripts reach the brain inside the pack)",
               ("Read(/%s/transcripts-cache/**)" % h2) in deny2 and "transcript cache" in str(s2.get("_comment") or ""), deny2[-14:])
+        check("the shipped template renders the Read deny rule for <home>/vault-write-backups/** (copies of task files)",
+              ("Read(/%s/vault-write-backups/**)" % h2) in deny2 and "vault write backups" in str(s2.get("_comment") or ""), deny2[-14:])
+        tmpl_rules = [r for r in (dget(json.loads(real_settings), "permissions.deny") or []) if r.startswith("Read(/{")]
+        rendered_rules = [r for r in deny2 if r.startswith("Read(//")]
+        check("the settings template's Read deny rules all render (%d, the number install/C2-daemon.md quotes)" % SETTINGS_READ_DENY_RULES,
+              len(tmpl_rules) == len(rendered_rules) == SETTINGS_READ_DENY_RULES, (len(tmpl_rules), len(rendered_rules)))
+        c2_doc = PAYLOAD / "install" / "C2-daemon.md"
+        c2_text = c2_doc.read_text(encoding="utf-8") if c2_doc.is_file() else ""
+        check("install/C2-daemon.md quotes the rendered Read deny rule count (%d)" % SETTINGS_READ_DENY_RULES,
+              ("%d absolute Read deny rules" % SETTINGS_READ_DENY_RULES) in c2_text
+              and ("`%d %d`" % (SETTINGS_READ_DENY_RULES, SETTINGS_READ_DENY_RULES)) in c2_text,
+              re.findall(r"\d+ absolute Read deny rules|`\d+ \d+`", c2_text))
         old_tmpl = "".join(ln for ln in real_settings.splitlines(True)
                            if "{WA_HOME}/secrets/" not in ln and "{WA_HOME}/doc-text-cache/" not in ln)
         p3 = base / "payload-old-settings"
@@ -3836,6 +4136,10 @@ def cmd_render_claude_wrapper(args):
     return 3 if rep.data.get("refused") else (1 if rep.errors else 0)
 
 
+def cmd_vault_write_check(args):
+    return do_vault_write_check(load_cfg(_config_arg(args)), args.lang)
+
+
 def cmd_measure(args):
     cfg = {}
     path = _config_arg(args)
@@ -3855,6 +4159,7 @@ DISPATCH = {
     "install-launchd": cmd_install_launchd, "uninstall-launchd": cmd_uninstall_launchd, "restart": cmd_restart,
     "sync-reader-config": cmd_sync_reader_config, "seed-status": cmd_seed_status, "copy-seed": cmd_copy_seed,
     "measure": cmd_measure, "tailscale-hint": cmd_tailscale_hint, "render-claude-wrapper": cmd_render_claude_wrapper,
+    "vault-write-check": cmd_vault_write_check,
 }
 
 
@@ -3908,6 +4213,9 @@ def build_parser():
     add("render-claude-wrapper", "optional: run the daemon's claude with the setup token in <home>/secrets/claude-bot.env "
                                  "(0600) through <home>/bin/claude-bot and point bin.claude at it; never prints the token",
         writes=True)
+    sp = add("vault-write-check", "can the Today page's write button work: today.write_mode, the doctrine schema reader, "
+                                  "PyYAML; prints the install hint and never installs; exit 0 available, 2 not")
+    sp.add_argument("--lang", choices=("zh", "en"), default=None, help="language of the reason (default: board.lang)")
     sp = add("tailscale-hint", "print the tailscale serve command and address for the board port; runs nothing")
     sp.add_argument("--serve-port", type=int, default=None, metavar="N", help="tailnet port (default 80, or 443 with --https)")
     sp.add_argument("--https", action="store_true", help="serve over https (needs HTTPS certificates on the tailnet)")

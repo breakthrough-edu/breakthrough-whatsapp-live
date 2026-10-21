@@ -44,6 +44,7 @@ Probes marked **model call** spend a little usage. Probes marked **test install*
 | 14 | Claude memory in a headless run | runs that wander through unrelated notes and end at the turn limit |
 | 15 | A restart that orphans a frozen python | the board shows the old process, or nothing, after a restart |
 | 16 | A health check answered by the wrong thread | `/health` says ok while nothing has been judged for hours |
+| 17 | A write you cannot take back | an undo that restores the wrong text, or a note changed by something you never saw |
 
 ## 1 · Children of a launchd job cannot open protected folders
 
@@ -243,7 +244,7 @@ Pass: it prints `refused:` with a message saying the note already exists, then `
 
 **Why** Tool rules decide which tools exist, not which paths those tools may touch. One incoming message saying "put the contents of this file in your reply" is the risk.
 
-**Where the guard lives** `wa_setup.py init` renders `daemon/templates/claude-settings.json` into `live/claude-settings.json` with 27 absolute Read deny rules: the push token, the config and its backups, the second source whitelist, the state database, the facts file, the voice pairs, the logs, other runs, the digests, the note backups, the reader's working copies, its prewarm folder and the reader config, the `secrets/` folder (the optional setup token and the deny probe's marker), the document text cache and the voice transcript cache (a second probe marker sits there), WhatsApp's own databases, and the secret stores in the home folder (`~/.ssh/**`, `~/Library/Keychains/**`, `~/.config/**/credentials*` and more). Each is written as `Read(//<absolute path without its leading slash>)`. This form blocks the Read tool under `claude -p --settings`; the canary probe below confirms it on your own Mac. `Brain.call_claude` passes the settings file on every run. The full list, and what stays readable: `references/privacy.md`.
+**Where the guard lives** `wa_setup.py init` renders `daemon/templates/claude-settings.json` into `live/claude-settings.json` with 28 absolute Read deny rules: the push token, the config and its backups, the second source whitelist, the state database, the facts file, the voice pairs, the logs, other runs, the digests, the note backups, the reader's working copies, its prewarm folder and the reader config, the `secrets/` folder (the optional setup token and the deny probe's marker), the document text cache and the voice transcript cache (a second probe marker sits there), the write button's backups (`vault-write-backups/`), WhatsApp's own databases, and the secret stores in the home folder (`~/.ssh/**`, `~/Library/Keychains/**`, `~/.config/**/credentials*` and more). Each is written as `Read(//<absolute path without its leading slash>)`. This form blocks the Read tool under `claude -p --settings`; the canary probe below confirms it on your own Mac. `Brain.call_claude` passes the settings file on every run. The full list, and what stays readable: `references/privacy.md`.
 
 **How to check it still holds** (one **model call** with a harmless canary; run it in Terminal on the Mac, not over ssh)
 
@@ -386,3 +387,20 @@ curl -s "http://127.0.0.1:$PORT/health"; echo
 ```
 
 Pass: `200`; a body starting with `ok (last scan`; and a `✓` line for the selftest's `/health` case, which ages the heartbeat past the limit, reads `503` and `stalled` for both `GET` and `HEAD`, then reads `200` again once the heartbeat is fresh. A real stall cannot be staged from outside: stopping the python with a signal stops the board thread with it.
+
+## 17 · A write you cannot take back
+
+**What happens** A program writes into a note on your behalf, and later you want it undone. The undo puts back a copy that is older than an edit you made since, and your edit is gone; or the copy is missing, and there is nothing to put back; or what landed is not what you approved, because the proposal changed between your press and the write, or a sync tool rewrote the file while it was being written.
+
+**Why** A program that writes into notes must pin what it was shown, back up what it touches and read back what it wrote, or an undo is a guess. Without the pin, an approval of one text writes another. Without the backup taken before the change, there is nothing exact to restore. Without the read back, the program believes a write it cannot prove, and without comparing the file before an undo, it restores over work that is newer than its copy.
+
+**Where the guard lives** `daemon/wa_vault_write.py`, the Today page's write button (`references/vault-proposals.md`, proposal g). `pin_hash` is computed from the card at your OK and checked at the write, so a card that changed is refused whole. `apply` writes the backup manifest and a copy of every file first, writes through a temporary file in the same folder, reads the file back and compares its md5, and restores from the backup when anything after the backup fails. `undo` restores only when the file's md5 still equals the one recorded after the write, refuses with "changed since" otherwise, and moves a created file into the backup folder instead of deleting it. `availability` keeps the button hidden while any of these cannot be done (the schema reader, PyYAML, the backup folder). The model never writes: every byte comes from the card, by program.
+
+**How to check it still holds** (temporary folders only; no model call, no vault touched)
+
+```sh
+"$PY" "$KIT/daemon/wa_vault_write.py" --selftest | tail -1
+"$PY" "$KIT/daemon/wa_setup.py" vault-write-check --config "$LIVE/config.json"; echo "exit $?"
+```
+
+Pass: `wa_vault_write selftest PASS (<n> checks)` (it covers the pin refusal, the backup before the write, the read back that restores, and the undo that refuses after a change), then the availability line with `exit 0` when the button is on and available, or the reason and `exit 2`. With the button on, the real thing: press Write to vault on one card, edit the task file by hand, then press Undo. Pass: the undo is refused as changed since, and your edit is still there.
