@@ -6,7 +6,7 @@ adapters/calendar_lark.py · calendar destination `lark`: lark-cli `calendar eve
 Behind wa_calendar.create_event (which validates the form and builds the spec). Config: `calendar.lark.calendar_id`
 (required; empty means refuse without calling lark-cli), `bin.lark_cli`, `bin.node`, `calendar.timezone` (optional).
 
-Pits already paid for (lark-cli 1.0.89):
+Known pits (lark-cli 1.0.89):
 - The `+event-create` and `+calendar-list` shortcuts do not exist; `calendar +create` forces a video meeting and has no
   place and no all day, so this uses the full API `calendar events create --params {calendar_id} --data {...}`.
 - Timed events: unix timestamps plus the owner's IANA zone, a reminder `reminder_min` minutes before. All day events:

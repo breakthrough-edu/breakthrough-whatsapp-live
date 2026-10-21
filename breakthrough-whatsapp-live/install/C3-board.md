@@ -71,10 +71,12 @@ With Tailscale switched on on the phone, open the address the hint printed (`htt
 With the owner, on the phone first, then on the Mac. The labels below are the English board's (`board.lang: en`); the Chinese board shows the same things. The full list with a probe per feature is `references/feature-checklist.md`.
 
 **Left column**
+- Search, on top of the list (the `/` key on the Mac): every word typed must appear in a message or a file name, in any chat WhatsApp Desktop keeps on this Mac. Results show the chat, the time, the speaker in a group and an excerpt with the words marked; with a conversation open, a chip limits them to it. A click opens the context view, the conversation around that message with it marked, and "‹ Results" goes back. Search only reads.
 - Buckets with counts: Open, Reply, Waiting, FYI, Ignore, Replied / done, All.
 - Rows: name, how long ago, one situation line, small chips, and a colored dot on the ones waiting for the owner.
 - Other chats: every chat active in the last `board.others_days` days that was never judged, up to `board.others_limit`. Opening one offers "Judge now"; a chat the gate does not pass asks for confirmation first, because a judgment spends usage.
 - Footer: today's runs and tokens, the watermark, and how many hours ago WhatsApp last wrote its database.
+- A banner on top, only while the daemon cannot call Claude (a login or a usage limit): since when, what to do, when it checks next, and that pending messages stay queued (`references/operating.md`, "When the brain cannot be called"). Nothing to see on a healthy install.
 
 **Middle column**
 - The three chips, World, Stage and Priority. World and Stage change with a tap (choosing a world that is not a business clears the stage); Priority belongs to the brain and is judged again on every run.
@@ -149,6 +151,17 @@ Run each probe with the station's opening block in front of it. Every check must
     ```
 12. **The phone.** Pass, confirmed by the owner holding the phone: with Tailscale on the board opens, a photo shows, a video plays, a voice note plays and shows its transcript with no broken picture above it, the WhatsApp button opens the right chat with the edited draft and sends nothing; with Tailscale off the board does not open.
 13. **Every feature in step 5 was seen.** Pass: each line of step 5 seen by the owner, or logged with what was missing.
+14. **Search answers, read only, and logs no words.** Search on the Mac for a word from a recent message (`<word>`, plain letters). Pass: `['hits', 'more', 'q']` and a count above 0; then one `板子: 搜寻 1 个词, <n> 笔` line (the search, by term and hit count) and `0` (the word is not in that line). On the board: results with chat, time and an excerpt with the word marked. (K336, K338, K339)
+    ```sh
+    curl -sS "http://127.0.0.1:$PORT/api/search?q=<word>&n=5" | "$PY" -c 'import json,sys; d=json.load(sys.stdin); print(sorted(d), len(d["hits"]))'
+    grep "板子: 搜寻" "$LIVE/wa_live.log" | tail -1
+    grep "板子: 搜寻" "$LIVE/wa_live.log" | tail -1 | grep -c "<word>"
+    ```
+15. **The context view.** Click a result on the Mac. Pass: the conversation opens around that message, which is marked `Search hit` (zh `搜到的这条`), and `‹ Results` returns to the same list; with `<hit jid>` and `<hit pk>` taken from that hit in the search answer (`jid`, `pk`), the probe prints the messages in time order (by `at`) with `<hit pk>` among them. (K337)
+    ```sh
+    curl -sS "http://127.0.0.1:$PORT/api/thread?jid=<hit jid>&n=20&around=<hit pk>" | "$PY" -c 'import json,sys; print([(m["pk"], m["at"]) for m in json.load(sys.stdin)["messages"]])'
+    ```
+16. **Search on the phone.** Pass, confirmed by the owner holding the phone: the search panel opens full screen, a search lists results, a result opens the context view and back works, and nothing scrolls sideways. (K340)
 
 ## Record
 

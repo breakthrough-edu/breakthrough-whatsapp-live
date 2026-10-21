@@ -11,9 +11,10 @@ It is not a one-click installer, because no two owners' businesses, vaults and t
 - **Everything that moved recently.** Conversations sorted into Reply, Waiting, FYI, Ignore and Done, plus every other chat active in the last three days, judged or not, with a "Judge now" button.
 - **Where each conversation stands.** Three chips (world, stage, priority), a one-line situation, what is at stake for you, a short timeline, and the brain's running memory of the chat.
 - **The draft.** Edit it in place. On a one-to-one chat the green button opens WhatsApp with your edited text already in the box; on a group it copies the text.
-- **The conversation itself.** Text, photos, videos that play on an iPhone, and voice notes with a play button and a transcript made on your own Mac.
+- **The conversation itself.** Text, photos, videos that play on an iPhone, and voice notes with a play button and a transcript made on your own Mac. Documents people send (Word, Excel, PowerPoint and the like) are converted to text on the Mac, so the brain reads them too.
+- **Search.** Find any message or file name across every chat on the Mac, and open the conversation around the one you found.
 - **Your hand on it.** Change the world or the stage (the machine only ever moves a stage forward), mark a conversation done (D on a keyboard, a swipe on a phone), hand the conversation to a deeper Claude Code session, start or rewrite a person note, add a proposed meeting to your calendar.
-- **Proof it is alive.** A footer with today's runs and tokens, and how long ago WhatsApp last wrote its database.
+- **Proof it is alive.** A footer with today's runs and tokens, and how long ago WhatsApp last wrote its database. If Claude cannot be called (a login that expired, a usage limit reached), a banner says so and what to do; the waiting messages stay queued, and your phone gets one alert, not one per message.
 
 The board speaks English or Chinese. Drafts follow each conversation's language.
 

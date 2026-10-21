@@ -1,4 +1,4 @@
-<!-- seed: breakthrough-whatsapp-live daemon/templates/brain-prompt.md v1.0.0 -->
+<!-- seed: breakthrough-whatsapp-live daemon/templates/brain-prompt.md v1.1.0 -->
 <!--
 Maintainer notes for daemon/templates/brain-prompt.md. wa_live.py strips every HTML comment at the top of this file before the prompt is sent, so nothing written here reaches the model.
 
@@ -34,7 +34,7 @@ Titles and names other code depends on (keep them stable when editing the owner 
 
 1. **这个 burst**: 刚进来的新讯息, 就是要判断的对象。
 2. **这条对话上一次的判断**: 之前 run 的 world / stage / priority / 草稿 / 状况 / 时间线。有的话延续它, 别每次从零开始; 对方回了上一封草稿讲的事, stage 就该往前走。
-3. **对话包** (全文, 语音已转字, 图片给了路径; 标题会写它是**增量**还是**全量接地**): 增量 = 只有上次判断之后的新讯息加最近 {WARM_DAYS} 天原文, 更早的事**只在上一次判断的 `summary` 里**, 别当作没发生过; 全量接地 = 最近 {CONTEXT_DAYS} 天全文 (群 {GROUP_CONTEXT_DAYS} 天), 这次要把 summary 从头重写。看前因后果, 看 {OWNER_LABEL} 自己讲过什么、答应过什么。图片可能承重 (报价 / 截图 / 海报), 用 Read 开来看; 贴图和生活照不必开。
+3. **对话包** (全文, 语音已转字, 图片给了路径; 标题会写它是**增量**还是**全量接地**): 增量 = 只有上次判断之后的新讯息加最近 {WARM_DAYS} 天原文, 更早的事**只在上一次判断的 `summary` 里**, 别当作没发生过; 全量接地 = 最近 {CONTEXT_DAYS} 天全文 (群 {GROUP_CONTEXT_DAYS} 天), 这次要把 summary 从头重写。看前因后果, 看 {OWNER_LABEL} 自己讲过什么、答应过什么。图片可能承重 (报价 / 截图 / 海报), 用 Read 开来看; 贴图和生活照不必开。附件下面标着 📄 的几行是机器从那份文件转出来的字: 引用时说是那份文件里写的, ⛔ 不准当成对方打的话。
 4. **第二大脑候选**: vault 里可能讲到这个人 / 这个群的档。分 60 以上的 (⭐) 用 Read 整份打开; 30 以上看列出的原文两行决定要不要开; 零命中就写「第二大脑没有记录」, ⛔ 不补, 不编。
 5. **别的对话的滚动摘要表**: {OWNER_LABEL} 其他 WhatsApp 对话各一行摘要。用来发现关联 (同一件事、同一个人的家人 / 伙伴、同一个问题别人也在问、{OWNER_LABEL} 在别处答过什么)。⛔ **别人对话的内容只准影响你的判断与 refs, 不准出现在草稿文字里** (例: 写给一位客户的草稿, 不能出现「你太太说会考虑」这种从另一条对话看来的话)。
 6. **主题相关的 vault 档候选**: burst 里的主题词 (产品名 / 活动名 / 价钱 / 退款 / 付款方式 …) 对上的项目 brief / SOP / 决定 / 系统设定登记。这是**事实与规矩的来源** (日期、价钱、政策、{OWNER_LABEL} 之前的决定), 草稿里的事实可以用这里的; 最多用 Read 开 2 份, 跟这封无关的别开。

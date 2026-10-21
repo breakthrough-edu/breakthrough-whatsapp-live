@@ -38,6 +38,17 @@ This changelog is payload metadata. It is never copied into a vault.
 
 ## playbooks/whatsapp-live-triage/whatsapp-live-triage-playbook.md
 
+### 1.1.0 · 2026-10-21
+
+- New weigh 13: "the brain cannot be called" (an expired login or a reached usage limit) is
+  not a failed run of that conversation, and there is nothing to fix in the conversation.
+  The circuit breaker holds the queue, probes every `brain.gate_probe_seconds`, and pushes
+  once when it opens and once when it closes; the fix is logging in once on the always-on
+  Mac (or renewing the setup token) or waiting for the limit to reset. Nothing else in the
+  method changed.
+- Example stories elsewhere in the playbook ("When to run it", weighs 6, 7, 8, 9 and 10, and
+  the closing list) were rewritten as generic reasons. Nothing in the method changed.
+
 ### 1.0.1 · 2026-10-21
 
 - Weigh 9 adds what to do when a frozen child also stalls the main loop: `/health` answers
@@ -123,6 +134,10 @@ This changelog is payload metadata. It is never copied into a vault.
 
 ## playbooks/resident-workers/resident-workers-playbook.md
 
+### 1.0.2 · 2026-10-21
+
+- Example stories were rewritten as generic reasons. Nothing in the method changed.
+
 ### 1.0.1 · 2026-10-21
 
 - New pit in section 4: restarting a launchd job that has a child process. `kickstart -k`
@@ -157,6 +172,10 @@ This changelog is payload metadata. It is never copied into a vault.
   header row only, and the high-frequency carve-out spelled out for the nightly batch.
 
 ## playbooks/person-dossier/person-dossier-playbook.md
+
+### 1.0.2 · 2026-10-21
+
+- Example stories were rewritten as generic reasons. Nothing in the method changed.
 
 ### 1.0.1 · 2026-10-21
 

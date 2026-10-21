@@ -81,6 +81,7 @@ Every key the kit's code reads from `live/config.json`, grouped by section, plus
 | `brain.whisper_model` | `"~/.cache/whisper-models/openai_whisper-large-v3-v20240930"` | path | Whisper model folder, handed to the reader as `WA_WHISPER_MODEL` when the folder exists. Keep it under `~/.cache` (a model under Documents stalls under launchd). `init` fills it when it finds one model folder under `~/.cache/whisper-models`. | C1 | restart, sync |
 | `brain.whisper_language` | `""` | string | Transcription language hint such as `zh` or `en`; empty lets whisper detect. | C1 | sync |
 | `brain.transcribe` | `true` | boolean | `false`: no new transcription anywhere; transcripts already in the cache still show. | C1 | restart, sync |
+| `brain.gate_probe_seconds` | `900` | integer, at least 60 | While the circuit breaker is open (two model calls in a row failed on an expired login or a reached usage limit), seconds between the probe calls that check whether Claude answers again. Pending messages stay queued meanwhile. `check-config` reports a value under 60 as an error. | C2 | restart |
 
 ## `bin`
 
@@ -88,7 +89,7 @@ Every `bin` value is resolved at load. `<auto>`, a bare name, or a configured pa
 
 | Key | Default | Type | What it changes | Station | Restart |
 |---|---|---|---|---|---|
-| `bin.claude` | `"<auto>"` | path | The `claude` command line for every headless run. | C1 | restart |
+| `bin.claude` | `"<auto>"` | path | The `claude` command line for every headless run. `wa_setup.py render-claude-wrapper` (the optional setup token, `install/C2-daemon.md`, step 12) sets it to `<home>/bin/claude-bot`, a wrapper that loads the token from `<home>/secrets/claude-bot.env` and runs the real `claude`; setting it back to its previous value (the `previous bin.claude:` line the command prints, usually `<auto>`) returns to the Keychain login. With `bin.path_env` at `<auto>` the daemon's PATH follows this key, so a change usually means `render-launchd` then `install-launchd` (follow their `next:` lines). | C1, C2 | restart, reinstall |
 | `bin.python` | `"/usr/bin/python3"` | path | The Python the plist starts the daemon with (its scripts run on the same one); command line tools use it for the reader. macOS system Python 3.9 is the tested one. | C1 | reinstall |
 | `bin.node` | `"<auto>"` | path | The node binary launchd starts (`run.mjs`); this exact binary needs Full Disk Access. Also runs `lark-cli` when that is a node script. | C1 | reinstall |
 | `bin.ffmpeg` | `"<auto>"` | path | Converts voice notes before transcription (reader). | C1 | sync |
@@ -338,9 +339,9 @@ The evening job loads the config fresh every evening (`wa_intake.py --evening-st
 | `launchd.label` | `"local.whatsapp-live"` | reverse domain label | LaunchAgent label of the daemon, and the name of its plist. Change it only for a second, separate install, and uninstall the old label first or two daemons run. | C0 (chosen), C1 (written); O11 for a test install | reinstall |
 | `launchd.intake_label` | `"local.whatsapp-live.intake"` | reverse domain label | LaunchAgent label of the evening job; must differ from `launchd.label`. The wizard always writes `launchd.label` plus `.intake`. | C0 (chosen), C1 (written) | reinstall |
 
-## `reader` ◇
+## `reader`
 
-Settings of the reader's vault lookup (`wa_context.py`) and of its database snapshots (`wa_sweep.py`). Neither script reads `live/config.json`: `wa_setup.py sync-reader-config` (and every daemon start) passes each key of this block into the reader config (below). Folders are relative to the vault root; an absolute folder inside the vault works too.
+Settings of the reader's vault lookup (`wa_context.py`), and of its database snapshots and document text (`wa_sweep.py`). Every key but `reader.read_documents` is ◇. Neither script reads `live/config.json`: `wa_setup.py sync-reader-config` (and every daemon start) passes each key of this block into the reader config (below). Folders are relative to the vault root; an absolute folder inside the vault works too.
 
 | Key | Default | Type | What it changes | Station | Restart |
 |---|---|---|---|---|---|
@@ -350,6 +351,7 @@ Settings of the reader's vault lookup (`wa_context.py`) and of its database snap
 | `reader.person_dirs` ◇ | `[]` | list of folders | Extra folders whose notes count as people for the vault lookup (their weak hits are kept when nothing scores well); `paths.people_dir` and `paths.decisions_dir` are always included. | none | sync |
 | `reader.stop_words` ◇ | `[]` | list of words | Extra words never used as lookup keys, such as your company and brand names; added to the words of `my_names` and `owner_label`. | none | sync |
 | `reader.keep_snapshot` ◇ | `false` | boolean | `true` keeps the snapshot copies of the WhatsApp databases after a read. Debugging only: each copy is a full copy of your chats. | none | sync |
+| `reader.read_documents` | `true` | boolean | `true`: Word, Excel, PowerPoint, RTF, ODT and Pages attachments are converted to text on this Mac and shown under their message in the reading pack (cached in `<home>/doc-text-cache/`). `false`: they show as file names only. Takes effect at the next run after the sync. | C1 | sync |
 
 ## Keys computed at load
 
@@ -391,6 +393,7 @@ The reader (`wa_sweep.py`, `wa_context.py`) does not read `live/config.json` (wi
 | `exclude_dirs` | `reader.exclude_dirs`, only when that key holds at least one folder | `wa_context.py` | Folders never indexed (absent: `98_Archive/`, `99_Meta/`, `.obsidian/`, `.trash/`) |
 | `low_priority_dirs` | `reader.low_priority_dirs`, only when that key holds at least one folder | `wa_context.py` | Folders whose notes count 0.4 (absent: `00_Inbox/`, `01_Daily/`) |
 | `keep_snapshot` | `reader.keep_snapshot`, only when that key is in the live config | `wa_sweep.py` | Keep the database snapshots after a read (absent: `false`) |
+| `read_documents` | `reader.read_documents` (`true` unless it is `false`) | `wa_sweep.py` | Convert document attachments to text in the pack (`--no-documents` turns it off for one read) |
 | `_generated` | `{"by", "from", "note"}` | nobody | Says the file is generated and from where |
 
 `wa_context.py` also looks for any of its keys inside a `context` object of the reader config; the sync never writes one.

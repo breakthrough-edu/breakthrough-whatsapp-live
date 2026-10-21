@@ -6,7 +6,7 @@ confirmed_by_owner: false
 references: []
 tags: []
 ---
-<!-- seed: breakthrough-whatsapp-live playbooks/person-dossier/person-dossier-playbook.md v1.0.1 -->
+<!-- seed: breakthrough-whatsapp-live playbooks/person-dossier/person-dossier-playbook.md v1.0.2 -->
 
 # Playbook: 写一个真人的档 (person dossier)
 
@@ -151,7 +151,7 @@ tags: []
 6. **stage 你只提议, daemon 裁决**: 只准往前; `won` / `active` / `done` 只认付款记录或原档已在那几格, 否则封顶 `offered`; 不带 stage 角色的人不写 `stage` 与 `stage_since`。(这几个是默认词表的字; 主人改过 `vocab.stages`, 照他的。)
 7. **档头只准用宪法 §8 `person` 族的键, 一个不准多**: 规格外的键整份退回 (几个常见的无害多余键, 例如 `tags` · `aliases` · `email`, 验档器会剥掉并记 log, 但不要写)。`wa_jid` 与 `since` 不准改, `wa_jid` 不加引号照原样抄; `roles` 只准用闭合清单的值 (清单与每个值的意思只看宪法那段; 原档的只补不删, 修饰进 `roles_remark`), 写成一行 `roles: [member]`; `won` 不由写档的人写 (见第 6 条); `dossier_updated` daemon 自己填。
 8. **档名不改** (`<Name>.md` 照旧), H1 可以补全名或称呼 (例 `# 全名 (称呼)`)。
-9. **标点照主人 vault 的家规**: 他的 CLAUDE.md 或宪法有写就照写 (例如有的家规不准 em dash、不准用双连字号或前后带空格的连字号当分隔)。中英或几种语言混排, 照主人与对方的习惯。
+9. **标点照主人 vault 的家规**: 他的 CLAUDE.md 或宪法有写就照写 (例如有的家规限制某些标点)。中英或几种语言混排, 照主人与对方的习惯。
 10. **长度**: 有料的人 150 到 250 行; 料少的人 40 到 80 行, 大半是 ⬜, 那是对的, 不要硬撑。
 
     10b. **节一节不准少** (少一节是新档被退回的常见原因): 骨架里每个 `## ` 节都要在, 顺序照骨架, 料少的人每格写 ⬜ 也要把节写出来; 只有注解写「这节可以没有」的能缺。

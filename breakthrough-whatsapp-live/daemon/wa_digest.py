@@ -15,7 +15,8 @@ Blocks, each only when it has something (the health line always):
   4 notes        person note jobs finished that day: opened (a new note), rewritten, bounced
   5 facts        the facts source's mismatch lists, titled with the source label; marked when facts.json was not
                  written on the send day; an unreadable person notes folder is said out loud
-  6 health       WhatsApp database activity · facts source · nightly backup · second source pull · open intake entries;
+  6 health       WhatsApp database activity · facts source · nightly backup · second source pull · open intake entries ·
+                 minutes the brain could not be called (brain_outages rows overlapping the day, an open row up to now);
                  a block that is not configured is left out, and a result from an earlier night says so instead of
                  passing for fresh (fix)
 The acceptance question (<live>/acceptance.json {"questions": {"YYYY-MM-DD": "..."}}, keyed by the send day, which is
@@ -73,7 +74,7 @@ TXT = {
         "backup_bad": "夜备 ✗ (%s, %s)", "no_reason": "没写原因", "pull": "%s 拉", "pull_never": "%s 拉还没跑过",
         "pull_ok": "%s 拉 ✓ (%s, %s 会话 %s 封)", "pull_bad": "%s 拉 ✗ (%s)", "pull_stale": "最后一次拉的是 %s, 不是 %s",
         "intake": "intake 里 %d 条 open", "intake_missing": "intake buffer 不在", "seed_fallback": "⚠️ 主人副本不在, 正用 payload 种子: %s", "intake_unset": "intake.buffer 没设",
-        "acceptance": "🧪 今天验收 (%s):",
+        "acceptance": "🧪 今天验收 (%s):", "brain_down": "脑叫不动 %d 分钟 (%s)", "s_brain_down": "脑停 %d 分",
         "kinds": {"triage": "分诊", "dossier": "人物档", "second_source": "第二来源", "backfill": "回填", "intake_evening": "intake 晚间"},
         "s_quiet": "昨天安静, daemon 活着", "s_volume": "%d 封 · %d run%s · 省 %d", "s_fail": " (败 %d)",
         "s_open": "要回 %d", "s_moves": "阶段动 %d", "s_more": "+%d 个, 板上看", "s_notes": "人物档", "s_notes_line": "开 %d · 重写 %d%s",
@@ -96,7 +97,7 @@ TXT = {
         "backup_bad": "backup ✗ (%s, %s)", "no_reason": "no reason given", "pull": "%s pull", "pull_never": "%s pull has not run yet",
         "pull_ok": "%s pull ✓ (%s, %s chats %s messages)", "pull_bad": "%s pull ✗ (%s)", "pull_stale": "last pull was %s, not %s",
         "intake": "intake has %d open", "intake_missing": "intake buffer missing", "seed_fallback": "⚠️ owner copy missing, running on the payload seed: %s", "intake_unset": "intake.buffer not set",
-        "acceptance": "🧪 Today's check (%s):",
+        "acceptance": "🧪 Today's check (%s):", "brain_down": "brain was down %d minutes (%s)", "s_brain_down": "brain down %dm",
         "kinds": {"triage": "triage", "dossier": "notes", "second_source": "second source", "backfill": "backfill", "intake_evening": "intake evening"},
         "s_quiet": "Quiet yesterday, daemon alive", "s_volume": "%d msgs · %d runs%s · %d saved", "s_fail": " (%d failed)",
         "s_open": "Waiting on you %d", "s_moves": "Stage moves %d", "s_more": "+%d more on the board", "s_notes": "Person notes",
@@ -365,6 +366,33 @@ def _health(cfg, day, state_exists=True):
     return h
 
 
+def _brain_outages(conn, lo, hi, now=None):
+    """Minutes the brain could not be called during the day: brain_outages rows overlapping [lo, hi), an open row counting
+    up to now. Returns {"minutes", "kinds"} or None when zero."""
+    if not _has_table(conn, "brain_outages"):
+        return None
+    now = now or dt.datetime.now()
+    a, b = dt.datetime.fromisoformat(lo), dt.datetime.fromisoformat(hi)
+    seconds, kinds = 0.0, []
+    for r in conn.execute("SELECT kind, started_at, ended_at FROM brain_outages WHERE started_at < ? AND (ended_at IS NULL OR ended_at > ?)",
+                          (hi, lo)):
+        try:
+            st = dt.datetime.fromisoformat(str(r["started_at"])[:19])
+            en = dt.datetime.fromisoformat(str(r["ended_at"])[:19]) if r["ended_at"] else now
+        except ValueError:
+            continue
+        span = (min(en, b) - max(st, a)).total_seconds()
+        if span <= 0:
+            continue
+        seconds += span
+        k = str(r["kind"] or "?")
+        if k not in kinds:
+            kinds.append(k)
+    if seconds <= 0:
+        return None
+    return {"minutes": max(1, int(round(seconds / 60.0))), "kinds": kinds}
+
+
 # ---------------------------------------------------------------- lines
 
 def _fmt_health(h, facts, cfg, day, lang):
@@ -416,6 +444,9 @@ def _fmt_health(h, facts, cfg, day, lang):
             parts.append(t["intake_missing"])
         else:
             parts.append("intake ✗ (%s)" % short(i.get("why"), 30))
+    bd = h.get("brain_down")
+    if bd:
+        parts.append(t["brain_down"] % (bd["minutes"], "|".join(bd.get("kinds") or ["?"])))
     return t["health"] + " · ".join(parts)
 
 
@@ -489,6 +520,7 @@ def build_digest(cfg, day):
     state = Path(str(cfg.get("state_db") or (W.live_dir(cfg) / "state.sqlite")))
     inbound, runs = {"gate": 0, "saved": 0, "by_decision": {}}, {"total": 0, "ok": 0, "failed": 0, "unfinished": 0, "by_kind": {}}
     open_, moves, dossier = {"total": 0, "rows": []}, [], {"opened": 0, "rewritten": 0, "bounced": 0, "total": 0, "names": {}}
+    outages = None
     if state.is_file():
         conn = _ro(state)
         try:
@@ -497,10 +529,12 @@ def build_digest(cfg, day):
             open_ = _open_needs_me(conn, hi, cfg)
             moves = _stage_moves(conn, lo, hi)
             dossier = _dossier(conn, lo, hi)
+            outages = _brain_outages(conn, lo, hi)
         finally:
             conn.close()
     facts = _facts(cfg, day)
     health = _health(cfg, day, state.is_file())
+    health["brain_down"] = outages
     empty = (inbound["gate"] == 0 and runs["total"] == 0 and open_["total"] == 0 and not moves and dossier["total"] == 0)
     date_s = day.isoformat()
     header = t["header"] % date_s
@@ -595,6 +629,8 @@ def compact_text(d, cfg=None, day=None):
     i = h.get("intake")
     if i is not None:
         hp.append("intake %s" % (i.get("open") if i.get("state") == "ok" else t["s_intake_missing"]))
+    if h.get("brain_down"):
+        hp.append(t["s_brain_down"] % h["brain_down"]["minutes"])
     blocks.append("<b>%s</b>\n%s" % (E(t["s_health"]), E(" · ".join(str(p) for p in hp))))
     q = _acceptance_block(cfg, day, lang) if (cfg is not None and day is not None) else []
     if q:
@@ -695,7 +731,11 @@ def _selftest():
             CREATE TABLE conversations(jid TEXT PRIMARY KEY, name TEXT, tag TEXT, needs_me INTEGER, priority TEXT, situation TEXT,
                 updated_at TEXT, last_run_id INTEGER, stage TEXT, stage_auto INTEGER, reason TEXT, stage_changed_at TEXT, stage_prev TEXT);
             CREATE TABLE dossier_jobs(id INTEGER PRIMARY KEY, jid TEXT, name TEXT, reason TEXT, ok INTEGER, finished_at TEXT);
+            CREATE TABLE brain_outages(id INTEGER PRIMARY KEY, kind TEXT, started_at TEXT, ended_at TEXT, detail TEXT);
         """)
+        c.executemany("INSERT INTO brain_outages(kind, started_at, ended_at, detail) VALUES (?, ?, ?, ?)", [
+            ("limit", D + "T10:00:00", D + "T10:45:00", "usage limit reached"), ("auth", "2026-09-12T23:50:00", D + "T00:05:00", "not logged in"),
+            ("auth", "2026-09-10T08:00:00", "2026-09-10T09:00:00", "not logged in")])
         c.executemany("INSERT INTO inbound_log(seen_at, decision) VALUES (?, ?)",
                       [(D + "T09:00:00", "pass:all")] * 3 + [(D + "T09:10:00", "pass:mention"), (D + "T09:20:00", "skip:policy"),
                                                              (D + "T09:30:00", "outbound:replied:burst_cancelled"), (N + "T07:00:00", "pass:all")])
@@ -737,9 +777,11 @@ def _selftest():
         check(L[8].startswith("健康: WhatsApp 库 2.0 小时前有动 · Sales sheet ✗ (停在 2026-09-13) · 夜备 ✗ (停在 2026-09-13) · Lark 拉 ✓ (2026-09-13, 3 会话 12 封) · intake 里 2 条 open"),
               "block 6: stale facts and backup say so, second source fresh, intake count from wa_intake.count_open")
         check(L[9:] == ["🧪 今天验收 (2026-09-14):", "Open the board on your phone."] and len(L) <= MAX_LINES + 2, "acceptance lines outside the 12")
+        check(L[8].endswith(" · 脑叫不动 50 分钟 (limit|auth)") and d["data"]["health"]["brain_down"] == {"minutes": 50, "kinds": ["limit", "auth"]},
+              "brain outage: rows overlapping the day add up (a row from the night before counts from midnight), both kinds named")
         s = d["text_short"]
         check(s.startswith("<b>📋 WhatsApp Live · 09/13</b>") and "<b>要回 2</b>\nBlake Chen · Alex Rivera" in s and "<b>阶段动 2</b>" in s
-              and "Sales sheet ✗" in s and "夜备 ✗" in s and "intake 2" in s and s.rstrip().endswith("</i>"), "short form blocks")
+              and "Sales sheet ✗" in s and "夜备 ✗" in s and "intake 2" in s and "脑停 50 分" in s and s.rstrip().endswith("</i>"), "short form blocks")
         ok, why = send_digest(cfg, d)
         got = pushed.read_text(encoding="utf-8")
         check(ok and (live / "digest" / "2026-09-13.md").is_file() and got.startswith("📋 WhatsApp Live · 09/13") and "<b>" not in got,
@@ -758,6 +800,14 @@ def _selftest():
               "fix: unreadable person notes folder said out loud")
         check("Lark 拉 ✗ (最后一次拉的是 2026-09-12, 不是 2026-09-01)" in q["lines"][3] and "夜备 ✓ (03:30, 2.5 MB)" in q["lines"][3]
               and "Sales sheet ✓ (03:00)" in q["lines"][3], "fresh backup and facts pass, an old pull is stale")
+        check("脑叫不动" not in q["lines"][3] and q["data"]["health"]["brain_down"] is None and "脑停" not in q["text_short"],
+              "brain outage: nothing on a day no outage overlaps")
+        c = sqlite3.connect(str(live / "state.sqlite"))
+        c.execute("INSERT INTO brain_outages(kind, started_at, ended_at, detail) VALUES ('auth', '2026-09-05T23:30:00', NULL, 'not logged in')")
+        c.commit()
+        c.close()
+        o5 = build_digest(cfg, "2026-09-05")
+        check(any(x.endswith("脑叫不动 30 分钟 (auth)") for x in o5["lines"]), "brain outage: an open row counts up to now (here the end of the day)")
 
         en_cfg = W.load_config(live / "config.json")
         en_cfg["board"]["lang"] = "en"
@@ -765,6 +815,7 @@ def _selftest():
         e = build_digest(en_cfg, "2026-09-13")
         check(e["lines"][0] == "📋 WhatsApp Live digest · 2026-09-13" and e["lines"][4] == "Stage moves (2): Alex Rivera Offered → Won (付款到了)"
               and e["lines"][2].startswith("Still waiting on you (2): Blake Chen"), "English labels and vocabulary")
+        check(any(x.endswith(" · brain was down %d minutes (limit|auth)" % e["data"]["health"]["brain_down"]["minutes"]) for x in e["lines"]), "brain outage line in the English table")
         pushed.unlink()
         ok, why = send_digest(en_cfg, e)
         check(not ok and "digest.push is false" in why and not pushed.exists(), "digest.push false: written, not pushed")

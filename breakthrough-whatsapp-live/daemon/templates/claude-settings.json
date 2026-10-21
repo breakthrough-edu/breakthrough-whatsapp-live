@@ -1,5 +1,5 @@
 {
-  "_comment": "Template for <live>/claude-settings.json, the settings every headless claude run of the daemon uses (triage brain, person note run, second source, backfill, probe). wa_setup.py init renders it and writes the result with mode 0600. Placeholders: {LIVE_DIR} is the absolute live folder (paths.live_dir), {WA_HOME} is the absolute kit home folder (paths.home) and {HOME} is the absolute home folder of the Mac user, all without a trailing slash. Every path rule is written as Read(/ followed by the placeholder, so after rendering it reads Read(//absolute/path): that exact form was verified on 2026-09-14 to block the Read tool in claude -p with --settings. Read rules also cover Grep and Glob. The tool names in permissions.deny must stay identical to DENY_TOOLS in daemon/wa_live.py (the daemon merges both lists and logs any difference). The brain may still read WhatsApp media under Message/Media and the vault; it may not read the chat databases, the reader snapshots, secrets or state. Verified the same day: a deny rule whose path contains a space and ends in a glob blocks, and a sibling media file stays readable. Keep this key free of other placeholders: the renderer refuses unknown ones.",
+  "_comment": "Template for <live>/claude-settings.json, the settings every headless claude run of the daemon uses (triage brain, person note run, second source, backfill, probe). wa_setup.py init renders it and writes the result with mode 0600. Placeholders: {LIVE_DIR} is the absolute live folder (paths.live_dir), {WA_HOME} is the absolute kit home folder (paths.home) and {HOME} is the absolute home folder of the Mac user, all without a trailing slash. Every path rule is written as Read(/ followed by the placeholder, so after rendering it reads Read(//absolute/path): this form blocks the Read tool under claude -p with --settings. Read rules also cover Grep and Glob. The tool names in permissions.deny must stay identical to DENY_TOOLS in daemon/wa_live.py (the daemon merges both lists and logs any difference). The brain may still read WhatsApp media under Message/Media and the vault; it may not read the chat databases, the reader snapshots, the document text cache, secrets (token files included) or state. A deny rule whose path contains a space and ends in a glob also blocks, and a sibling media file stays readable; the deny probe (<live>/commands/probe-claude.json with read_canary, and the pitfalls page) checks this on the owner's Mac. Keep this key free of other placeholders: the renderer refuses unknown ones.",
   "disableAllHooks": true,
   "permissions": {
     "defaultMode": "default",
@@ -50,6 +50,8 @@
       "Read(/{WA_HOME}/runs-work/**)",
       "Read(/{WA_HOME}/prewarm/**)",
       "Read(/{WA_HOME}/config.json)",
+      "Read(/{WA_HOME}/secrets/**)",
+      "Read(/{WA_HOME}/doc-text-cache/**)",
       "Read(/{HOME}/Library/Group Containers/group.net.whatsapp.WhatsApp.shared/*.sqlite*)",
       "Read(/{HOME}/.ssh/**)",
       "Read(/{HOME}/Library/Keychains/**)",

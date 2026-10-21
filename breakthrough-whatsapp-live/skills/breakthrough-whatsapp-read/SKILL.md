@@ -1,6 +1,6 @@
 ---
 name: breakthrough-whatsapp-read
-description: "Read the owner's own WhatsApp to answer a question, read only, from the WhatsApp Desktop database on their Mac: \"what did X say this week\", \"did anyone reply about the invoice\", \"what happened in the group today\", \"read my WhatsApp\", \"看看 X 这几天讲了什么\". Pulls a reading pack of the last 3 days (or one chat) with voice notes transcribed and media paths listed, looks up related notes in the owner's vault, then answers. Use only when the owner asks. NOT live triage, reply drafts or the board (the WhatsApp Live daemon), NOT writing person notes (breakthrough-person-dossier). Never sends a message and never writes to the vault."
+description: "Read the owner's own WhatsApp to answer a question, read only, from the WhatsApp Desktop database on their Mac: \"what did X say this week\", \"did anyone reply about the invoice\", \"what happened in the group today\", \"read my WhatsApp\", \"看看 X 这几天讲了什么\". Pulls a reading pack of the last 3 days (or one chat) with voice notes transcribed, document text included and media paths listed, looks up related notes in the owner's vault, then answers. Use only when the owner asks. NOT live triage, reply drafts or the board (the WhatsApp Live daemon), NOT writing person notes (breakthrough-person-dossier). Never sends a message and never writes to the vault."
 ---
 
 # breakthrough-whatsapp-read
@@ -29,5 +29,6 @@ Read only. Two scripts turn the local WhatsApp Desktop database into a reading p
 ## Good to know
 
 - Everything read here lands in this session's transcript on this Mac, private conversations included. Say so if the owner asks about privacy.
+- Document attachments (Word `.docx` `.doc`, Excel `.xlsx`, PowerPoint `.pptx`, `.rtf`, `.odt`, `.pages`) show their text under the message, marked 📄 and quoted: machine text from the file, not something the person typed. At most 3000 characters per document and 15000 per pack (past that, the path only), files over 30 MB skipped, a failed conversion said in the pack. Converted text is cached in `<paths.home>/doc-text-cache/` (private, same key as voice transcripts). Off with reader config `read_documents: false` or `--no-documents` for one run. Uses only the Python standard library and macOS's own `/usr/bin/textutil`, which only ever opens a temporary copy.
 - Database snapshots are deleted after each read unless the reader config sets `keep_snapshot: true`.
 - If this session runs on another Mac than the one with WhatsApp Desktop, run both commands on that Mac over ssh and copy the md files back before reading. If that Mac cannot be reached, stop and say so; never answer from a stale local copy.

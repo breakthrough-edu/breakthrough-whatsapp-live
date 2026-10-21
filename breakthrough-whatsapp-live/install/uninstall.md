@@ -22,7 +22,7 @@ Claude Code keeps no shell variables between commands: start each command with t
 Show the owner the whole list first, then take their answers one at a time:
 
 1. **A last copy of the daemon's state before it goes?** Into which folder?
-2. **The working folder** (`<home>`): it holds every run's full conversation pack, the state database, the logs, the reader's snapshots, voice transcripts, the config with the owner's number and names, and the push token. To the Trash, or kept? Anything to copy out first (drafts history in `live/voice-pairs.jsonl`, `live/summaries.md`, the digests)?
+2. **The working folder** (`<home>`): it holds every run's full conversation pack, the state database, the logs, the reader's snapshots, voice transcripts, the text of documents people sent, the config with the owner's number and names, the push token, and, when the daemon ran on a setup token, that token (`secrets/claude-bot.env`). To the Trash, or kept? Anything to copy out first (drafts history in `live/voice-pairs.jsonl`, `live/summaries.md`, the digests)?
 3. **The command-base patches** (update-person, intake, the morning intake line): remove them, since the commands they call will be gone, or keep them?
 4. **The whisper model** (about 1.5 GB in `~/.cache/whisper-models/`): does another tool use it?
 5. **The push bot** (when O4 used Telegram): revoke it, or keep it for something else?
@@ -99,6 +99,7 @@ Tell the owner each one; they decide:
 - `~/.cache/whisper-models/openai_whisper-large-v3-v20240930`: remove it when no other tool uses it.
 - Full Disk Access for node and for the terminal app: System Settings, Privacy and Security, Full Disk Access. Switch them off when nothing else needs them.
 - The Telegram bot: its token stops mattering once revoked through BotFather in Telegram.
+- The setup token, when the daemon ran on one (station C2, step 12): it stays valid until it expires, even in the Trash. The owner revokes it from their Claude account, or lets it run out.
 - The nightly backups in `backup.dest`: the owner's, with state and copies of person notes inside.
 - The disabled labels: `launchctl print-disabled "gui/$(id -u)" | grep -F -e "\"$LABEL\"" -e "\"$ILABEL\""` lists this install's two labels as disabled. That is harmless, and a later install enables them again.
 

@@ -27,6 +27,10 @@ It renders files, checks them and reports. It never judges a message and never s
   measure --days 3      inbound traffic counted on a snapshot copy of the WhatsApp database: one to one, groups,
                         top groups by inbound. Group names and counts only. Used to build the group whitelist.
   tailscale-hint        the tailscale serve command for the board port and the address it gives. Runs nothing.
+  render-claude-wrapper optional: run the daemon's claude with a long lived setup token instead of the Keychain login.
+                        Needs <home>/secrets/claude-bot.env (a regular file, mode 0600, one line
+                        CLAUDE_CODE_OAUTH_TOKEN=...). Writes <home>/bin/claude-bot (0700), points bin.claude at it,
+                        keeps <home>/secrets/deny-canary.txt (init writes it) for the deny probe. Never prints the token.
   --selftest            all of the above against a fake home, fake payload and fake WhatsApp database in a temp
                         folder. Never calls launchctl, tailscale or claude, never reads the real database.
 
@@ -63,7 +67,7 @@ HOME_DEFAULT = "~/WhatsApp-Live"
 PROMPT_SEEDS =("brain-prompt.md", "second-source-prompt.md", "backfill-prompt.md")
 STAMP_RE = re.compile(r"seed:\s*breakthrough-whatsapp-live\s+(\S+?)\s+v(\d+(?:\.\d+){0,3})")
 PLACEHOLDER_RE = re.compile(r"\{[A-Z][A-Z0-9_]*\}")
-TREE_DIRS = ("runs-work", "prewarm", "transcripts-cache", "brain-cwd", "launchd", "live", "live/prompts",
+TREE_DIRS = ("runs-work", "prewarm", "transcripts-cache", "doc-text-cache", "secrets", "brain-cwd", "launchd", "live", "live/prompts",
              "live/digest", "live/runs", "live/commands", "live/dossier-backups", "live/variants")
 STANDARD_PATH = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
 LOOPBACK = ("127.0.0.1", "localhost", "::1")
@@ -72,14 +76,14 @@ FALLBACK_CONTENT_TYPES = {0: "text", 1: "image", 2: "video", 3: "voice", 5: "loc
                           11: "GIF", 14: "contact card", 15: "sticker", 20: "image", 33: "image", 41: "text",
                           42: "channel post"}
 # SHA-256 of launchd label prefixes (ending in a dot) reserved for an install this tool must never touch.
-# install-launchd, uninstall-launchd and restart refuse every label that starts with one of them, so a test install
-# on the build machine can never stop or replace another daemon there. Only hashes are kept, so no account name ships in the kit.
+# Label prefixes listed here only as hashes are refused by install-launchd, uninstall-launchd and restart, so a test
+# install can never load, stop or replace a daemon that runs under such a label.
 RESERVED_LABEL_PREFIX_SHA256 = ["5f452dbef74d9f306ae8219d7c7e2a5e00680b3bf71bfc417cc2fdfe44476821"]
 GUARDED_TOOLS = ("launchctl", "tailscale", "claude", "lark-cli")
 
 sys.path.insert(0, str(HERE))
 try:
-    import wa_common as WC  # the one place that fills config defaults (DESIGN §4, §12)
+    import wa_common as WC  # the one place that fills config defaults (references/config-reference.md)
     WC_ERROR = ""
 except Exception as _e:  # doctor still has to run on a broken payload
     WC = None
@@ -342,7 +346,7 @@ class Report(object):
         return "\n".join(self.lines)
 
 
-# ---------------------------------------------------------------- seeds bookkeeping (DESIGN §6)
+# ---------------------------------------------------------------- seeds bookkeeping (install/update.md)
 
 def seeds_file(live):
     return Path(live) / "seeds.json"
@@ -603,6 +607,7 @@ def do_init(home, rep, config_path=None, payload=None, which=None, models_dir="~
                                                     "rendered_at": now_iso()}
             rep.did("render", settings, "deny rules point at %s" % tilde(live))
 
+    ensure_canary(home / "secrets" / "deny-canary.txt", rep)
     save_seed_records(live, new_seeds, new_rendered, rep)
     rep.line("init: %d created, %d already there, %d warning(s), %d error(s)"
              % (len(rep.done), len(rep.kept), len(rep.warnings), len(rep.errors)))
@@ -767,6 +772,9 @@ def check_config(raw, cfg, payload=None, user_home=None):
             continue   # the owner's own adapter in <live>/adapters/ (survives kit updates)
         add("error", key, "is %r, allowed: %s (or your own <live>/adapters/%s%s.py)" % (v, " | ".join(allowed), owner_prefix.get(key, ""), v) if key in owner_prefix
             else "is %r, allowed: %s" % (v, " | ".join(allowed)))
+    gps = dget(raw, "brain.gate_probe_seconds")
+    if isinstance(gps, (int, float)) and not isinstance(gps, bool) and (gps != int(gps) or gps < 60):
+        add("error", "brain.gate_probe_seconds", "should be a whole number of seconds, at least 60, is %r" % (gps,))
     for key in TIME_KEYS:
         v = dget(eff, key)
         if not (isinstance(v, str) and re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", v)):
@@ -1013,7 +1021,7 @@ def label_for(cfg, intake):
 def refuse_reason(label, plist_label=None):
     for lab in (label, plist_label):
         if lab and reserved_label(lab):
-            return ("label %s is reserved for another install on this Mac; "
+            return ("label %s belongs to another WhatsApp Live install; "
                     "wa_setup.py never loads, stops or removes it" % lab)
     return ""
 
@@ -1582,6 +1590,7 @@ def reader_config(cfg, config_path):
             out_extra[key] = dirs(key)
     if "keep_snapshot" in rd:
         out_extra["keep_snapshot"] = bool(rd.get("keep_snapshot"))
+    out_extra["read_documents"] = rd.get("read_documents", True) is not False
     return dict({
         "ignored_jids": [j for j in (cfg.get("ignored_jids") or []) if isinstance(j, str)],
         "my_phone": str(cfg.get("my_phone") or ""),
@@ -1634,7 +1643,309 @@ def do_sync_reader_config(cfg, config_path, rep):
     return rep
 
 
-# ---------------------------------------------------------------- seed-status and copy-seed (DESIGN §6)
+# ---------------------------------------------------------------- render-claude-wrapper (optional setup token)
+
+WRAPPER_MARKER = "# rendered by breakthrough-whatsapp-live wa_setup.py render-claude-wrapper"
+TOKEN_ENV_NAME = "CLAUDE_CODE_OAUTH_TOKEN"
+TOKEN_LINE_RE = re.compile(r"^\s*(?:export\s+)?" + TOKEN_ENV_NAME + r"=(.*)$")
+WRAPPER_EXEC_RE = re.compile(r'^exec "((?:[^"\\]|\\.)*)" "\$@"\s*$', re.M)
+WRAPPER_SOURCE_RE = re.compile(r'^\. "((?:[^"\\]|\\.)*)"\s*$', re.M)
+PREVIOUS_RE = re.compile(r'^# previous bin\.claude: (".*")\s*$', re.M)
+CANARY_RE = re.compile(r"^wa-live-deny-canary-[0-9a-f]{32}\n?$")
+
+
+def wrapper_files(cfg):
+    """(wrapper, token env file, deny canary) for this install."""
+    home = home_dir(cfg)
+    return home / "bin" / "claude-bot", home / "secrets" / "claude-bot.env", home / "secrets" / "deny-canary.txt"
+
+
+def sh_dq(text):
+    """text inside double quotes for /bin/sh."""
+    return '"' + re.sub(r'([\\"$`])', r"\\\1", str(text)) + '"'
+
+
+def _sh_unquote(text):
+    return re.sub(r"\\(.)", r"\1", text)
+
+
+def _head(path, n=4096):
+    try:
+        with open(str(path), "rb") as f:
+            return f.read(n).decode("utf-8", "replace")
+    except OSError:
+        return ""
+
+
+def is_kit_wrapper(path):
+    """True when path is a regular file this kit rendered (it carries the marker line)."""
+    if not path:
+        return False
+    p = expand(path)
+    try:
+        if not stat.S_ISREG(os.stat(str(p)).st_mode):
+            return False
+    except OSError:
+        return False
+    return WRAPPER_MARKER in _head(p).splitlines()
+
+
+def wrapper_exec_target(path):
+    """The real claude a rendered wrapper execs, or ""."""
+    m = WRAPPER_EXEC_RE.search(_head(path))
+    return _sh_unquote(m.group(1)) if m else ""
+
+
+def wrapper_env_file(path):
+    """The env file a rendered wrapper sources, or ""."""
+    m = WRAPPER_SOURCE_RE.search(_head(path))
+    return _sh_unquote(m.group(1)) if m else ""
+
+
+def token_file_problem(env_file, read_content=True):
+    """None when the token file is usable, else one sentence with the exact fix. Never returns or prints anything after
+    the equals sign of the token line."""
+    p = Path(env_file)
+    q, qd = sh_dq(p), sh_dq(p.parent)
+    create = ("create it (the token never goes on a command line): mkdir -p -m 700 %s && touch %s && chmod 600 %s, then "
+              "open it in a text editor and write one line %s=<the token that claude setup-token printed>"
+              % (qd, q, q, TOKEN_ENV_NAME))
+    try:
+        st = os.lstat(str(p))
+    except FileNotFoundError:
+        return "token file not found: %s; %s" % (p, create)
+    except OSError as e:
+        return "token file %s cannot be checked (%s)" % (p, e.strerror or e)
+    if stat.S_ISLNK(st.st_mode):
+        return ("token file %s is a symbolic link; the wrapper only sources a regular file. Remove the link (rm %s) and "
+                "%s" % (p, q, create))
+    if not stat.S_ISREG(st.st_mode):
+        return ("token file %s is not a regular file (a folder or something else). Move it aside (mv %s %s) and %s"
+                % (p, q, sh_dq(str(p) + ".aside"), create))
+    if st.st_uid != os.getuid():
+        return "token file %s belongs to another user; recreate it as yourself: %s" % (p, create)
+    mode = stat.S_IMODE(st.st_mode)
+    if mode != 0o600:
+        return "token file %s is mode %o; it holds a login token, so only you may read it: chmod 600 %s" % (p, mode, q)
+    if not read_content:
+        return None
+    try:
+        lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as e:
+        return "token file %s cannot be read (%s)" % (p, e.strerror or e)
+    values = [TOKEN_LINE_RE.match(ln) for ln in lines]
+    values = [m.group(1).strip().strip("'\"") for m in values if m]
+    if not values:
+        return ("token file %s holds no line starting with %s=; write one line %s=<the token that claude setup-token "
+                "printed>" % (p, TOKEN_ENV_NAME, TOKEN_ENV_NAME))
+    if not values[-1]:
+        return ("token file %s: the line %s= has nothing after the equals sign; paste the token that claude setup-token "
+                "printed after it" % (p, TOKEN_ENV_NAME))
+    return None
+
+
+def real_claude(cfg, wrapper, which=None):
+    """The real claude binary: bin.claude when it is not the kit's wrapper, else the one the existing wrapper execs, else
+    a search (which claude). "" when none is found."""
+    which = which or (lambda exe: (WC.resolve_bin({"bin": {"claude": "<auto>"}}, "claude") if WC is not None else None)
+                      or shutil.which(exe))
+    configured = str(dget(cfg, "bin.claude") or "")
+    cands = []
+    if configured and not configured.startswith("<"):
+        c = expand(configured)
+        if is_kit_wrapper(c) or c.absolute() == Path(wrapper).absolute():
+            cands.append(wrapper_exec_target(c))
+        else:
+            cands.append(str(c))
+    if Path(wrapper).is_file():
+        cands.append(wrapper_exec_target(wrapper))
+    cands.append(which("claude") or "")
+    for c in cands:
+        if c and os.path.isabs(c) and is_exec(c) and not is_kit_wrapper(c) \
+                and Path(c).absolute() != Path(wrapper).absolute():
+            return str(c)
+    return ""
+
+
+def ensure_canary(canary, rep):
+    """<home>/secrets/deny-canary.txt (0600, a random marker) for the read_canary deny probe. An existing canary is kept
+    as it is (never rotated: it is a decoy, not a secret; a denied read leaves it unseen, and a READ_OK means the deny
+    rule is broken, which rotating would not fix). False when something else sits in its place."""
+    canary = Path(canary)
+    if canary.is_file() and not canary.is_symlink() and CANARY_RE.match(_head(canary, 200)):
+        if mode_of(canary) != 0o600:
+            if not rep.dry_run:
+                os.chmod(str(canary), 0o600)
+            rep.did("chmod 600", canary)
+        else:
+            rep.keep(canary, "deny canary already there")
+        return True
+    if canary.exists() or canary.is_symlink():
+        rep.error("%s is not the kit's deny canary; move it aside and run this again" % tilde(canary))
+        return False
+    if not rep.dry_run:
+        write_text_atomic(canary, "wa-live-deny-canary-%s\n" % os.urandom(16).hex(), 0o600)
+    rep.did("write", canary, "0600, a random marker the deny probe tries to read")
+    return True
+
+
+def launchd_next_step(cfg_after, config_path, payload=None, user_home=None):
+    """"render" when the daemon's rendered plist is missing or would change with cfg_after (its PATH follows
+    bin.claude's folder when bin.path_env is <auto>), else "restart"."""
+    probe = do_render_launchd(cfg_after, config_path, Report(dry_run=True, quiet=True), payload=payload, user_home=user_home)
+    plist = home_dir(cfg_after) / "launchd" / (label_for(cfg_after, False) + ".plist")
+    if probe.errors or not plist.is_file():
+        return "render"
+    return "render" if any(path == str(plist) for _, path in probe.done) else "restart"
+
+
+def previous_bin_claude(raw, wrapper):
+    """bin.claude as it was before the wrapper: the raw config value, "<auto>" when unset, and when the config already
+    points at the wrapper, the value the wrapper recorded when it was first rendered (else "<auto>")."""
+    v = dget(raw, "bin.claude") if isinstance(raw, dict) else None
+    if not isinstance(v, str) or not v.strip() or v.strip().startswith("<auto"):
+        return "<auto>"
+    v = v.strip()
+    p = expand(v)
+    if p.absolute() == Path(wrapper).absolute() or is_kit_wrapper(p):
+        m = PREVIOUS_RE.search(_head(p))
+        try:
+            old = json.loads(m.group(1)) if m else ""
+        except ValueError:
+            old = ""
+        return old if isinstance(old, str) and old else "<auto>"
+    return v
+
+
+def wrapper_text(env_file, claude, previous="<auto>"):
+    return "\n".join(["#!/bin/sh", WRAPPER_MARKER,
+                      "# Runs the real claude with the long lived setup token from the file below (never printed, never logged).",
+                      "# Change the token in that file; render this wrapper again only when claude moves.",
+                      "# previous bin.claude: %s" % json.dumps(previous, ensure_ascii=False),
+                      "set -a", ". %s" % sh_dq(env_file), "set +a", "exec %s \"$@\"" % sh_dq(claude), ""])
+
+
+def set_config_bin_claude(config_path, value, rep):
+    """bin.claude := value in the live config, keeping every other key and their order; atomic, 0600."""
+    path = expand(config_path)
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        rep.error("cannot read %s: %s" % (tilde(path), e))
+        return False
+    if not isinstance(raw, dict):
+        rep.error("%s should hold a JSON object" % tilde(path))
+        return False
+    b = raw.get("bin")
+    if not isinstance(b, dict):
+        b = {}
+        raw["bin"] = b
+    if b.get("claude") == value and mode_of(path) == 0o600:
+        rep.keep(path, "bin.claude already points at the wrapper")
+        return False
+    b["claude"] = value
+    if not rep.dry_run:
+        write_text_atomic(path, json_text(raw), 0o600)
+    rep.did("set bin.claude in", path, "0600, every other key kept")
+    return True
+
+
+def do_render_claude_wrapper(cfg, config_path, rep, which=None, payload=None, user_home=None):
+    """Render <home>/bin/claude-bot, point bin.claude at it, write the deny canary. Refuses (rep.data refused) when the
+    token file is not a 0600 regular file holding the token line. Never prints the token."""
+    home, live = home_dir(cfg), live_dir(cfg)
+    wrapper, env_file, canary = wrapper_files(cfg)
+    rep.line("render-claude-wrapper: %s%s" % (tilde(home), "  (dry run, nothing is written)" if rep.dry_run else ""))
+    if not home.is_dir():
+        rep.error("%s does not exist; run wa_setup.py init first" % tilde(home))
+        return rep
+    problem = token_file_problem(env_file)
+    if problem:
+        rep.data["refused"] = True
+        rep.error("refused: " + problem)
+        return rep
+    rep.line("  token file %s: regular file, mode 600, holds the %s line (value not shown)" % (tilde(env_file), TOKEN_ENV_NAME))
+    sm = mode_of(env_file.parent)
+    if sm != 0o700:
+        rep.warn("%s is mode %o; chmod 700 %s" % (tilde(env_file.parent), sm or 0, sh_dq(env_file.parent)))
+    claude = real_claude(cfg, wrapper, which)
+    if not claude:
+        rep.data["refused"] = True
+        rep.error("refused: the real claude was not found; set bin.claude in %s to its absolute path (which claude) and "
+                  "run this again" % tilde(config_path))
+        return rep
+    rep.line("  real claude: %s" % tilde(claude))
+    previous = previous_bin_claude(read_json_file(expand(config_path), {}), wrapper)
+    rep.data["previous"] = previous
+    rep.line("  previous bin.claude: %s (to go back, set it to this value, then render-launchd and follow its next: line)"
+             % previous)
+
+    bdir = wrapper.parent
+    if not bdir.is_dir():
+        if bdir.exists():
+            rep.error("%s exists and is not a folder" % tilde(bdir))
+            return rep
+        if not rep.dry_run:
+            bdir.mkdir(mode=0o700)
+            os.chmod(str(bdir), 0o700)
+        rep.did("create", bdir, "folder 0700")
+    elif mode_of(bdir) != 0o700:
+        if not rep.dry_run:
+            os.chmod(str(bdir), 0o700)
+        rep.did("chmod 700", bdir)
+    if wrapper.is_symlink() or (wrapper.exists() and not wrapper.is_file()):
+        rep.error("%s is not a regular file; move it aside and run this again" % tilde(wrapper))
+        return rep
+    if not write_if_changed(wrapper, wrapper_text(env_file, claude, previous).encode("utf-8"), 0o700, rep, "wrapper 0700"):
+        if mode_of(wrapper) != 0o700:
+            if not rep.dry_run:
+                os.chmod(str(wrapper), 0o700)
+            rep.did("chmod 700", wrapper)
+    set_config_bin_claude(config_path, str(wrapper), rep)
+
+    if not ensure_canary(canary, rep):
+        return rep
+
+    if not rep.dry_run:
+        sub = do_sync_reader_config(cfg, config_path, Report(quiet=True))
+        if sub.errors:
+            rep.warn("reader config not refreshed: %s" % sub.errors[0])
+        elif sub.done:
+            rep.did("refresh", home / "config.json", "reader config, %d file(s)" % len(sub.done))
+
+    rep.line("render-claude-wrapper: %d change(s), %d kept, %d warning(s)" % (len(rep.done), len(rep.kept), len(rep.warnings)))
+    rep.line("proof (run it yourself in a terminal; it says which login claude uses, never the token):")
+    rep.line("  env -i HOME=\"$(mktemp -d)\" PATH=/usr/bin:/bin %s auth status --json" % sh_dq(wrapper))
+    rep.line("  pass: the answer holds \"authMethod\": \"oauth_token\"")
+    after_raw = read_json_file(expand(config_path), {})
+    if not isinstance(after_raw, dict):
+        after_raw = {}
+    if not isinstance(after_raw.get("bin"), dict):
+        after_raw["bin"] = {}
+    after_raw["bin"]["claude"] = str(wrapper)
+    pe_auto = str(after_raw["bin"].get("path_env") or "<auto>").startswith("<auto")
+    cfg_after = WC.apply_defaults(after_raw, expand(config_path))
+    if pe_auto:   # plan the PATH the wrapper gives, also in a dry run where the wrapper does not exist yet
+        cfg_after["bin"]["path_env"] = WC._auto_path_env(cfg_after, claude_dirs=[str(wrapper.parent), os.path.dirname(claude)])
+    rep.data["planned_path_env"] = str(dget(cfg_after, "bin.path_env") or "")
+    step = launchd_next_step(cfg_after, config_path, payload, user_home)
+    rep.data["next"] = step
+    qc = sh_dq(expand(config_path))
+    rep.line("next:")
+    if step == "render":
+        rep.line("  1. wa_setup.py render-launchd --config %s, then wa_setup.py install-launchd --config %s   (the daemon's "
+                 "plist changes or is not rendered yet: its PATH follows bin.claude; install-launchd restarts the daemon)"
+                 % (qc, qc))
+    else:
+        rep.line("  1. wa_setup.py restart --config %s   (the daemon reads bin.claude only at start)" % qc)
+    rep.line("  2. echo '{}' > %s   (claude answers from launchd with the token)" % sh_dq(live / "commands" / "probe-claude.json"))
+    rep.line("  3. echo '{\"read_canary\": true}' > %s   (deny probe: the answer must be DENIED)"
+             % sh_dq(live / "commands" / "probe-claude.json"))
+    rep.line("  To go back to the Keychain login: set bin.claude to %s in the config, then render-launchd and follow its next: line (install-launchd, or restart when the plist did not change)." % previous)
+    return rep
+
+
+# ---------------------------------------------------------------- seed-status and copy-seed (install/update.md)
 
 def seed_rows(cfg, payload=None):
     payload = Path(payload) if payload else PAYLOAD
@@ -2256,6 +2567,35 @@ def doctor(ctx, out=say):
             out("  claude: %s (not run here; its login is proven from launchd with commands/probe-claude.json)" % tilde(claude))
         else:
             block("claude (Claude Code) not found on PATH or in the usual install folders")
+        auth_line(cfg)
+
+    def auth_line(cfg):
+        """Which login the daemon's claude uses. Reads file metadata only: never the token, never runs claude."""
+        configured = str(dget(cfg, "bin.claude") or "")
+        default_wrapper = wrapper_files(cfg)[0] if dget(cfg, "paths.home") else None
+        wrapper = expand(configured) if configured and not configured.startswith("<") else None
+        kit = wrapper is not None and (is_kit_wrapper(wrapper)
+                                       or (default_wrapper is not None and wrapper.absolute() == default_wrapper.absolute()))
+        if not kit:
+            out("  authentication: the Claude Code login of this Mac user (Keychain)")
+            return
+        if not wrapper.is_file():
+            out("  authentication: setup token wrapper %s is gone" % tilde(wrapper))
+            block("bin.claude points at the token wrapper %s, which does not exist; run wa_setup.py render-claude-wrapper "
+                  "again, or set bin.claude to <auto> for the Keychain login" % tilde(wrapper))
+            return
+        env_file = Path(wrapper_env_file(wrapper) or wrapper_files(cfg)[1])
+        problem = token_file_problem(env_file, read_content=False)
+        if problem:
+            out("  authentication: setup token through %s, token file NOT usable" % tilde(wrapper))
+            block(problem)
+            return
+        changed = dt.datetime.fromtimestamp(os.stat(str(env_file)).st_mtime).strftime("%Y-%m-%d")
+        out("  authentication: setup token through %s (token file present, 0600, last changed %s)" % (tilde(wrapper), changed))
+        target = wrapper_exec_target(wrapper)
+        if not (target and is_exec(target)):
+            block("the token wrapper %s runs a claude that is not there (%s); run wa_setup.py render-claude-wrapper again"
+                  % (tilde(wrapper), tilde(target) if target else "no exec line"))
         for name, why in (("ffmpeg", "voice notes"), ("whisperkit", "voice notes")):
             p = resolve_bin(cfg, name)
             out("  %s: %s" % ({"whisperkit": "whisperkit-cli"}.get(name, name), tilde(p) if p else "not found"))
@@ -2540,6 +2880,10 @@ def selftest():
         check("claude-settings.json rendered with absolute deny paths",
               ("Read(/%s/telegram.json)" % live) in settings and ("Read(/%s/.ssh/**)" % uhome) in settings
               and "{LIVE_DIR}" not in settings)
+        canary0 = home / "secrets" / "deny-canary.txt"
+        canary0_text = canary0.read_text(encoding="utf-8") if canary0.is_file() else ""
+        check("init writes secrets/deny-canary.txt 0600 with a random marker",
+              mode_of(canary0) == 0o600 and bool(CANARY_RE.match(canary0_text)), canary0_text)
         seeds = load_seeds(live)
         check("seeds.json records four seeds and the rendered settings",
               len(seeds["seeds"]) == 4 and "claude-settings.json" in seeds["rendered"], sorted(seeds["seeds"]))
@@ -2547,6 +2891,8 @@ def selftest():
         r2 = do_init(home, Report(quiet=True), **init_kw)
         check("a second init changes nothing and reports what it kept",
               _tree_signature(home) == before and not r2.done and len(r2.kept) >= 5, r2.done)
+        check("a second init keeps the deny canary as it is",
+              canary0.read_text(encoding="utf-8") == canary0_text and str(canary0) in r2.kept, r2.kept)
         r3 = do_init(base / "dry-home", Report(dry_run=True, quiet=True), **init_kw)
         check("init --dry-run prints a plan and writes nothing", r3.done and not (base / "dry-home").exists())
         r4 = do_init(uhome / "Documents" / "WA", Report(quiet=True), **init_kw)
@@ -2975,6 +3321,242 @@ def selftest():
         check("read_serve_status parses the JSON and serve_ports_in_use names both ports",
               sorted(serve_ports_in_use(st_read)) == [80, 8443], st_read)
 
+        say("[config keys: brain.gate_probe_seconds, reader.read_documents]")
+        exd = example_config(PAYLOAD)
+        check("config.example.json and wa_common.DEFAULTS carry brain.gate_probe_seconds 900 and reader.read_documents true",
+              dget(exd, "brain.gate_probe_seconds") == 900 and dget(exd, "reader.read_documents") is True
+              and dget(WC.DEFAULTS, "brain.gate_probe_seconds") == 900 and dget(WC.DEFAULTS, "reader.read_documents") is True)
+        old = copy.deepcopy(raw)
+        old["brain"].pop("gate_probe_seconds", None)
+        old.pop("reader", None)
+        old_cfg = WC.apply_defaults(copy.deepcopy(old), cfg_file)
+        old_err = [i for i in check_config(old, old_cfg, payload, uhome) if i[0] == "error"]
+        check("an older config without the two keys loads with 900 and true and check-config finds no error",
+              dget(old_cfg, "brain.gate_probe_seconds") == 900 and dget(old_cfg, "reader.read_documents") is True and not old_err,
+              old_err)
+        badk = copy.deepcopy(raw)
+        badk["brain"]["gate_probe_seconds"] = 10
+        badk.setdefault("reader", {})["read_documents"] = "yes"
+        bk = [(k, m) for level, k, m in check_config(badk, WC.apply_defaults(copy.deepcopy(badk), cfg_file), payload, uhome)
+              if level == "error"]
+        okk = copy.deepcopy(raw)
+        okk["brain"]["gate_probe_seconds"] = 60
+        ok_err = [i for i in check_config(okk, WC.apply_defaults(copy.deepcopy(okk), cfg_file), payload, uhome) if i[0] == "error"]
+        check("check-config: brain.gate_probe_seconds 10 and reader.read_documents \"yes\" are errors, 60 passes",
+              any(k == "brain.gate_probe_seconds" and "at least 60" in m for k, m in bk)
+              and any(k == "reader.read_documents" and "true or false" in m for k, m in bk) and not ok_err, (bk, ok_err))
+        rd_raw = copy.deepcopy(raw)
+        rd_raw.setdefault("reader", {})["read_documents"] = False
+        write_text_atomic(cfg_file, json_text(rd_raw), 0o600)
+        do_sync_reader_config(WC.load_config(str(cfg_file)), cfg_file, Report(quiet=True))
+        rd_off = read_json_file(home / "config.json", {}).get("read_documents")
+        write_text_atomic(cfg_file, json_text(raw), 0o600)
+        do_sync_reader_config(WC.load_config(str(cfg_file)), cfg_file, Report(quiet=True))
+        rd_on = read_json_file(home / "config.json", {}).get("read_documents")
+        check("sync-reader-config carries reader.read_documents into the reader config (false, then true)",
+              rd_off is False and rd_on is True, (rd_off, rd_on))
+        check("init creates doc-text-cache and secrets, both 0700",
+              mode_of(home / "doc-text-cache") == 0o700 and mode_of(home / "secrets") == 0o700)
+
+        say("[render-claude-wrapper and the doctor auth line]")
+        fake_token = "selftest-fake-token-value-9c41e7"
+        realbin = base / "realbin"
+        realbin.mkdir()
+        fake_claude = realbin / "claude"
+        fake_claude.write_text("#!/bin/sh\nif [ -n \"$CLAUDE_CODE_OAUTH_TOKEN\" ]; then echo token:set; else echo token:unset; fi\n"
+                               "echo \"args:$*\"\n", encoding="utf-8")
+        os.chmod(str(fake_claude), 0o755)
+        raw["bin"]["claude"] = str(fake_claude)
+        write_text_atomic(cfg_file, json_text(raw), 0o600)
+        wrapper, env_file, canary = wrapper_files(WC.load_config(str(cfg_file)))
+
+        rl0 = do_render_launchd(WC.load_config(str(cfg_file)), cfg_file, Report(quiet=True), payload=payload, user_home=uhome)
+        last_rep = {}
+
+        def run_wrapper_cmd(dry=False):
+            """What cmd_render_claude_wrapper does, with the fake payload so the plist comparison is like for like."""
+            import io
+            o, e, so, se = io.StringIO(), io.StringIO(), sys.stdout, sys.stderr
+            sys.stdout, sys.stderr = o, e
+            try:
+                r = do_render_claude_wrapper(load_cfg(cfg_file), cfg_file, Report(dry_run=dry), payload=payload, user_home=uhome)
+                code = 3 if r.data.get("refused") else (1 if r.errors else 0)
+                last_rep["r"] = r
+            finally:
+                sys.stdout, sys.stderr = so, se
+            return code, o.getvalue() + e.getvalue()
+
+        def doctor_text():
+            lines_ = []
+            calls_before = len(dcalls)
+            res = doctor(DoctorContext(config_path=cfg_file, wa_root=wa, runner=doc_runner, which=fake_which, user_home=uhome,
+                                       launch_agents=agents, payload=payload, tailscale_app=str(base / "no-app")),
+                         out=lines_.append)
+            ran = [os.path.basename(c[0]) for c in dcalls[calls_before:]]
+            return "\n".join(lines_), res, ran
+        kt, _, _ = doctor_text()
+        check("doctor auth line: a plain claude uses the Keychain login",
+              "authentication: the Claude Code login of this Mac user (Keychain)" in kt, [ln for ln in kt.splitlines() if "auth" in ln])
+        cfg_before = cfg_file.read_bytes()
+        code_m, out_m = run_wrapper_cmd()
+        check("render-claude-wrapper refuses a missing token file with the creation hint and writes nothing",
+              code_m == 3 and "token file not found" in out_m and "chmod 600" in out_m and "touch" in out_m
+              and not wrapper.exists() and cfg_file.read_bytes() == cfg_before, out_m[-400:])
+        env_file.write_text("CLAUDE_CODE_OAUTH_TOKEN=%s\n" % fake_token, encoding="utf-8")
+        os.chmod(str(env_file), 0o644)
+        code_p, out_p = run_wrapper_cmd()
+        check("render-claude-wrapper refuses a 0644 token file with the exact chmod 600 hint",
+              code_p == 3 and ("chmod 600 \"%s\"" % env_file) in out_p and not wrapper.exists() and fake_token not in out_p,
+              out_p[-400:])
+        real_env = env_file.with_name("elsewhere.env")
+        os.replace(str(env_file), str(real_env))
+        os.chmod(str(real_env), 0o600)
+        os.symlink(str(real_env), str(env_file))
+        code_l, out_l = run_wrapper_cmd()
+        os.unlink(str(env_file))
+        env_file.mkdir()
+        code_d, out_d = run_wrapper_cmd()
+        env_file.rmdir()
+        check("render-claude-wrapper refuses a symbolic link and a folder in place of the token file",
+              code_l == 3 and "symbolic link" in out_l and code_d == 3 and "not a regular file" in out_d and not wrapper.exists(),
+              (out_l[-200:], out_d[-200:]))
+        env_file.write_text("OTHER_SETTING=1\n", encoding="utf-8")
+        os.chmod(str(env_file), 0o600)
+        code_n, out_n = run_wrapper_cmd()
+        check("render-claude-wrapper refuses a token file without the CLAUDE_CODE_OAUTH_TOKEN= line",
+              code_n == 3 and "holds no line starting with CLAUDE_CODE_OAUTH_TOKEN=" in out_n and not wrapper.exists(), out_n[-300:])
+        os.replace(str(real_env), str(env_file))
+        sig_dry = _tree_signature(home)
+        code_y, out_y = run_wrapper_cmd(dry=True)
+        step_dry = last_rep["r"].data.get("next")
+        plan_dry = last_rep["r"].data.get("planned_path_env")
+        check("render-claude-wrapper --dry-run prints the plan and writes nothing",
+              code_y == 0 and "would write" in out_y and _tree_signature(home) == sig_dry and cfg_file.read_bytes() == cfg_before
+              and fake_token not in out_y, out_y[-400:])
+        keys_before = list(raw.keys())
+        code_s, out_s = run_wrapper_cmd()
+        step_real = last_rep["r"].data.get("next")
+        check("render-claude-wrapper --dry-run plans the same next step as the real run (render-launchd, the plist changes)",
+              step_dry == "render" and step_real == "render" and "wa_setup.py render-launchd --config" in out_y
+              and plan_dry == last_rep["r"].data.get("planned_path_env") == str(dget(WC.load_config(str(cfg_file)), "bin.path_env"))
+              and str(wrapper.parent) in plan_dry.split(":"), (step_dry, step_real, plan_dry))
+        prev_line = ("  previous bin.claude: %s (to go back, set it to this value, then render-launchd and follow its next: line)"
+                     % fake_claude)
+        check("render-claude-wrapper prints the explicit previous bin.claude and uses it in the To go back line",
+              prev_line in out_s.splitlines() and prev_line in out_y.splitlines()
+              and ("set bin.claude to %s in the config" % fake_claude) in out_s, out_s[-900:])
+        wtext = wrapper.read_text(encoding="utf-8") if wrapper.is_file() else ""
+        check("render-claude-wrapper succeeds on a 0600 token file: bin/ and the wrapper 0700, marker, sources the file, "
+              "execs the real claude with \"$@\"",
+              code_s == 0 and mode_of(wrapper.parent) == 0o700 and mode_of(wrapper) == 0o700
+              and wtext.startswith("#!/bin/sh\n") and WRAPPER_MARKER in wtext.splitlines()
+              and ("set -a\n. \"%s\"\nset +a\n" % env_file) in wtext and ("exec \"%s\" \"$@\"" % fake_claude) in wtext,
+              (code_s, out_s[-400:], wtext))
+        after = read_json_file(cfg_file, {})
+        same_rest = dict((k, v) for k, v in after.items() if k != "bin") == dict((k, v) for k, v in raw.items() if k != "bin")
+        check("bin.claude now points at the wrapper; every other key and the key order kept; config stays 0600",
+              dget(after, "bin.claude") == str(wrapper) and list(after.keys()) == keys_before and same_rest
+              and dict((k, v) for k, v in after["bin"].items() if k != "claude") == dict((k, v) for k, v in raw["bin"].items() if k != "claude")
+              and mode_of(cfg_file) == 0o600, dget(after, "bin"))
+        check("the deny canary is written 0600 with a random marker",
+              mode_of(canary) == 0o600 and bool(CANARY_RE.match(canary.read_text(encoding="utf-8"))))
+        check("the token value never appears in what render-claude-wrapper prints (refusals, dry run, success)",
+              not any(fake_token in t for t in (out_m, out_p, out_l, out_d, out_n, out_y, out_s)))
+        check("render-claude-wrapper prints the proof command and the next steps",
+              ("env -i HOME=\"$(mktemp -d)\" PATH=/usr/bin:/bin \"%s\" auth status --json" % wrapper) in out_s
+              and "\"authMethod\": \"oauth_token\"" in out_s and "restart" in out_s and "read_canary" in out_s, out_s[-600:])
+        cfg_w = WC.load_config(str(cfg_file))
+        pe = str(dget(cfg_w, "bin.path_env") or "").split(":")
+        check("auto PATH after the wrapper holds the wrapper folder and the real claude's folder",
+              str(wrapper.parent) in pe and str(realbin) in pe, pe)
+        rl1 = do_render_launchd(cfg_w, cfg_file, Report(dry_run=True, quiet=True), payload=payload, user_home=uhome)
+        plist_changes = any(pth.endswith(".plist") for _, pth in rl1.done)
+        qcf = sh_dq(cfg_file)
+        render_line = ("  1. wa_setup.py render-launchd --config %s, then wa_setup.py install-launchd --config %s   (the "
+                       "daemon's plist changes or is not rendered yet: its PATH follows bin.claude; install-launchd "
+                       "restarts the daemon)" % (qcf, qcf))
+        check("the plist changes after the wrapper (its PATH), so next names render-launchd then install-launchd, not restart",
+              not rl0.errors and plist_changes and render_line in out_s.splitlines()
+              and ("wa_setup.py restart --config %s" % qcf) not in out_s, out_s[-700:])
+        canary_text, wrapper_bytes = canary.read_bytes(), wrapper.read_bytes()
+        r_again = do_render_claude_wrapper(WC.load_config(str(cfg_file)), cfg_file, Report(quiet=True), payload=payload, user_home=uhome)
+        do_render_launchd(cfg_w, cfg_file, Report(quiet=True), payload=payload, user_home=uhome)
+        code_r, out_r = run_wrapper_cmd()
+        check("a later run, with bin.claude already the wrapper, still names the value from before the wrapper",
+              prev_line in out_r.splitlines() and ("set bin.claude to %s in the config" % fake_claude) in out_r, out_r[-600:])
+        check("once render-launchd has picked up the new PATH, next says restart",
+              code_r == 0 and last_rep["r"].data.get("next") == "restart"
+              and ("  1. wa_setup.py restart --config %s   (the daemon reads bin.claude only at start)" % qcf) in out_r.splitlines(),
+              out_r[-500:])
+        check("a second render-claude-wrapper changes nothing and still execs the real claude, not itself",
+              not r_again.errors and not r_again.done and wrapper.read_bytes() == wrapper_bytes and canary.read_bytes() == canary_text
+              and wrapper_exec_target(wrapper) == str(fake_claude), (r_again.errors, r_again.done))
+        scratch = base / "env-i-home"
+        scratch.mkdir()
+        ran = subprocess.run(["/usr/bin/env", "-i", "HOME=%s" % scratch, "PATH=/usr/bin:/bin", str(wrapper), "auth", "status", "--json"],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        direct = subprocess.run(["/usr/bin/env", "-i", "HOME=%s" % scratch, "PATH=/usr/bin:/bin", str(fake_claude)],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        rout = ran.stdout.decode("utf-8", "replace")
+        check("the rendered wrapper runs under env -i: the real claude sees the token set and gets the arguments as given",
+              ran.returncode == 0 and rout == "token:set\nargs:auth status --json\n"
+              and direct.stdout.decode("utf-8", "replace").startswith("token:unset"), (ran.returncode, rout, ran.stderr[-200:]))
+        wt, wres, wran = doctor_text()
+        check("doctor auth line: setup token through the wrapper, token file present, 0600, last changed <date>",
+              re.search(r"authentication: setup token through \S+claude-bot \(token file present, 0600, last changed "
+                        r"\d{4}-\d{2}-\d{2}\)", wt) is not None and not any("token" in b for b in wres["blockers"]),
+              [ln for ln in wt.splitlines() if "auth" in ln])
+        os.chmod(str(env_file), 0o644)
+        pt, pres, pran = doctor_text()
+        os.unlink(str(env_file))
+        gt, gres, gran = doctor_text()
+        check("doctor: BLOCKER when the wrapper exists but the token file is 0644 or gone",
+              any("chmod 600" in b for b in pres["blockers"]) and any("token file not found" in b for b in gres["blockers"])
+              and gt.splitlines()[-1].startswith("VERDICT: NOT READY"), (pres["blockers"], gres["blockers"]))
+        check("wa_setup's wrapper marker is the one wa_common looks for", WRAPPER_MARKER == WC.CLAUDE_WRAPPER_MARKER)
+        check("doctor never runs claude or the wrapper and never prints the token",
+              not any(n in ("claude", "claude-bot", "launchctl") for n in wran + pran + gran)
+              and not any(fake_token in t for t in (wt, pt, gt)), wran + pran + gran)
+        env_file.write_text("CLAUDE_CODE_OAUTH_TOKEN=%s\n" % fake_token, encoding="utf-8")
+        os.chmod(str(env_file), 0o600)
+        raw["bin"]["claude"] = "<auto>"
+        write_text_atomic(cfg_file, json_text(raw), 0o600)
+        code_a, out_a = run_wrapper_cmd()
+        check("render-claude-wrapper prints previous bin.claude <auto> and says <auto> in the To go back line",
+              code_a == 0 and "  previous bin.claude: <auto> (to go back, set it to this value, then render-launchd and follow its next: line)"
+              in out_a.splitlines() and "set bin.claude to <auto> in the config" in out_a
+              and is_exec(wrapper_exec_target(wrapper)), out_a[-600:])
+        os.unlink(str(env_file))
+        raw["bin"]["claude"] = str(bindir / "claude")
+        write_text_atomic(cfg_file, json_text(raw), 0o600)
+        cfg = WC.load_config(str(cfg_file))
+
+        say("[claude-settings template: secrets and doc-text-cache deny rules]")
+        real_settings = (real_t / "claude-settings.json").read_text(encoding="utf-8")
+        p2 = base / "payload-real-settings"
+        shutil.copytree(str(payload), str(p2))
+        shutil.copyfile(str(real_t / "claude-settings.json"), str(p2 / TEMPLATES_REL / "claude-settings.json"))
+        h2 = base / "home-real-settings"
+        r_h2 = do_init(h2, Report(quiet=True), payload=p2, which=fake_which, models_dir=base / "models", user_home=uhome)
+        s2 = read_json_file(h2 / "live" / "claude-settings.json", {})
+        deny2 = dget(s2, "permissions.deny") or []
+        check("the shipped template renders Read deny rules for <home>/secrets/** and <home>/doc-text-cache/** with absolute paths",
+              not r_h2.errors and ("Read(/%s/secrets/**)" % h2) in deny2 and ("Read(/%s/doc-text-cache/**)" % h2) in deny2
+              and ("Read(//%s/secrets/**)" % str(h2).lstrip("/")) in deny2, (r_h2.errors, deny2[-14:]))
+        old_tmpl = "".join(ln for ln in real_settings.splitlines(True)
+                           if "{WA_HOME}/secrets/" not in ln and "{WA_HOME}/doc-text-cache/" not in ln)
+        p3 = base / "payload-old-settings"
+        shutil.copytree(str(payload), str(p3))
+        (p3 / TEMPLATES_REL / "claude-settings.json").write_text(old_tmpl, encoding="utf-8")
+        h3 = base / "home-old-settings"
+        r_h3 = do_init(h3, Report(quiet=True), payload=p3, which=fake_which, models_dir=base / "models", user_home=uhome)
+        cfg3 = WC.load_config(str(h3 / "live" / "config.json"))
+        st_old = dict((r["key"], r["status"]) for r in seed_rows(cfg3, p3)).get("claude-settings.json", "")
+        shutil.copyfile(str(real_t / "claude-settings.json"), str(p3 / TEMPLATES_REL / "claude-settings.json"))
+        st_new = dict((r["key"], r["status"]) for r in seed_rows(cfg3, p3)).get("claude-settings.json", "")
+        check("seed-status: settings rendered from the template before the two deny rules report template newer after the update",
+              not r_h3.errors and st_old == "unchanged" and "template newer" in st_new, (st_old, st_new))
+
         say("[shipped templates]")
         ex = json.loads((real_t / "config.example.json").read_text(encoding="utf-8"))
         help_keys = set(ex.get("_help") or {}) - {"_about"}
@@ -3069,6 +3651,12 @@ def cmd_copy_seed(args):
     return 1 if rep.errors else 0
 
 
+def cmd_render_claude_wrapper(args):
+    path = _config_arg(args)
+    rep = do_render_claude_wrapper(load_cfg(path), path, Report(dry_run=args.dry_run))
+    return 3 if rep.data.get("refused") else (1 if rep.errors else 0)
+
+
 def cmd_measure(args):
     cfg = {}
     path = _config_arg(args)
@@ -3087,7 +3675,7 @@ DISPATCH = {
     "init": cmd_init, "doctor": cmd_doctor, "check-config": cmd_check_config, "render-launchd": cmd_render_launchd,
     "install-launchd": cmd_install_launchd, "uninstall-launchd": cmd_uninstall_launchd, "restart": cmd_restart,
     "sync-reader-config": cmd_sync_reader_config, "seed-status": cmd_seed_status, "copy-seed": cmd_copy_seed,
-    "measure": cmd_measure, "tailscale-hint": cmd_tailscale_hint,
+    "measure": cmd_measure, "tailscale-hint": cmd_tailscale_hint, "render-claude-wrapper": cmd_render_claude_wrapper,
 }
 
 
@@ -3137,6 +3725,9 @@ def build_parser():
     sp.add_argument("--top", type=int, default=15, help="groups shown in the text report, 0 for all (default 15)")
     sp.add_argument("--json", action="store_true", help="machine readable, every group with its jid (for group_policies)")
     sp.add_argument("--wa-root", metavar="DIR", help="WhatsApp group container folder (default: WhatsApp Desktop's)")
+    add("render-claude-wrapper", "optional: run the daemon's claude with the setup token in <home>/secrets/claude-bot.env "
+                                 "(0600) through <home>/bin/claude-bot and point bin.claude at it; never prints the token",
+        writes=True)
     sp = add("tailscale-hint", "print the tailscale serve command and address for the board port; runs nothing")
     sp.add_argument("--serve-port", type=int, default=None, metavar="N", help="tailnet port (default 80, or 443 with --https)")
     sp.add_argument("--https", action="store_true", help="serve over https (needs HTTPS certificates on the tailnet)")

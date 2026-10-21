@@ -55,7 +55,7 @@ HOME_DIR="<paths.home from the progress file header>"; LIVE="$HOME_DIR/live"
 "$PY" "$KIT/daemon/wa_second_source.py" --config "$LIVE/config.json" --dry-run
 ```
 
-It pulls yesterday (or `--day YYYY-MM-DD`), calls no model and writes nothing. It prints the whitelist counts, the excluded chats with their reasons, one line per chat with message counts, speakers and the world guess, the skipped chats, and whether the nightly run would call the model. Pick one chat and count that day's messages in Lark with the owner: the numbers must agree.
+It pulls yesterday (or `--day YYYY-MM-DD`), calls no model and writes nothing. It prints the whitelist counts, the excluded chats with their reasons, one line per chat with message counts, speakers and the world guess, the skipped chats, and whether the nightly run would call the model. An encrypted Lark chat on the whitelist shows as `  skipped <title>: encrypted chat, the Lark API cannot read it`, not as an error: the Lark API cannot read such a chat at all, so set its `pull` to false with the owner (K341). Pick one chat and count that day's messages in Lark with the owner: the numbers must agree.
 
 ### 4 · Map people to their Lark ids
 

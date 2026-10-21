@@ -52,6 +52,9 @@ A healthy daemon shows a start line `wa_live <version> 起跑 · model=<model> �
 | `<home>/launchd/intake-evening.mjs`, `<home>/launchd/<intake_label>.plist` | The evening intake job, when installed | 0644 | no |
 | `<home>/config.json` | The reader config, generated from `live/config.json` by `sync-reader-config` and at every daemon start | 0600 | no |
 | `<home>/transcripts-cache/` | Voice transcripts, one JSON file per voice note, shared by the reader, the daemon and the board | 0700 | no |
+| `<home>/doc-text-cache/` | Text of Word, Excel, PowerPoint, RTF, ODT and Pages attachments, one JSON file per document, shared by every read (`reader.read_documents`) | 0700 | no |
+| `<home>/secrets/` | `deny-canary.txt`, a random marker the deny probe tries to read (0600, written by `init`); `claude-bot.env`, the optional setup token, written by the owner (0600). Every run is denied reading this folder | 0700 | no |
+| `<home>/bin/claude-bot` | The optional setup token wrapper `render-claude-wrapper` writes; `bin.claude` points at it | 0700 | no |
 | `<home>/runs-work/<key>/` | The reader's working folder per conversation (config copy, snapshots while reading, packs) | 0700 | no |
 | `<home>/prewarm/` | The working folder of `prewarm-<days>.json` | 0700 | no |
 | `<home>/brain-cwd/` | The empty folder headless `claude` runs in | 0700 | no |
@@ -150,9 +153,10 @@ sqlite3 -readonly "$LIVE/state.sqlite" "select decision, count(*) from inbound_l
 sqlite3 -readonly "$LIVE/state.sqlite" "select name, world, stage, priority, tag, needs_me from conversations order by updated_at desc limit 10"
 sqlite3 -readonly "$LIVE/state.sqlite" "select id, name, reason, ok, error from dossier_jobs order by id desc limit 5"
 sqlite3 -readonly "$LIVE/state.sqlite" "select key, value from meta where key like 'daily_%' or key = 'dossier_nightly_last' or key like 'seed_fallback:%'"
+sqlite3 -readonly "$LIVE/state.sqlite" "select id, kind, started_at, ended_at, substr(detail, 1, 80) from brain_outages order by id desc limit 5"
 ```
 
-`runs.kind` is `direct` or `group` for judgments, `dossier`, `second_source` or `backfill` for the rest. `inbound_log.decision` is one of `pass:all`, `pass:mention`, `skip:no_mention`, `skip:policy`, `skip:ignored`, `skip:status_or_broadcast`, `skip:system`, `skip:too_old`, `skip:before_install`, `skip:doorbell_off`, `outbound:replied`, `outbound:replied:burst_cancelled`.
+`runs.kind` is `direct` or `group` for judgments, `dossier`, `second_source`, `backfill` or `probe` (the deny probe) for the rest. `brain_outages` holds one row per time the circuit breaker opened: `kind` `auth` or `limit`, `ended_at` empty while it is still open. `inbound_log.decision` is one of `pass:all`, `pass:mention`, `skip:no_mention`, `skip:policy`, `skip:ignored`, `skip:status_or_broadcast`, `skip:system`, `skip:too_old`, `skip:before_install`, `skip:doorbell_off`, `outbound:replied`, `outbound:replied:burst_cancelled`.
 
 ## Command files
 
@@ -160,7 +164,8 @@ Drop a JSON file into `live/commands/`. Within a few seconds the running daemon 
 
 | File | Parameters | What it does | Look for |
 |---|---|---|---|
-| `probe-claude.json` | `{}`; `"label"`, `"drop": ["--flag"]`, `"add": ["--flag", "value"]` to bisect | One minimal `claude -p` with the cage flags and the daemon's environment, under launchd; samples and kills it after 90 seconds (one tiny model call) | `probe-claude 结束 rc=<rc>, <s>s, stdout <n> 字 -> <folder>`, then `probe-claude: init 没有 memory_paths (Claude 记忆关着)` |
+| `probe-claude.json` | `{}`; `"label"`, `"drop": ["--flag"]`, `"add": ["--flag", "value"]` to bisect | One minimal `claude -p` with the cage flags and the daemon's environment, under launchd; samples and kills it after 90 seconds (one tiny model call). It runs while the circuit breaker is open too | `probe-claude 结束 rc=<rc>, <s>s, stdout <n> 字 -> <folder>`, then `probe-claude: init 没有 memory_paths (Claude 记忆关着)` |
+| `probe-claude.json` | `{"read_canary": true}` | The deny probe: asks the brain, in the same cage, to Read `<home>/secrets/deny-canary.txt` and answer only DENIED or READ_OK; recorded as a run of kind `probe`, so a blocked read lands in `runs.denials` (one tiny model call). `wa_setup.py init` writes the marker on every install (`render-claude-wrapper` too), so the probe works with or without the setup token; a missing marker is logged and the probe stops. It never targets the token file | `probe-claude read_canary: 读取被挡下 (secrets 夹的 deny 规则有效; runs.denials 记了 <n> 笔, 脑回 DENIED)`; `没挡住` instead is a failure and pushes an alert |
 | `notify-test.json` | none | One test push through the outlet, as kind `error` | `notify-test: 已发` |
 | `test-run.<jid>.json` | none (the jid is in the name) | Judges that chat's last three inbound messages now, gate or no gate (one model call) | `test-run 指令: <name>` |
 | `prewarm-<days>.json` | none (the days are in the name) | Transcribes every voice note in that window into the cache, in the background; no model call. One whose process a restart killed mid-run runs again at the next start; one that returned (finished, failed or timed out) does not | `prewarm 完成 <s>s: <summary>` |
@@ -221,6 +226,21 @@ With the config edit ritual from `install/00-start-here.md` (backup, edit, `chmo
 
 `live/topic-map.json` and the owner copies in `live/prompts/` are read on every run: an edit lands with the next run, no restart.
 
+## When the brain cannot be called
+
+Two model calls in a row that fail because Claude cannot be called open the circuit breaker: `auth` when the login expired or was refused, `limit` when the usage limit is reached. Any other failure is a problem of that one conversation and resets the count; any call that succeeds closes it.
+
+| While it is open | What happens |
+|---|---|
+| New triage runs | None start. Every burst stays in the pending queue, nothing is dropped, and the queue runs in order once the breaker closes |
+| Person note runs, the second source's nightly pull, summary backfill batches, `test-run.<jid>.json`, the board's Judge now | Not started. Judge now answers `{"ok": false, "reason": "brain_down", ...}` and the board says the brain cannot be called; the nightly pull waits and runs once the brain answers again |
+| The doorbell and the gate, the facts job, the nightly backup, the morning digest, the board, other command files | Keep running |
+| A probe | Every `brain.gate_probe_seconds` (900) the daemon makes the smallest call it can (same cage, one turn, "reply with exactly: PONG"); an empty answer does not count. Probes are not runs: no row, no run folder. A daemon started with `--dry-run` never probes |
+
+What the owner sees: a banner on top of the board (`The brain cannot log in to Claude` or `Claude usage limit reached`, in Chinese `脑登不进 Claude` or `Claude 用量到顶了`) with since when, what to do, and when the next probe is; `status.brain_down` in `/api/board` (`null` while the brain answers, else `kind`, `since`, `minutes`, `detail`, `next_probe_at`); exactly two pushes, one when it opens (at most one in six hours) and one when it closes, sent only when the first one went out; one `brain_outages` row; and the next morning's digest health line. A restart while it is open closes the old row at the start time (`断路器: 上次留着没关的 <n> 段停摆, 起跑时记成结束`); if Claude still cannot be called, the next two failures open a new one.
+
+What to do: for `auth`, log in to Claude Code once in the terminal on the always-on Mac itself (or, when `bin.claude` is the setup token wrapper, renew the token in `<home>/secrets/claude-bot.env`); for `limit`, wait. No restart is needed: the next probe that answers closes the breaker. `references/troubleshooting.md`, "Runs are stuck with zero output", check 1, reads the log lines.
+
 ## The board
 
 On this Mac `http://127.0.0.1:<port>/`; on the phone, the tailnet address `tailscale serve status` shows. It has no login: the tailnet is its lock (`references/privacy.md`, "Tailscale, and a board with no login").
@@ -240,12 +260,14 @@ On this Mac `http://127.0.0.1:<port>/`; on the phone, the tailnet address `tails
 | Take to Claude Code | `GET /api/packet` | `板子: 交棒包 <jid>` |
 | The green WhatsApp button, Copy draft | nothing: it opens WhatsApp prefilled, or copies | none; nothing is ever sent by the kit |
 
+- **Search.** The search box on top of the list (or the `/` key) finds messages in every chat WhatsApp Desktop keeps on this Mac, by message text or file name: every word typed must match, case does not matter, newest first, status and broadcast chats never. Each result shows the chat, the time, the speaker in a group, and an excerpt with the words marked; with a conversation open, the results can be limited to it. A click opens the context view, the conversation around that message with the hit marked, and a way back to the results. Search only reads: it changes nothing, and its log line `板子: 搜寻 <n> 个词, <n> 笔` never carries the words searched.
+- **The banner.** While the brain cannot be called, a banner on top says why and what to do ("When the brain cannot be called", above).
 - **The footer.** Today's runs and tokens (read, cached, written), the watermark, and how long ago WhatsApp's database changed. Dollars show only with `board.show_usd` `true`.
-- **Other endpoints.** `/health` (`GET` and `HEAD`: `200` with `ok (last scan <n>s ago)` while the main loop's heartbeat is younger than three times `doorbell.full_rescan_seconds`, at least 30 seconds; `503` with `stalled <n> (last scan <n>s ago, limit <n>s)` after that; a monitor checks that the body starts with `ok`, or uses `curl -sf`), `/api/board`, `/api/thread?jid=<jid>&n=<n>`, `/api/runs` (the last 30 runs), `/api/digest`, `/media?pk=<pk>`, `/calendar/<key>.ics`, and `/v/` listing the variants in `live/variants/`.
+- **Other endpoints.** `/health` (`GET` and `HEAD`: `200` with `ok (last scan <n>s ago)` while the main loop's heartbeat is younger than three times `doorbell.full_rescan_seconds`, at least 30 seconds; `503` with `stalled <n> (last scan <n>s ago, limit <n>s)` after that; a monitor checks that the body starts with `ok`, or uses `curl -sf`), `/api/board`, `/api/thread?jid=<jid>&n=<n>` (with `&around=<pk>`, the messages before and after that one, in time order, for the context view), `/api/search?q=<words>&jid=<optional jid>&n=<5 to 200, default 60>` (`{"q", "hits", "more"}`, read only), `/api/runs` (the last 30 runs), `/api/digest`, `/media?pk=<pk>`, `/calendar/<key>.ics`, and `/v/` listing the variants in `live/variants/`.
 
 ## The morning digest
 
-At `digest.at` (08:00) the daemon writes `live/digest/<yesterday>.md` and pushes its short form when `digest.push` is true and an outlet exists. On the board it is the "Yesterday" card. Its blocks, at most twelve lines: yesterday's volume (messages through the gate, runs by kind, and bursts saved because you replied before their run started), who still waits on you, stage moves, person note jobs, facts mismatches, and health (the WhatsApp database's age, the facts source, the backup, the second source pull, open intake entries, and a warning when an owner copy is missing). A quiet day still gets a digest. During the observation week a `🧪` question may follow (station O11).
+At `digest.at` (08:00) the daemon writes `live/digest/<yesterday>.md` and pushes its short form when `digest.push` is true and an outlet exists. On the board it is the "Yesterday" card. Its blocks, at most twelve lines: yesterday's volume (messages through the gate, runs by kind, and bursts saved because you replied before their run started), who still waits on you, stage moves, person note jobs, facts mismatches, and health (the WhatsApp database's age, the facts source, the backup, the second source pull, open intake entries, `brain was down <n> minutes (<auth|limit>)` on a day the breaker was open, and a warning when an owner copy is missing). A quiet day still gets a digest. During the observation week a `🧪` question may follow (station O11).
 
 To send it now: `digest-now.json`. A restart after `digest.at` marks today's as sent without sending it.
 
@@ -256,7 +278,7 @@ To send it now: `digest-now.json`. A restart after `digest.at` marks today's as 
 | `📋 WhatsApp Live · <MM/DD>` | The morning digest | The board's Yesterday card for the full text |
 | `💬 [WA live #<id>] <name> · <world> / <stage> / <priority> (<n>%)` | A judgment that needs you (only with `notify.mode` `needs_me` or `all`); the draft follows, and a `wa.me` link for one-to-one chats | The board |
 | `👀 [WA live #<id>] ...` | A judgment that needs nothing from you (only with `all`) | Nothing to do |
-| `⚠️ [WA live] run #<id> 失败 (<name>): <reason>` and `看 <run folder>` | A judgment failed after its retry; at most once per chat per 30 minutes | Troubleshooting, "Runs are stuck with zero output" |
+| `⚠️ [WA live] run #<id> 失败 (<name>): <reason>` and `看 <run folder>` | A judgment failed after its retry; at most once per chat per 30 minutes; not sent while the circuit breaker is open (its two pushes say it instead) | Troubleshooting, "Runs are stuck with zero output" |
 | `⚠️ [WA live] 档案 run #<id> 失败 (<name>): <reason>` | A person note run failed | Troubleshooting, "A person note is refused" |
 | `⚠️ [WA live] 排班 <job> 失败: <reason>` | A nightly job failed; at most once per job per hour | The reason names it; Troubleshooting per job |
 | `⚠️ [WA live] WhatsApp 的数据库已经 <h> 小时没动, <Mac> 上的 WhatsApp Desktop 可能掉线了。` | WhatsApp Desktop wrote nothing for `doorbell.stale_alert_hours`; repeated at most every 6 hours | Troubleshooting, "Nothing on the board" |
@@ -264,6 +286,9 @@ To send it now: `digest-now.json`. A restart after `digest.at` marks today's as 
 | `⚠️ [WA live] 水位 <old> 比 WhatsApp 库最大编号 <max> 还大 ...` | WhatsApp's database was rebuilt or linked again; the watermark was reset and older messages are not judged | Troubleshooting, "A message is missing" |
 | `⚠️ [WA live] 摘要回填失败, 看 wa_live.log` | A summary backfill stopped on an error | The log's `backfill 失败` traceback |
 | `🚨 [WA live] run #<id> (<name>) cage breach: 载入了不该有的工具 <tools>`, `🚨 [WA live] 档案 run cage breach: ...`, `🚨 [WA live] <kind> run #<id> cage breach: ...` | A run loaded a tool outside the cage | Troubleshooting, "Cage breach" |
+| `🔌 [WA live] 脑叫不动了: Claude Code 的登入失效。…` or `🔌 [WA live] 脑叫不动了: Claude 的用量额度到顶。…` | The circuit breaker opened: Claude cannot be called (login, or usage limit); pending messages stay queued. At most one in six hours | "When the brain cannot be called", above |
+| `✅ [WA live] 脑恢复了, 停了 <n> 分钟。排队的讯息现在接着判。` | The breaker closed; the queue runs. Sent only after the opening push | Nothing to do |
+| `🚨 [WA live] 拒读探测没挡住: 脑读得到 secrets 夹。…` | The deny probe read the marker in `<home>/secrets/`: the Read deny rules do not hold | `init`, then the probe again (`install/C2-daemon.md`, step 12) |
 | `🧪 [WA live] notify-test: 出口通了 (<time>)` | The answer to `notify-test.json` | Nothing to do |
 | `🗂 intake pre-sort · <n> open` (`🗂 intake 预分类 · <n> 条等归位`) | The evening intake list, a suggested place per entry | Say "intake" in a session |
 
@@ -306,7 +331,7 @@ Its first scan is a first start: the lookback rows are recorded as `skip:before_
 ## Housekeeping
 
 - **`live/runs/` grows forever.** The kit never deletes run folders. Check the size with `du -sh "$LIVE/runs"`, and count old ones with `find "$LIVE/runs" -maxdepth 1 -mtime +30 | wc -l`. They hold other people's messages; removing old ones is the owner's decision, made with them.
-- **`<home>/transcripts-cache/` and `<home>/runs-work/`** grow with voice notes and conversations; they rebuild themselves when removed, at the cost of transcribing again.
+- **`<home>/transcripts-cache/`, `<home>/doc-text-cache/` and `<home>/runs-work/`** grow with voice notes, documents and conversations; they rebuild themselves when removed, at the cost of transcribing and converting again.
 - **Config backups** (`live/config.json.bak-<time>`) pile up, one per change; keep the recent ones.
 - **After a kit update**, `"$PY" "$KIT/daemon/wa_setup.py" seed-status --config "$LIVE/config.json"` lists owner copies whose seed moved; `install/update.md` merges them.
 - **The fingerprint** of the running code goes into the registry at install (station C2, step 5) and after every update (`install/update.md`, step 9); station O10 checks it.

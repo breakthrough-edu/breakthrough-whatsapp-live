@@ -23,6 +23,9 @@ WhatsApp Live reads private messages that other people sent you. This page says,
 | `~/Library/Group Containers/group.net.whatsapp.WhatsApp.shared/` | WhatsApp Desktop's own database and media: every message and file the app has synced. The kit opens it read only and never writes to it. |
 | `<home>/runs-work/<key>/`, `<home>/prewarm/` | The reader's working copies: snapshots of the database files taken for a read, plus the reading packs built from them. Full chat history, one copy per working folder. The kit does not delete these (`references/troubleshooting.md`). |
 | `<home>/transcripts-cache/` | Text of every transcribed voice note. |
+| `<home>/doc-text-cache/` | Text of the documents people sent (Word, Excel, PowerPoint, RTF, ODT, Pages), converted on this Mac for the reading packs ("The document text cache", below). |
+| `<home>/secrets/` | `deny-canary.txt`, a random marker with no secret in it, written by `init` for the deny probe; and only when you chose the optional setup token, `claude-bot.env`, the token itself (0600) ("The setup token file", below). |
+| `<home>/bin/claude-bot` | Only with the setup token: a short wrapper that loads the token file and runs `claude`. It holds the file's path, never the token. |
 | `<home>/config.json` | The reader's config: your phone, your names, ignored chats, whisper settings. |
 | `<home>/brain-cwd/` | Empty on purpose: the working folder of every headless run. |
 | `<home>/INSTALL-PROGRESS.md`, `<home>/INSTALLED.md` | Your answers during install and, when your vault keeps no registry, the six-cell entries. Can name tools you chose and groups you ticked. |
@@ -65,7 +68,7 @@ Every model call is `claude -p` on your Mac, and its prompt, plus any file the m
 
 | Run | When | What the model receives | Switch |
 |---|---|---|---|
-| Triage judgment | Each burst that passes the gate, and "judge now" on the board | The burst; this conversation's reading pack (`brain.context_days`, 7 days one-to-one; `brain.group_context_days`, 3 days for groups) with voice transcripts; images and files from the pack that it opens; its previous judgment and draft; one line per other conversation from `summaries.md`; candidate vault notes (from `topic-map.json`, and person notes of people named in the chat), which it may open; this person's facts lines; voice examples (your sent messages next to earlier drafts, same world only); your vocabulary and business paragraph | The gate (`direct_policy`, `group_policies`, `unlisted_group_policy`, `ignored_jids`) and `doorbell.enabled` |
+| Triage judgment | Each burst that passes the gate, and "judge now" on the board | The burst; this conversation's reading pack (`brain.context_days`, 7 days one-to-one; `brain.group_context_days`, 3 days for groups) with voice transcripts and the text of the documents in it (`reader.read_documents`); images and files from the pack that it opens; its previous judgment and draft; one line per other conversation from `summaries.md`; candidate vault notes (from `topic-map.json`, and person notes of people named in the chat), which it may open; this person's facts lines; voice examples (your sent messages next to earlier drafts, same world only); your vocabulary and business paragraph | The gate (`direct_policy`, `group_policies`, `unlisted_group_policy`, `ignored_jids`) and `doorbell.enabled` |
 | Person note | Nightly (`dossier.nightly_at`), the board's note buttons, the facts queue | This person's messages over `dossier.pack_days` (30), their facts lines, the current note, the person-dossier playbook skeleton, your doctrine's roles list | `dossier.enabled` |
 | Summary backfill | Only when you start it (station O9) | Reading packs over `backfill.days` (30) for chats with at least `backfill.min_msgs` (10) messages, `backfill.batch_size` (10) chats per call, only chats the gate passes (`backfill.respect_gate`) | Do not start it |
 | Second source | Nightly (`second_source.at`) | Yesterday's messages from whitelisted chats, only when someone other than you wrote | `second_source.enabled` |
@@ -83,6 +86,8 @@ Two things to know about that table:
 - **The WhatsApp database.** Read only, never uploaded, never in the backup. Only the excerpts in the table above travel, inside model calls.
 - **The reader's working copies, the run folders and the logs.** Never backed up or uploaded by the kit. A whole-disk or home folder backup you run yourself (Time Machine, a cloud backup app) will copy them, like everything else in your home folder.
 - **The push token.** `telegram.json` is never backed up, and the brain is denied reading it.
+- **The setup token**, when you use one. Only the wrapper's shell reads it; no run, no backup and no log ever holds it.
+- **The document text cache.** Only the text of documents in a run's own pack travels, inside that run.
 - **Your WhatsApp account.** The kit opens no connection to WhatsApp at all.
 
 ## What else leaves, and to whom
@@ -113,12 +118,32 @@ The brain's tools are Read, Glob and Grep, and those tools can look anywhere the
 | `<live>/digest/**`, `<live>/dossier-backups/**` | Names and situation lines; old versions of every person note. |
 | `<home>/runs-work/**`, `<home>/prewarm/**` | The reader's working copies: database snapshots and reading packs of every chat. |
 | `<home>/config.json` | The reader config: your phone and names. |
+| `<home>/secrets/**` | The optional setup token (`claude-bot.env`): with it, anyone can use your Claude account. Also the deny probe's marker, which proves this rule holds. |
+| `<home>/doc-text-cache/**` | Text of documents people sent in every chat: a run needs only its own chat's, which its pack already holds. |
 | `~/Library/Group Containers/group.net.whatsapp.WhatsApp.shared/*.sqlite*` | WhatsApp Desktop's own databases: every message on the Mac. The brain reads its chat through the pack instead. |
 | `~/.ssh/**`, `~/Library/Keychains/**`, `~/.config/**/credentials*`, `~/.aws/**`, `~/.netrc`, `~/.npmrc`, `~/.gnupg/**`, `~/.docker/config.json`, `~/.claude/.credentials.json` | Keys and credentials that open other machines and accounts. Nothing the brain does needs them. |
 
-Each rule is written as `Read(//<absolute path without its leading slash>)`, 24 in all (`daemon/templates/claude-settings.json` is the list). This form blocks the Read tool under `claude -p --settings`; the canary probe in `references/pitfalls.md`, pit 10, confirms it on your own Mac.
+Each rule is written as `Read(//<absolute path without its leading slash>)`, 26 in all (`daemon/templates/claude-settings.json` is the list). This form blocks the Read tool under `claude -p --settings`; the canary probe in `references/pitfalls.md`, pit 10, confirms it on your own Mac.
 
 What the rules leave readable, on purpose: your vault (the brain opens the notes the topic map and its lookup point at), WhatsApp's media under `Message/Media/` (the images and files a pack lists), the transcript cache in `<home>/transcripts-cache/`, and the rest of `live/` (`summaries.md`, the prompts, the topic map, `seeds.json`, `commands/`, `calendar/`). A rule you add to `live/claude-settings.json` counts as an owner edit (`seed-status` reports it, `install/update.md` carries it over); afterwards run one test judgment to confirm it still completes.
+
+## The setup token file
+
+Only when the owner chose the optional setup token at station C2 (`install/C2-daemon.md`, step 12). By default the daemon's `claude` uses the Claude Code login of the Mac user, held in the Keychain, and none of this exists.
+
+- **Where.** `<home>/secrets/claude-bot.env`, one line `CLAUDE_CODE_OAUTH_TOKEN=<token>`, in a folder that is 0700. The owner creates it and writes the token in a text editor, never on a command line and never into a chat: a command line lands in the shell history, a chat lands in a transcript.
+- **Mode.** 0600, a regular file owned by the Mac user. `render-claude-wrapper` refuses any other mode, a link or a folder in its place, and `doctor` reports a blocker when it changes later.
+- **Who reads it.** Only the shell of `<home>/bin/claude-bot`, which loads it and then runs the real `claude` with the token in its environment. `wa_setup.py` checks the file's mode and that the token line exists, and never reads out or prints what follows the equals sign. Every headless run is denied reading `<home>/secrets/**`; the deny probe (`probe-claude.json` with `{"read_canary": true}`) proves it with a harmless marker beside the token, never the token itself.
+- **What it can do.** It is a long lived login to the owner's Claude account and shares its usage: anyone holding it can run Claude as the owner until it expires (about a year) or is revoked.
+- **Backups.** The nightly backup copies only from `<live>/`, so it never copies `<home>/secrets/`. A whole-disk or home folder backup the owner runs (Time Machine, a cloud backup app) does copy it, like every file in the home folder.
+- **Removing it.** Set `bin.claude` back to the previous `bin.claude` value (the `previous bin.claude:` line `render-claude-wrapper` printed, recorded at C2 step 12; usually `<auto>`) (config edit ritual), then `wa_setup.py render-launchd --config <live>/config.json` and follow its `next:` line (`install-launchd` when the plist changes, otherwise `wa_setup.py restart`), then delete `<home>/secrets/claude-bot.env` and `<home>/bin/claude-bot`, and revoke the token from the Claude account (or let it run out). The daemon then uses the Keychain login again.
+
+## The document text cache
+
+- **What it holds.** `<home>/doc-text-cache/<key>.json`: the text the reader converted from a document someone sent (at most 3000 characters each), one file per document. The key follows the same rule as the voice transcript cache (a hash of the file's real path and size), so a document is converted once and every later read uses the cache.
+- **Where it goes.** Into the reading pack of a run on that chat, and so to Anthropic inside that run, like the rest of the pack. Runs are denied reading the cache folder itself, so a run sees only its own chat's documents. It never leaves the Mac otherwise, and the nightly backup does not copy it (it copies only from `<live>/`).
+- **Clearing it.** Move the folder's files to the Trash; the next read converts again what it needs.
+- **Turning it off.** `reader.read_documents` false, then `wa_setup.py sync-reader-config --config <live>/config.json`: packs list documents by file name only and nothing new is cached. One manual read can skip it with `wa_sweep.py --no-documents`.
 
 ## Quotes in your vault, and switching each writer off
 
@@ -139,7 +164,7 @@ What the rules leave readable, on purpose: your vault (the brain opens the notes
 
 `claude -p` normally saves every session as a transcript under `~/.claude/projects/<a folder named after the working directory>/`. Every headless call this kit makes (triage, person notes, backfill, second source, evening sort, probe) passes `--no-session-persistence`, so no transcript is written, and `brain.cwd` sits outside the vault so no vault instructions or indexes are involved. Each one also runs with `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` and `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1`, so your own Claude Code memory and any `CLAUDE.md` above the working folder do not travel to Anthropic inside every run; the `probe-claude.json` probe proves it (`references/pitfalls.md`, pit 14).
 
-If anything ever ran `claude -p` from that folder, or from an older working folder, without the flag (a hand-built earlier version, an early test, an adapter you wrote), its transcripts are still on disk, and each one holds a full prompt: a conversation pack with other people's messages.
+If anything ever ran `claude -p` from that folder, or from an older working folder, without the flag (an older version, a test run, an adapter you wrote), its transcripts are still on disk, and each one holds a full prompt: a conversation pack with other people's messages.
 
 Look for them:
 
@@ -191,5 +216,7 @@ Restart after any change: `wa_setup.py restart --config <live>/config.json`.
 | Facts | `facts.enabled: false` | No nightly facts read |
 | Backup | `backup.enabled: false` | No nightly copy |
 | Voice examples | `voice.enabled: false` | No new pairs, none shown to the brain |
+| Document text in packs | `reader.read_documents: false`, then `sync-reader-config` | Packs list documents by name only |
+| The setup token | `bin.claude` back to its previous value, then remove the token file ("The setup token file", above) | The daemon uses the Keychain login |
 | The board | `board.enabled: false`, and remove its `tailscale serve` rule | No board |
 | Everything | `wa_setup.py uninstall-launchd --config <live>/config.json` (the same with `--intake` when the evening job is installed) | The daemon's python is stopped first, then the job is booted out and its plist removed from `~/Library/LaunchAgents/`, so a reboot does not bring it back; `install-launchd` brings it back |

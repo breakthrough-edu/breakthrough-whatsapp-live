@@ -42,7 +42,7 @@
   }
   *{box-sizing:border-box}
   html,body{height:100%}
-  body{margin:0;background:#eef0f4;color:var(--ink);font-family:var(--font);font-size:var(--f3);line-height:1.5;-webkit-text-size-adjust:100%;-webkit-font-smoothing:antialiased;overflow:hidden}
+  body{margin:0;background:#eef0f4;color:var(--ink);font-family:var(--font);font-size:var(--f3);line-height:1.5;-webkit-text-size-adjust:100%;-webkit-font-smoothing:antialiased;overflow:hidden;display:flex;flex-direction:column}
   /* What the blur blurs: three faint washes (warm orange, cool gray blue), fixed in place */
   body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
     background:
@@ -52,7 +52,7 @@
       linear-gradient(160deg,#f7f6f3 0%,#eef0f4 55%,#e8ebf1 100%)}
   /* Glass: only the three panes */
   .glass{background:var(--glass);backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);box-shadow:var(--ring),var(--shadow);border-radius:var(--r3);min-width:0;min-height:0;height:100%}
-  .app{display:grid;grid-template-columns:300px minmax(520px,1fr) minmax(380px,.8fr);gap:var(--s2);padding:var(--s2);height:100%}
+  .app{display:grid;grid-template-columns:300px minmax(520px,1fr) minmax(380px,.8fr);gap:var(--s2);padding:var(--s2);flex:1 1 auto;min-height:0;width:100%}
   /* Pane header shared by all three panes: same height, same hairline */
   .hdr{min-height:var(--hdr);padding:calc(var(--s2) + env(safe-area-inset-top)) var(--s3) var(--s2);display:flex;align-items:center;gap:var(--s2);border-bottom:1px solid var(--hair)}
   .hdr .lbl{font-size:var(--f1);font-weight:700;letter-spacing:.12em;color:var(--muted)}
@@ -284,6 +284,55 @@
   .placeholder{display:flex;align-items:center;justify-content:center;height:100%;color:var(--faint);font-size:var(--f2)}
   .toast{position:fixed;left:50%;bottom:calc(var(--s4) + env(safe-area-inset-bottom));transform:translateX(-50%);background:rgba(29,29,31,.92);color:#fff;padding:var(--s1) var(--s3);border-radius:var(--pill);font-size:var(--f2);opacity:0;transition:opacity .2s var(--ease);pointer-events:none;z-index:9;box-shadow:var(--shadow);max-width:calc(100% - 2 * var(--s3));text-align:center}
   .toast.show{opacity:1}
+  /* ===== Brain down banner: status.brain_down is an object while the daemon cannot call the brain (auth or limit), null otherwise.
+     It sits above the three panes (the body is a column), so nothing under it is covered. ===== */
+  .down{flex:none;margin:var(--s2) var(--s2) 0;padding:var(--s2) var(--s3) var(--s2) calc(var(--s3) - 3px);border-left:3px solid var(--red);border-radius:0 var(--r2) var(--r2) 0;background:#fdeceb;box-shadow:var(--ring);color:var(--ink);overflow-wrap:anywhere}
+  .down.limit{border-left-color:var(--amber-dot);background:#fdf1e0}
+  .down .dk{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px var(--s2)}
+  .down .dk b{font-size:var(--f3);font-weight:700;color:var(--red)}
+  .down.limit .dk b{color:var(--amber)}
+  .down .dk .r{margin-left:auto;font-family:var(--mono);font-size:var(--f1);color:var(--muted);font-variant-numeric:tabular-nums}
+  .down p{margin:2px 0 0;font-size:var(--f2);line-height:1.55;color:var(--ink2)}
+  .down .dd{margin-top:2px;font-family:var(--mono);font-size:var(--f1);color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* ===== Search: a box at the top of the list opens a panel over the board (full screen on a phone).
+     Read only: results and the context view live in the panel, the list, the selection and the drafts are never touched. ===== */
+  .sopen{flex:none;display:flex;align-items:center;gap:var(--s1);margin:var(--s2) var(--s3) 0;height:34px;padding:0 var(--s2);border:0;border-radius:var(--r1);background:rgba(255,255,255,.6);box-shadow:inset 0 0 0 1px var(--line);color:var(--faint);font:inherit;font-size:var(--f2);cursor:text;text-align:left;touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+  .sopen span:nth-child(2){flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sopen kbd{font-family:var(--mono);font-size:var(--f1);color:var(--faint);border-radius:4px;padding:0 5px;box-shadow:inset 0 0 0 1px var(--line)}
+  @media (hover:none){ .sopen kbd{display:none} }
+  .search{position:fixed;inset:0;z-index:8;display:flex;justify-content:center;padding:var(--s4) var(--s2);background:rgba(20,20,30,.22)}
+  .search[hidden]{display:none}
+  .spanel{width:100%;max-width:720px;display:flex;flex-direction:column;overflow:hidden;background:var(--glass-hi)}
+  .sform{gap:var(--s1)}
+  .sform input{flex:1;min-width:0;height:36px;font:inherit;font-size:16px;color:var(--ink);background:#fff;border:0;border-radius:var(--r1);padding:0 var(--s2);box-shadow:inset 0 0 0 1px var(--line);outline:none;-webkit-appearance:none;appearance:none}
+  .sform input:focus{box-shadow:inset 0 0 0 1.5px var(--accent),0 0 0 3px var(--accent-soft)}
+  .sform .btn{min-width:0;height:36px;padding:0 var(--s3);font-size:var(--f2);flex:none}
+  .sx{flex:none;appearance:none;border:0;background:transparent;width:36px;height:36px;border-radius:999px;font-size:22px;line-height:1;color:var(--muted);cursor:pointer}
+  .sx:hover{background:rgba(0,0,0,.05);color:var(--ink)}
+  .sopts{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s1) var(--s2);padding:var(--s1) var(--s3);border-bottom:1px solid var(--hair);font-size:var(--f1);color:var(--faint)}
+  .sopts:empty{display:none}
+  .sopts .chip{max-width:100%;overflow:hidden;text-overflow:ellipsis}
+  .sbody{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;padding:var(--s1) var(--s1) calc(var(--s3) + env(safe-area-inset-bottom))}
+  .sbody .kick{padding:var(--s2) var(--s2) var(--s1)}
+  .hit{display:block;width:100%;text-align:left;appearance:none;border:0;background:transparent;font:inherit;color:inherit;padding:var(--s2);border-radius:var(--r2);cursor:pointer;min-width:0;touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+  @media (hover:hover){ .hit:hover{background:rgba(255,255,255,.7)} }
+  .hit:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+  .hit .hl1{display:flex;align-items:baseline;gap:var(--s2);min-width:0}
+  .hit .hn{font-weight:600;flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .hit .hk{flex:none;font-size:var(--f1);letter-spacing:.06em;color:var(--faint);border-radius:var(--pill);padding:0 6px;line-height:18px;box-shadow:0 0 0 1px var(--hair)}
+  .hit .hw{margin-left:auto;flex:none;font-family:var(--mono);font-size:var(--f1);color:var(--faint);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .hit .hx{font-size:var(--f2);line-height:1.5;color:var(--ink2);margin-top:2px;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+  .hit .hs{font-weight:600;color:var(--accent-ink)}
+  .hit .ht{font-size:var(--f1);color:var(--muted);margin-top:2px;overflow-wrap:anywhere}
+  mark{background:rgba(255,196,0,.42);color:inherit;border-radius:3px;padding:0 1px}
+  .smore{margin:var(--s2);padding:var(--s1) var(--s2);border-radius:var(--r1);background:var(--amber-bg);color:var(--amber);font-size:var(--f2)}
+  .sctx{display:flex;align-items:center;gap:var(--s2);padding:var(--s1) var(--s2);border-bottom:1px solid var(--hair);min-width:0}
+  .sctx .back{display:inline-block;flex:none}
+  .sctx .dname{font-size:var(--f3)}
+  .sbody.ctx{padding:0;display:flex;flex-direction:column}
+  .sbody.ctx .thread{flex:1;min-height:0}
+  .msg.hit-msg{box-shadow:0 0 0 2px var(--accent),0 0 0 6px var(--accent-soft)}
+  .msg .hitlbl{font-size:var(--f1);font-weight:700;letter-spacing:.08em;color:var(--accent-ink);margin-bottom:2px;white-space:normal}
   /* Breakpoints 1100 and 860: the script's wide() and the phone check use the same two numbers, change both together */
   @media (max-width:1099px){
     .app{grid-template-columns:300px minmax(0,1fr)}
@@ -304,19 +353,31 @@
     .actions{flex-wrap:wrap}                  /* the calendar button makes the row too wide on a phone, so it wraps */
     .cal .grid{grid-template-columns:repeat(2,minmax(0,1fr))}
     .cal input,.cal textarea{font-size:16px;min-height:44px}   /* 16px keeps iOS from zooming in on focus (same as .sig.pick select) */
+    .down{margin:0;border-radius:0;padding-top:calc(var(--s2) + env(safe-area-inset-top))}
+    .search{padding:0;background:transparent}
+    .spanel{max-width:none;border-radius:0;box-shadow:none;background:rgba(250,250,252,.97)}
   }
 </style>
 </head>
 <body>
+<div class="down" id="down" role="status" hidden></div>
 <div class="app" id="app">
   <section class="rail glass">
     <div class="hdr"><h1 id="title">WhatsApp Live</h1><span class="meta" id="meta"></span></div>
+    <button class="sopen" id="sopen" type="button"><span aria-hidden="true">⌕</span><span id="sopen-lbl"></span><kbd>/</kbd></button>
     <div class="counts" id="chips"></div>
     <div class="list" id="list"></div>
     <div class="foot" id="foot"></div>
   </section>
   <section class="mid glass" id="mid"><div class="placeholder"></div></section>
   <section class="chat glass" id="chat"><div class="hdr"><span class="lbl" id="chat-lbl"></span></div><div class="thread" id="chat-thread"><div class="chatnote"></div></div><details class="digest" id="digest" hidden><summary><span id="digest-title"></span><span class="r" id="digest-date"></span></summary><div class="lines" id="digest-lines"></div></details></section>
+</div>
+<div class="search" id="search" role="dialog" aria-modal="true" hidden>
+  <section class="spanel glass">
+    <form class="hdr sform" id="sform" role="search"><input type="search" id="sq" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search"><button class="btn" type="submit" id="sgo"></button><button class="sx" type="button" id="sclose">×</button></form>
+    <div class="sopts" id="sopts"></div>
+    <div class="sbody" id="sbody"></div>
+  </section>
 </div>
 <div class="toast" id="toast"></div>
 <!--BOOT-->
@@ -448,7 +509,38 @@ const TEXT = {
     judgeStarted: '开始判断, 大约一分钟',
     fullStarted: '全量重判中, 大约一分钟',
     alreadyJudging: '已经在判断中, 稍等',
-    gateConfirm: why => '这条对话没过闸' + (why ? ' (' + why + ')' : '') + '。还是要现在判断吗?'
+    gateConfirm: why => '这条对话没过闸' + (why ? ' (' + why + ')' : '') + '。还是要现在判断吗?',
+    downAuthTitle: '脑登不进 Claude',
+    downAuthDo: 'daemon 登不进 Claude。在常开的那台 Mac 上登入 Claude Code 一次; daemon 若用 token, 就换一个新的。',
+    downLimitTitle: 'Claude 用量到顶了',
+    downLimitDo: 'Claude 的用量上限到了, 额度回来之前 daemon 不判新的对话。',
+    downOtherTitle: '脑现在叫不动',
+    downOtherDo: 'daemon 叫不动 Claude。',
+    downSince: (when, dur) => '从 ' + when + ' 起 · 已 ' + dur,
+    downQueued: '等着的讯息都留在队列里, 一条不丢。',
+    downNext: (when, rel) => '下次检查 ' + when + (rel ? ' (' + rel + ')' : ''),
+    durMin: n => n + ' 分钟',
+    durHourMin: (h, m) => h + ' 小时' + (m ? ' ' + m + ' 分钟' : ''),
+    inMin: n => n + ' 分钟后',
+    anyMoment: '随时',
+    runBrainDown: '脑现在叫不动 (登入或用量), 回来之后再判; 讯息留在队列',
+    searchBox: '搜讯息',
+    searchPh: '搜讯息或档名, 空格分开的字都要有',
+    searchGo: '搜',
+    searchClose: '关掉搜索',
+    searchOnly: name => '只搜 ' + name,
+    searchAll: '全部对话',
+    searchCount: n => '找到 ' + n + ' 条',
+    searchMore: '还有更多结果没列出来, 多加一两个字缩小范围',
+    searchEmpty: q => '没有讯息符合「' + q + '」',
+    searchHint: '输入字再按 Enter。每个字都要出现 (讯息内文或档名), 不分大小写。',
+    searching: '搜索中…',
+    searchFailed: '搜不到 (daemon 出错了)',
+    searchFailedCode: code => '搜不到 (daemon 回 ' + code + ')',
+    searchBack: '‹ 结果',
+    searchFile: '档名',
+    searchHitLabel: '搜到的这条',
+    ctxFailed: '拿不到这一段对话'
   },
   en: {
     loading: 'Loading…',
@@ -573,7 +665,38 @@ const TEXT = {
     judgeStarted: 'Judging, about a minute',
     fullStarted: 'Full re-judge running, about a minute',
     alreadyJudging: 'Already judging, hang on',
-    gateConfirm: why => 'This chat does not pass the gate' + (why ? ' (' + why + ')' : '') + '. Judge it anyway?'
+    gateConfirm: why => 'This chat does not pass the gate' + (why ? ' (' + why + ')' : '') + '. Judge it anyway?',
+    downAuthTitle: 'The brain cannot log in to Claude',
+    downAuthDo: 'The daemon cannot log in to Claude. Log in to Claude Code once on the always-on Mac, or renew the token if the daemon uses one.',
+    downLimitTitle: 'Claude usage limit reached',
+    downLimitDo: 'The Claude usage limit is reached; the daemon judges no new chats until it resets.',
+    downOtherTitle: 'The brain cannot be called',
+    downOtherDo: 'The daemon cannot call Claude right now.',
+    downSince: (when, dur) => 'since ' + when + ' · ' + dur,
+    downQueued: 'Pending messages stay queued, nothing is dropped.',
+    downNext: (when, rel) => 'Next check ' + when + (rel ? ' (' + rel + ')' : ''),
+    durMin: n => n + ' min',
+    durHourMin: (h, m) => h + ' h' + (m ? ' ' + m + ' min' : ''),
+    inMin: n => 'in ' + n + ' min',
+    anyMoment: 'any moment',
+    runBrainDown: 'The brain cannot be called right now (login or usage limit); judge again once it is back. Messages stay queued.',
+    searchBox: 'Search messages',
+    searchPh: 'Search messages or file names; every word must match',
+    searchGo: 'Search',
+    searchClose: 'Close search',
+    searchOnly: name => 'Only ' + name,
+    searchAll: 'All chats',
+    searchCount: n => n + (Number(n) === 1 ? ' result' : ' results'),
+    searchMore: 'More results than shown, refine your search with another word',
+    searchEmpty: q => 'No messages match "' + q + '"',
+    searchHint: 'Type and press Enter. Every word must appear (message text or file name), case does not matter.',
+    searching: 'Searching…',
+    searchFailed: 'Search failed (the daemon had an error)',
+    searchFailedCode: code => 'Search failed (daemon answered ' + code + ')',
+    searchBack: '‹ Results',
+    searchFile: 'File',
+    searchHitLabel: 'Search hit',
+    ctxFailed: 'Could not load this part of the chat'
   }
 };
 
@@ -689,6 +812,11 @@ function applyStatic(){
   $('#title').title = UI.ownerLabel;
   if(!data){ $('#meta').textContent = t('loading'); }
   $('#chat-lbl').textContent = t('recentChat');
+  $('#sopen-lbl').textContent = t('searchBox'); $('#sopen').setAttribute('aria-label', t('searchBox'));
+  $('#sq').placeholder = t('searchPh'); $('#sq').setAttribute('aria-label', t('searchBox'));
+  $('#sgo').textContent = t('searchGo'); $('#sclose').title = t('searchClose'); $('#sclose').setAttribute('aria-label', t('searchClose'));
+  $('#search').setAttribute('aria-label', t('searchBox'));
+  downSig = null; if(data) renderDown();
   const ph = $('#mid .placeholder'); if(ph) ph.textContent = t('pickLeft');
   const cn = $('#chat-thread .chatnote'); if(cn && !selected) cn.textContent = t('pickLeft');
   renderDigest();
@@ -849,10 +977,13 @@ function renderList(){
 }
 
 function mediaBusy(root){ return !!root && Array.prototype.some.call(root.querySelectorAll('audio,video'), m => !m.paused && !m.ended); }
-function threadHtml(msgs, jid){
+// opts (search context view only): kind of a chat that may not be on the board, mark = the pk of the search hit (drawn marked)
+function threadHtml(msgs, jid, opts){
+  opts = opts || {};
   if(!msgs) return threadErr[jid] ? `<div class="chatnote">${esc(t('threadError'))}</div>` : `<div class="chatnote">${esc(t('loading'))}</div>`;
   if(!msgs.length) return `<div class="chatnote">${esc(t('threadEmpty'))}</div>`;
   const r = rowOf(jid);
+  const isGroup = opts.kind ? opts.kind === 'group' : !!(r && r.kind === 'group');
   let out = '', lastDay = '';
   for(const m of msgs){
     const d = dayOf(m.at); if(d !== lastDay){ out += `<div class="day">${esc(d)}</div>`; lastDay = d; }
@@ -874,8 +1005,9 @@ function threadHtml(msgs, jid){
     else if(icon && !media) body += (body ? '\n' : '') + `<span class="mt">${icon} ${esc(label)}${m.media_local ? '' : esc(t('notLocal'))}</span>`;
     // Direct chats show no speaker; groups do, unless the push name looks like an internal id (a long base64 run)
     const nameOk = m.speaker && !(m.speaker.length > 20 && /^[A-Za-z0-9+/=]+$/.test(m.speaker));
-    const who = (!m.from_me && r && r.kind === 'group' && nameOk) ? `<div class="who">${esc(m.speaker)}</div>` : '';
-    out += `<div class="msg${m.from_me ? ' me' : ''}">${who}${body || `<span class="mt">${esc(t('emptyMsg'))}</span>`}<div class="ts">${esc(hm(m.at))}</div></div>`;
+    const who = (!m.from_me && isGroup && nameOk) ? `<div class="who">${esc(m.speaker)}</div>` : '';
+    const hit = opts.mark != null && String(m.pk) === String(opts.mark);
+    out += `<div class="msg${m.from_me ? ' me' : ''}${hit ? ' hit-msg' : ''}" data-pk="${esc(m.pk)}">${hit ? `<div class="hitlbl">${esc(t('searchHitLabel'))}</div>` : ''}${who}${body || `<span class="mt">${esc(t('emptyMsg'))}</span>`}<div class="ts">${esc(hm(m.at))}</div></div>`;
   }
   return out;
 }
@@ -1055,7 +1187,35 @@ function renderMid(force){
   document.querySelectorAll('textarea.draft').forEach(autosize);
   mid.scrollTop = st0;
 }
-function render(){ if(!data) return; if(editing) return; renderList(); renderMid(); renderThread(); }
+// ===== Brain down banner: status.brain_down {kind: auth|limit, since, minutes, detail, next_probe_at} or null =====
+function durText(min){ const m = Math.max(0, Math.round(Number(min) || 0)); return m < 60 ? t('durMin', m) : t('durHourMin', Math.floor(m / 60), m % 60); }
+function whenText(iso){ if(!iso) return ''; return (String(iso).slice(0, 10) === localDay(0) ? '' : dayOf(iso) + ' ') + hm(iso); }
+let downSig = null;
+function renderDown(){
+  const el = $('#down'); if(!el) return;
+  const bd = data && data.status && data.status.brain_down;
+  const ok = !!(bd && typeof bd === 'object');
+  const sig = ok ? JSON.stringify([bd, UI.lang, Math.floor(Date.now() / 60000)]) : '';
+  if(sig === downSig) return;
+  downSig = sig;
+  if(!ok){ el.hidden = true; el.innerHTML = ''; el.className = 'down'; return; }
+  const kind = bd.kind === 'auth' || bd.kind === 'limit' ? bd.kind : 'other';
+  const title = kind === 'auth' ? t('downAuthTitle') : (kind === 'limit' ? t('downLimitTitle') : t('downOtherTitle'));
+  const todo = kind === 'auth' ? t('downAuthDo') : (kind === 'limit' ? t('downLimitDo') : t('downOtherDo'));
+  let mins = Number(bd.minutes);
+  if(!isFinite(mins) && bd.since){ mins = (Date.now() - new Date(bd.since).getTime()) / 60000; }
+  const since = bd.since ? t('downSince', whenText(bd.since), durText(mins)) : '';
+  let next = '';
+  if(bd.next_probe_at){
+    const left = (new Date(bd.next_probe_at).getTime() - Date.now()) / 60000;
+    const rel = isFinite(left) ? (left >= 1 ? t('inMin', Math.ceil(left)) : t('anyMoment')) : '';
+    next = ' ' + t('downNext', whenText(bd.next_probe_at), rel);
+  }
+  el.className = 'down ' + kind;
+  el.innerHTML = `<div class="dk"><b>⚠ ${esc(title)}</b>${since ? `<span class="r">${esc(since)}</span>` : ''}</div><p>${esc(todo)}</p><p>${esc(t('downQueued'))}${esc(next)}</p>${bd.detail ? `<div class="dd" title="${esc(bd.detail)}">${esc(bd.detail)}</div>` : ''}`;
+  el.hidden = false;
+}
+function render(){ if(!data) return; renderDown(); if(editing) return; renderList(); renderMid(); renderThread(); }
 function select(jid){
   if(calOpen !== jid) calOpen = null;   // another chat closes the calendar form
   selected = jid; midSig = ''; threadSig = '';
@@ -1131,7 +1291,7 @@ document.addEventListener('change', ev => { const sel = ev.target.closest && ev.
 document.addEventListener('focusin', ev => { const ta = ev.target.closest && ev.target.closest('textarea.draft'); if(ta){ editing = ta.dataset.jid; autosize(ta); } });
 document.addEventListener('focusout', ev => { const ta = ev.target.closest && ev.target.closest('textarea.draft'); if(ta){ editing = null; clearTimeout(saveTimers[ta.dataset.jid]); saveDraft(ta.dataset.jid); } });
 // A loaded image makes its bubble taller: a chat that was at the bottom follows it down so the newest message stays in view
-document.addEventListener('load', ev => { const im = ev.target; if(!(im && im.classList && im.classList.contains('pic'))) return; const el = im.closest('.thread'); if(el && el.scrollHeight - el.scrollTop - el.clientHeight < 600) el.scrollTop = el.scrollHeight; }, true);
+document.addEventListener('load', ev => { const im = ev.target; if(!(im && im.classList && im.classList.contains('pic'))) return; const el = im.closest('.thread'); if(el && el.closest('#search')){ const h = el.querySelector('.msg.hit-msg'); if(h) h.scrollIntoView({block: 'center'}); return; } if(el && el.scrollHeight - el.scrollTop - el.clientHeight < 600) el.scrollTop = el.scrollHeight; }, true);
 document.addEventListener('toggle', ev => { const d = ev.target.closest && ev.target.closest('details.fold'); if(d){ foldOpen = d.open; } const g = ev.target.closest && ev.target.closest('details.digest'); if(g){ digestOpen = g.open; } }, true);
 
 async function dismissJid(jid){
@@ -1150,6 +1310,7 @@ async function runJudge(jid, full, confirmed){
     if(j && j.ok){ toast(j.already ? t('alreadyJudging') : (full ? t('fullStarted') : t('judgeStarted'))); markMutation(); midSig = ''; load(); return; }
     // The gate said no: judge only after the owner confirms on the board
     if(j && j.needs_confirm && !confirmed){ if(window.confirm(t('gateConfirm', j.gate || j.reason || ''))) await runJudge(jid, full, true); return; }
+    if(j && j.reason === 'brain_down'){ toast(t('runBrainDown'), 4200); load(); return; }   // the breaker is open: the banner says why
     toast((j && j.error) || t('daemonMissed'), 2400);
   }catch(e){ toast(t('daemonMissed')); }
 }
@@ -1158,21 +1319,20 @@ async function queueNote(jid){
     const res = await fetch('/api/dossier', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({jid})});
     let j = null; try{ j = await res.json(); }catch(e){}
     if(!j){ toast(t('daemonMissed')); return; }
-    if(j.ok === false){ toast(j.error || t('daemonMissed'), 2400); return; }
+    if(j.ok === false){ if(j.reason === 'brain_down'){ toast(t('runBrainDown'), 4200); load(); return; } toast(j.error || t('daemonMissed'), 2400); return; }
     toast(j.queued ? t('noteQueued') : t('noteAlready'), 2000); markMutation(); midSig = ''; load();
   }catch(e){ toast(t('daemonMissed')); }
 }
 // Keyboard: with a judged open row selected, a plain D marks it done (not with Cmd, Ctrl or Alt, not inside a field)
 document.addEventListener('keydown', ev => {
   if(ev.key !== 'd' && ev.key !== 'D') return;
-  if(ev.metaKey || ev.ctrlKey || ev.altKey || ev.repeat) return;
+  if(ev.metaKey || ev.ctrlKey || ev.altKey || ev.repeat || S.open) return;   // the search panel is open: D does nothing underneath it
   const tg = ev.target; if(tg && (tg.tagName === 'INPUT' || tg.tagName === 'TEXTAREA' || tg.tagName === 'SELECT' || tg.isContentEditable)) return;
   if(!selected) return; const r = rowOf(selected); if(!isJudged(r) || !isOpen(r)) return;
   ev.preventDefault(); dismissJid(selected);
 });
 // Phone: swipe a list row left past 72px marks it done; a light tap opens it.
-// Opening used to rely on the browser's synthesized click, which iPhone drops when the finger wobbles, the list was scrolling or the row was redrawn.
-// Now touchend decides: moved under 10px, held under 600ms and the list was not scrolling means a tap; the late click is swallowed.
+// The browser's synthesized click is unreliable on iPhone (a wobble, a scroll or a redraw drops it), so touchend decides: moved under 10px, held under 600ms and the list was not scrolling means a tap; the late click is swallowed.
 // A swipe needs 12px of sideways travel, clearly more than vertical, so a wobbling tap never drags the row.
 (function(){
   let sx = 0, sy = 0, st = 0, el = null, dx = 0, horiz = false, moved = false, wasScrolling = false;
@@ -1231,6 +1391,114 @@ document.addEventListener('click', async ev => {
   const pk = ev.target.closest('[data-packet]'); if(pk){ ev.preventDefault(); try{ const res = await fetch('/api/packet?jid=' + encodeURIComponent(pk.dataset.packet), {cache: 'no-store'}); if(!res.ok) throw new Error(String(res.status)); const text = await res.text(); await copyText(text); toast(t('packetCopied'), 2000); }catch(e){ toast(t('copyFailed')); } return; }
   const rf = ev.target.closest('[data-run-full]'); if(rf){ ev.preventDefault(); await runJudge(rf.dataset.runFull, true); return; }
   const rn = ev.target.closest('[data-run]'); if(rn){ ev.preventDefault(); await runJudge(rn.dataset.run, false); return; }
+});
+
+// ===== Search (read only): GET /api/search?q&n[&jid] lists hits; a click opens GET /api/thread?jid&n=40&around=<pk> in the same panel.
+// Nothing here touches the board's state: not the selection, the filter, the drafts or the list. Escape closes the panel.
+const S = {open: false, q: '', terms: [], scopeJid: null, scopeName: '', only: false, res: null, err: '', busy: false, seq: 0, ctx: null, scroll: 0};
+function searchTerms(q){ return String(q || '').trim().split(/\s+/).filter(Boolean).slice(0, 6); }
+function reEsc(x){ return String(x).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+// Highlight: each piece of the raw text goes through esc() on its own, only the matched pieces are wrapped in <mark>; raw text never reaches innerHTML
+function hl(text, terms){
+  const src = String(text == null ? '' : text);
+  const ts = (terms || []).filter(Boolean).slice().sort((a, b) => b.length - a.length);
+  if(!ts.length) return esc(src);
+  const rx = new RegExp(ts.map(reEsc).join('|'), 'gi');
+  let out = '', last = 0, m;
+  while((m = rx.exec(src))){
+    if(!m[0]){ rx.lastIndex++; continue; }
+    out += esc(src.slice(last, m.index)) + '<mark>' + esc(m[0]) + '</mark>';
+    last = m.index + m[0].length;
+  }
+  return out + esc(src.slice(last));
+}
+function hitWhen(iso){ if(!iso) return ''; const y = String(iso).slice(0, 4); return (y === String(new Date().getFullYear()) ? dayOf(iso) : String(iso).slice(0, 10)) + ' ' + hm(iso); }
+function openSearch(){
+  if(S.open){ $('#sq').focus(); return; }
+  const r = rowOf(selected);
+  S.scopeJid = r ? r.jid : null; S.scopeName = r ? (r.name || r.jid) : ''; if(!S.scopeJid) S.only = false;
+  S.open = true; $('#search').hidden = false; $('#sq').value = S.q; renderSearch();
+  setTimeout(() => { const q = $('#sq'); q.focus(); q.select(); }, 0);
+}
+function closeSearch(){ S.open = false; S.ctx = null; S.seq++; $('#search').hidden = true; $('#sbody').innerHTML = ''; const b = $('#sopen'); if(b) b.focus({preventScroll: true}); }
+async function runSearch(){
+  const q = $('#sq').value.trim();
+  S.q = q; S.ctx = null; S.err = '';
+  if(!q){ S.res = null; S.busy = false; renderSearch(); return; }
+  const seq = ++S.seq; S.busy = true; renderSearch();
+  const url = '/api/search?q=' + encodeURIComponent(q) + '&n=60' + (S.only && S.scopeJid ? '&jid=' + encodeURIComponent(S.scopeJid) : '');
+  try{
+    const res = await fetch(url, {cache: 'no-store'});
+    let j = null; try{ j = await res.json(); }catch(e){}
+    if(seq !== S.seq) return;
+    if(!res.ok || !j || !Array.isArray(j.hits)){ S.res = null; S.err = (j && j.error) ? t('searchFailed') : t('searchFailedCode', res.status); }
+    else { S.res = {q: q, hits: j.hits, more: !!j.more}; S.terms = searchTerms(q); }
+  }catch(e){ if(seq !== S.seq) return; S.res = null; S.err = t('daemonMissed'); }
+  S.busy = false; renderSearch(); $('#sbody').scrollTop = 0;
+}
+function hitHtml(h, i){
+  const group = h.kind === 'group';
+  const nameOk = h.speaker && !(String(h.speaker).length > 20 && /^[A-Za-z0-9+/=]+$/.test(h.speaker));
+  const who = h.from_me ? t('youPrefix') : (group && nameOk ? h.speaker + (UI.lang === 'en' ? ': ' : '：') : '');
+  const text = h.text ? hl(h.text, S.terms) : (h.title ? '' : esc(typeLabel(h.type)));
+  const title = h.title ? `<div class="ht">📎 ${esc(t('searchFile'))}${esc(t('colon'))}${hl(h.title, S.terms)}</div>` : '';
+  return `<button type="button" class="hit" data-hit="${i}"><div class="hl1"><span class="hn">${esc(h.chat || h.jid)}</span><span class="hk">${esc(group ? t('group') : t('direct'))}</span><span class="hw">${esc(hitWhen(h.at))}</span></div>${text || who ? `<div class="hx">${who ? `<span class="hs">${esc(who)}</span>` : ''}${text}</div>` : ''}${title}</button>`;
+}
+function renderSearch(){
+  const body = $('#sbody'), opts = $('#sopts');
+  opts.innerHTML = S.scopeJid ? `<span class="chip${S.only ? '' : ' on'}" data-scope="all">${esc(t('searchAll'))}</span><span class="chip${S.only ? ' on' : ''}" data-scope="one">${esc(t('searchOnly', S.scopeName))}</span>` : '';
+  body.classList.toggle('ctx', !!S.ctx);
+  if(S.ctx){
+    const c = S.ctx, h = c.hit;
+    const inner = c.err ? `<div class="chatnote">${esc(t('ctxFailed'))}</div>` : threadHtml(c.msgs, h.jid, {kind: h.kind, mark: h.pk});
+    body.innerHTML = `<div class="sctx"><button type="button" class="back" data-sback="1">${esc(t('searchBack'))}</button><span class="dname">${esc(h.chat || h.jid)}</span><span class="kind">${esc(h.kind === 'group' ? t('group') : t('direct'))}</span></div><div class="thread">${inner}</div>`;
+    const mk = body.querySelector('.msg.hit-msg'); if(mk) mk.scrollIntoView({block: 'center'});
+    return;
+  }
+  if(S.busy){ body.innerHTML = `<div class="chatnote">${esc(t('searching'))}</div>`; return; }
+  if(S.err){ body.innerHTML = `<div class="chatnote" style="color:var(--red)">${esc(S.err)}</div>`; return; }
+  if(!S.res){ body.innerHTML = `<div class="chatnote">${esc(t('searchHint'))}</div>`; return; }
+  if(!S.res.hits.length){ body.innerHTML = `<div class="empty">${esc(t('searchEmpty', S.res.q))}</div>`; return; }
+  body.innerHTML = `<div class="kick">${esc(t('searchCount', S.res.hits.length))}</div>${S.res.more ? `<div class="smore">${esc(t('searchMore'))}</div>` : ''}${S.res.hits.map(hitHtml).join('')}`;
+}
+async function openHit(i){
+  const h = S.res && S.res.hits[i]; if(!h) return;
+  S.scroll = $('#sbody').scrollTop;
+  const seq = ++S.seq;
+  S.ctx = {hit: h, msgs: null, err: false, i: i}; renderSearch();
+  try{
+    const res = await fetch('/api/thread?jid=' + encodeURIComponent(h.jid) + '&n=40&around=' + encodeURIComponent(h.pk), {cache: 'no-store'});
+    if(!res.ok) throw new Error(String(res.status));
+    const j = await res.json(); if(seq !== S.seq || !S.ctx) return;
+    S.ctx.msgs = Array.isArray(j.messages) ? j.messages : [];
+  }catch(e){ if(seq !== S.seq || !S.ctx) return; S.ctx.err = true; }
+  renderSearch();
+}
+function backToResults(){
+  const i = S.ctx ? S.ctx.i : null; S.ctx = null; S.seq++; renderSearch();
+  $('#sbody').scrollTop = S.scroll;
+  const b = i != null ? document.querySelector(`#sbody [data-hit="${i}"]`) : null; if(b) b.focus({preventScroll: true});
+}
+(function(){
+  const box = $('#search');
+  $('#sform').addEventListener('submit', ev => { ev.preventDefault(); runSearch(); if(window.innerWidth <= 860) $('#sq').blur(); });
+  // Clicks inside the panel stay inside: the board's own click handler (filter chips, rows, buttons) never sees them
+  box.addEventListener('click', ev => {
+    ev.stopPropagation();
+    if(ev.target === box){ closeSearch(); return; }
+    if(ev.target.closest('#sclose')){ closeSearch(); return; }
+    const sc = ev.target.closest('[data-scope]'); if(sc){ const one = sc.dataset.scope === 'one'; if(one !== S.only){ S.only = one; if(S.q) runSearch(); else renderSearch(); } return; }
+    if(ev.target.closest('[data-sback]')){ backToResults(); return; }
+    const hb = ev.target.closest('[data-hit]'); if(hb){ openHit(Number(hb.dataset.hit)); return; }
+  });
+  $('#sopen').addEventListener('click', ev => { ev.stopPropagation(); openSearch(); });
+})();
+// Keyboard: / opens search (not inside a field, no modifier); Escape closes it from anywhere, the search box included
+document.addEventListener('keydown', ev => {
+  if(S.open && ev.key === 'Escape'){ ev.preventDefault(); closeSearch(); return; }
+  if(ev.key !== '/' || S.open || ev.metaKey || ev.ctrlKey || ev.altKey) return;
+  const tg = ev.target; if(tg && (tg.tagName === 'INPUT' || tg.tagName === 'TEXTAREA' || tg.tagName === 'SELECT' || tg.isContentEditable)) return;
+  ev.preventDefault(); openSearch();
 });
 
 // ===== Boot: the daemon inlines the first payload at the BOOT marker, so a phone with fetch blocked still sees the board =====

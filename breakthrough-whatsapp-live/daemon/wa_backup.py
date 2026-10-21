@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-wa_backup.py · the nightly backup (interface 5 of 5, DESIGN.md §5.5): copies what is worth keeping from the live
+wa_backup.py · the nightly backup (interface 5 of 5, see references/interfaces.md): copies what is worth keeping from the live
 folder into <backup.dest>/<YYYY-MM-DD>/ and keeps the newest `backup.keep` dated folders.
 
 Destination (`backup.dest`): any folder, such as an iCloud Drive, Google Drive or Dropbox folder synced by its client,
@@ -221,7 +221,7 @@ def describe(pl, proc=""):
 # ---------------------------------------------------------------- main entry
 
 def run_backup(cfg, dest=None, dry_run=False, now=None, require_process=None, process_check=None, out=print):
-    """Back up now (contract G5-037). Returns the backup-last.json record; a dry run returns the same shape and writes
+    """Back up now. Returns the backup-last.json record; a dry run returns the same shape and writes
     nothing. require_process overrides backup.require_process ("" skips the check); process_check(name) -> bool and
     out(line) are injectable (selftest, daemon log)."""
     now = now or dt.datetime.now()

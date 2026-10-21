@@ -22,13 +22,17 @@ What it does, in order:
      a temporary copy) into <work-dir>/transcripts-cache/<key>.json, key = sha1 of "<real absolute path>|<size
      on disk>", the same rule the board uses. Cached transcripts are used even when transcription is off.
      Empty results are not cached, so the next read retries them.
+     Documents (.docx .doc .rtf .odt .pages through /usr/bin/textutil on a temporary copy; .xlsx and .pptx
+     through zipfile and xml.etree) are turned into text under their message: at most 3000 characters each and
+     15000 per pack (past that a document is listed by its path only), files over 30 MB are skipped, a failure
+     is said in the pack and never stops the read. Cache <work-dir>/doc-text-cache/<key>.json, same key rule.
   5. Gaps are always counted and printed, zero included.
 
 Reader config: <work-dir>/config.json, generated from the live config by `wa_setup.py sync-reader-config`.
 Keys (all optional): days (3), ignored_jids ([]), my_phone (digits with country code; guessed from group ids
 with a warning when empty), my_names ([]), owner_label (default: first of my_names), transcribe (true),
 whisper_model, whisper_language ("" = let whisper detect), whisperkit_bin and ffmpeg_bin ("" = PATH, then
-/opt/homebrew/bin and /usr/local/bin), keep_snapshot (false). The env var WA_WHISPER_MODEL overrides
+/opt/homebrew/bin and /usr/local/bin), keep_snapshot (false), read_documents (true). The env var WA_WHISPER_MODEL overrides
 whisper_model when the path it names exists. No other tool's config file is read.
 
 Outputs: <work-dir>/sweeps/sweep-<date>-<N>d.json and .md (or --out plus the same name with .md),
@@ -41,6 +45,7 @@ Examples:
   /usr/bin/python3 wa_sweep.py --only-jid <jid> --days 30    # one chat (either jid form matches)
   /usr/bin/python3 wa_sweep.py --include-jid <jid>          # also pull one chat from beyond the window
   /usr/bin/python3 wa_sweep.py --no-transcribe              # no new transcription (cached ones still show)
+  /usr/bin/python3 wa_sweep.py --no-documents               # no document text in the pack this run
   /usr/bin/python3 wa_sweep.py --selftest                   # fake database in a temp dir, no whisper, no real data
 """
 
@@ -59,7 +64,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 HERE = Path(__file__).resolve().parent
 DEFAULT_WA_ROOT = Path.home() / "Library" / "Group Containers" / "group.net.whatsapp.WhatsApp.shared"
 DEFAULT_HOME = Path.home() / "WhatsApp-Live"
@@ -89,6 +94,7 @@ SYSTEM_LABEL = {6: "群事件", 10: "群事件/改名", 4: "系统", 12: "系统
 READER_DEFAULTS = {
     "days": 3, "ignored_jids": [], "my_phone": "", "my_names": [], "owner_label": "", "transcribe": True,
     "whisper_model": "", "whisper_language": "", "whisperkit_bin": "", "ffmpeg_bin": "", "keep_snapshot": False,
+    "read_documents": True,
 }
 
 
@@ -565,6 +571,318 @@ class Transcriber:
         return text, None
 
 
+# ---------------------------------------------------------------- document text
+
+TEXTUTIL_BIN = "/usr/bin/textutil"
+TEXTUTIL_EXTS = frozenset((".docx", ".doc", ".rtf", ".odt", ".pages"))
+ZIP_DOC_EXTS = frozenset((".xlsx", ".pptx"))
+DOC_EXTS = TEXTUTIL_EXTS | ZIP_DOC_EXTS
+DOC_CHAR_LIMIT = 3000            # characters of one document shown in the pack
+DOC_PACK_BUDGET = 15000          # characters of document text in one pack; past it a document is listed by path only
+DOC_MAX_BYTES = 30 * 1024 * 1024  # larger files are not converted
+DOC_XML_MAX_BYTES = 100 * 1024 * 1024  # uncompressed size of one xml part read whole (zip bomb guard)
+XLSX_MAX_ROWS = 200              # rows with content read per sheet
+TEXTUTIL_TIMEOUT = 120
+
+
+class DocError(Exception):
+    """A document that could not be turned into text; the message is the short reason the pack prints."""
+
+
+def _local(tag):
+    return tag.rsplit("}", 1)[-1] if isinstance(tag, str) else ""
+
+
+def _rel_id(el):
+    """The relationship id (r:id) of a sheet or slide entry; the plain id / sheetId attributes are not it."""
+    for k, v in el.attrib.items():
+        if k.endswith("}id"):
+            return v
+    return None
+
+
+def _zip_xml(z, name):
+    import xml.etree.ElementTree as ET
+    info = z.getinfo(name)
+    if info.file_size > DOC_XML_MAX_BYTES:
+        raise DocError("内部的 %s 太大" % name)
+    with z.open(info) as f:
+        return ET.parse(f).getroot()
+
+
+def _ordered_parts(z, main_xml, rels_xml, list_local, part_re):
+    """[(label, member name)] in document order: the main part's list (sheets, slides) through its rels file;
+    falls back to the part files in numeric order (sheet2 before sheet10) when that mapping is missing."""
+    import posixpath
+    names = set(z.namelist())
+    out = []
+    try:
+        targets = {}
+        for rel in _zip_xml(z, rels_xml).iter():
+            if _local(rel.tag) == "Relationship" and rel.get("Id") and rel.get("Target"):
+                t = rel.get("Target")
+                t = t.lstrip("/") if t.startswith("/") else posixpath.normpath(posixpath.join(posixpath.dirname(posixpath.dirname(rels_xml)), t))
+                targets[rel.get("Id")] = t
+        for el in _zip_xml(z, main_xml).iter():
+            if _local(el.tag) == list_local:
+                member = targets.get(_rel_id(el) or "")
+                if member in names:
+                    out.append((el.get("name") or "", member))
+    except Exception:
+        out = []
+    if out:
+        return out
+    numbered = []
+    for n in names:
+        m = part_re.match(n)
+        if m:
+            numbered.append((int(m.group(1)), n))
+    return [("", n) for _, n in sorted(numbered)]
+
+
+def _xlsx_text(path, limit):
+    import xml.etree.ElementTree as ET
+    import zipfile
+    with zipfile.ZipFile(str(path)) as z:
+        shared = []
+        if "xl/sharedStrings.xml" in z.namelist():
+            for si in _zip_xml(z, "xl/sharedStrings.xml"):
+                if _local(si.tag) != "si":
+                    continue
+                parts = []
+                for el in si.iter():
+                    if _local(el.tag) == "rPh":
+                        break
+                    if _local(el.tag) == "t" and el.text:
+                        parts.append(el.text)
+                shared.append("".join(parts))
+        sheets = _ordered_parts(z, "xl/workbook.xml", "xl/_rels/workbook.xml.rels", "sheet",
+                                re.compile(r"^xl/worksheets/sheet(\d+)\.xml$"))
+        if not sheets:
+            raise DocError("表格里找不到工作表")
+        blocks, total = [], 0
+        for i, (name, member) in enumerate(sheets, 1):
+            lines, more = [], False
+            with z.open(member) as f:
+                for _, el in ET.iterparse(f, events=("end",)):
+                    if _local(el.tag) != "row":
+                        continue
+                    cells = []
+                    for c in el:
+                        if _local(c.tag) != "c":
+                            continue
+                        t = c.get("t") or ""
+                        val = None
+                        if t == "inlineStr":
+                            val = "".join(x.text or "" for x in c.iter() if _local(x.tag) == "t")
+                        else:
+                            v = next((x for x in c if _local(x.tag) == "v"), None)
+                            raw = (v.text or "") if v is not None else ""
+                            if t == "s":
+                                try:
+                                    val = shared[int(raw)]
+                                except (ValueError, IndexError):
+                                    val = ""
+                            elif t == "b":
+                                val = "TRUE" if raw.strip() == "1" else ("FALSE" if raw.strip() == "0" else raw)
+                            else:
+                                val = raw
+                        val = (val or "").strip()
+                        if val:
+                            cells.append(val.replace("\n", " "))
+                    el.clear()
+                    if not cells:
+                        continue
+                    if len(lines) >= XLSX_MAX_ROWS:
+                        more = True
+                        break
+                    lines.append(" | ".join(cells))
+            head = "[工作表 %s]" % (name or i)
+            if more:
+                lines.append("(这张表还有更多行, 只取前 %d 行)" % XLSX_MAX_ROWS)
+            blocks.append("\n".join([head] + (lines or ["(空)"])))
+            total += len(blocks[-1]) + 2
+            if total > limit:
+                break
+        return "\n\n".join(blocks)
+
+
+def _pptx_text(path, limit):
+    import zipfile
+    with zipfile.ZipFile(str(path)) as z:
+        slides = _ordered_parts(z, "ppt/presentation.xml", "ppt/_rels/presentation.xml.rels", "sldId",
+                                re.compile(r"^ppt/slides/slide(\d+)\.xml$"))
+        if not slides:
+            raise DocError("简报里找不到投影片")
+        blocks, total = [], 0
+        for i, (_, member) in enumerate(slides, 1):
+            paras = []
+            for p in _zip_xml(z, member).iter():
+                if _local(p.tag) != "p":
+                    continue
+                s = "".join(t.text or "" for t in p.iter() if _local(t.tag) == "t").strip()
+                if s:
+                    paras.append(s)
+            blocks.append("\n".join(["[投影片 %d]" % i] + (paras or ["(没有文字)"])))
+            total += len(blocks[-1]) + 2
+            if total > limit:
+                break
+        return "\n\n".join(blocks)
+
+
+def _textutil_text(path):
+    """textutil runs on a temporary copy: like ffmpeg for voice, it never opens WhatsApp's container folder
+    itself (a privacy prompt nobody answers under launchd). This python copies the file first."""
+    tu = TEXTUTIL_BIN
+    if not (Path(tu).is_file() and os.access(tu, os.X_OK)):
+        raise DocError("这台 Mac 没有 %s" % tu)
+    if Path(str(path)).is_dir():
+        raise DocError("这是一个资料夹形式的文件, 转不了")
+    with tempfile.TemporaryDirectory(prefix="wa-sweep-doc.") as td:
+        src = Path(td) / ("doc" + Path(str(path)).suffix.lower())
+        try:
+            shutil.copyfile(str(path), str(src))
+        except Exception as e:
+            raise DocError("读不到文件: %s" % e)
+        try:
+            p = subprocess.run([tu, "-convert", "txt", "-encoding", "UTF-8", "-stdout", str(src)],
+                               capture_output=True, timeout=TEXTUTIL_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            raise DocError("textutil 超时 %ds" % TEXTUTIL_TIMEOUT)
+        except OSError as e:
+            raise DocError("textutil 跑不起来: %s" % e)
+        if p.returncode != 0:
+            err = (p.stderr or b"").decode("utf-8", "replace").strip().splitlines()
+            raise DocError("textutil 失败" + (": " + err[-1][:120] if err else ""))
+        return (p.stdout or b"").decode("utf-8", "replace")
+
+
+def clean_doc_text(text):
+    text = (text or "").replace("\r\n", "\n").replace("\r", "\n").replace("\x00", "")
+    text = re.sub(r"[\x01-\x08\x0b\x0c\x0e-\x1f\x7f  ]", " ", text)
+    text = "\n".join(l.rstrip() for l in text.split("\n"))
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+class DocReader:
+    """Word, Excel, PowerPoint, RTF, ODT and Pages attachments as text for the pack. Never fatal: every
+    problem comes back as a short reason. Cache <work-dir>/doc-text-cache/<key>.json, key = the voice
+    transcript key (sha1 of "<real absolute path>|<size on disk>"), written private like transcripts."""
+
+    def __init__(self, cache_dir, enabled):
+        self.cache_dir = Path(cache_dir)
+        self.on = bool(enabled)
+        self.converted = self.cached_n = self.failed = self.over_budget = 0
+        self.used = 0
+
+    @staticmethod
+    def is_doc(path, title=None):
+        for cand in (path, title):
+            if cand and Path(str(cand)).suffix.lower() in DOC_EXTS:
+                return True
+        return False
+
+    def counts(self):
+        return {"enabled": self.on, "converted": self.converted, "cached": self.cached_n, "failed": self.failed,
+                "over_budget": self.over_budget, "chars": self.used}
+
+    def extract(self, path):
+        ext = Path(str(path)).suffix.lower()
+        try:
+            if ext == ".xlsx":
+                return _xlsx_text(path, DOC_CHAR_LIMIT)
+            if ext == ".pptx":
+                return _pptx_text(path, DOC_CHAR_LIMIT)
+        except DocError:
+            raise
+        except Exception as e:
+            raise DocError("%s 解不开: %s" % (ext.lstrip("."), str(e)[:120] or type(e).__name__))
+        if ext in TEXTUTIL_EXTS:
+            return _textutil_text(path)
+        raise DocError("不认得的文件类型 %s" % (ext or "(没有副档名)"))
+
+    def cached(self, key):
+        try:
+            got = json.loads((self.cache_dir / (key + ".json")).read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        if not isinstance(got, dict) or not isinstance(got.get("text"), str) or not got["text"].strip():
+            return None
+        return got
+
+    def read(self, abs_path, title=None):
+        """-> None when off or not a document, else {"text", "cut", "error", "over_budget", "cached"}."""
+        if not self.on or not self.is_doc(abs_path, title):
+            return None
+        res = {"text": None, "cut": False, "error": None, "over_budget": False, "cached": False}
+        remaining = DOC_PACK_BUDGET - self.used
+        if remaining <= 0:
+            self.over_budget += 1
+            res["over_budget"] = True
+            return res
+        try:
+            dkey = transcript_key(abs_path)
+            size = os.path.getsize(os.path.realpath(str(abs_path)))
+        except OSError as e:
+            self.failed += 1
+            res["error"] = "读不到文件: %s" % e
+            return res
+        if size > DOC_MAX_BYTES:
+            self.failed += 1
+            res["error"] = "文件太大 (%.1f MB, 上限 %d MB)" % (size / 1048576.0, DOC_MAX_BYTES // 1048576)
+            return res
+        hit = self.cached(dkey)
+        if hit:
+            text, cut = hit["text"], bool(hit.get("cut"))
+            self.cached_n += 1
+            res["cached"] = True
+        else:
+            ext = Path(str(abs_path)).suffix.lower()
+            try:
+                if ext in DOC_EXTS:
+                    raw = self.extract(abs_path)
+                else:
+                    raw = self._extract_as(abs_path, Path(str(title)).suffix.lower())
+            except DocError as e:
+                self.failed += 1
+                res["error"] = str(e)
+                return res
+            except Exception as e:
+                self.failed += 1
+                res["error"] = "转换出错: %s" % (str(e)[:120] or type(e).__name__)
+                return res
+            full = clean_doc_text(raw)
+            if not full:
+                self.failed += 1
+                res["error"] = "文件里没有可读的文字 (可能是扫描图片)"
+                return res
+            cut = len(full) > DOC_CHAR_LIMIT
+            text = full[:DOC_CHAR_LIMIT].rstrip()
+            self.converted += 1
+            try:
+                real = os.path.realpath(str(abs_path))
+                write_private(self.cache_dir / (dkey + ".json"),
+                              json.dumps({"text": text, "cut": cut, "chars": len(full), "path": real, "size": size,
+                                          "at": iso(datetime.now())}, ensure_ascii=False))
+            except Exception:
+                pass
+        if len(text) > remaining:
+            text, cut = text[:remaining].rstrip(), True
+        self.used += len(text)
+        res["text"], res["cut"] = text, cut
+        return res
+
+    def _extract_as(self, abs_path, ext):
+        """A file stored without an extension (the title carries it): convert a temporary copy that has one."""
+        with tempfile.TemporaryDirectory(prefix="wa-sweep-doc.") as td:
+            tmp = Path(td) / ("doc" + ext)
+            try:
+                shutil.copyfile(str(abs_path), str(tmp))
+            except Exception as e:
+                raise DocError("读不到文件: %s" % e)
+            return self.extract(tmp)
+
+
 # ---------------------------------------------------------------- reading
 
 MSG_SQL = (
@@ -588,7 +906,7 @@ def abs_media(media_root, local):
     return p if p.exists() else None
 
 
-def read_session(conn, resolver, transcriber, s, from_dt, to_dt, my_phone, my_names, owner_label, media_root):
+def read_session(conn, resolver, transcriber, s, from_dt, to_dt, my_phone, my_names, owner_label, media_root, docs=None):
     is_group = s["ZSESSIONTYPE"] == SESSION_GROUP
     jid = s["ZCONTACTJID"]
     rows = conn.execute(MSG_SQL, (s["Z_PK"], dt_to_core(from_dt), dt_to_core(to_dt))).fetchall()
@@ -673,6 +991,17 @@ def read_session(conn, resolver, transcriber, s, from_dt, to_dt, my_phone, my_na
                         m["transcript_error"] = err
                 else:
                     m["transcript_error"] = "档案不在本机"
+            if mtype == 8 and ap and docs is not None:
+                got = docs.read(ap, r["ZTITLE"])
+                if got is not None:
+                    if got["text"]:
+                        m["doc_text"] = got["text"]
+                        if got["cut"]:
+                            m["doc_cut"] = True
+                    elif got["over_budget"]:
+                        m["doc_over_budget"] = True
+                    else:
+                        m["doc_error"] = got["error"] or "?"
             item["media"] = m
         items.append(item)
 
@@ -756,6 +1085,38 @@ def fmt_dur(s):
     return "%d:%02d" % (s // 60, s % 60) if s >= 60 else "%ds" % s
 
 
+def doc_counts_md(d):
+    if not d:
+        return ""
+    if not d.get("enabled"):
+        return " · 文件转字 关闭"
+    return " · 文件转字 %d 份 (新转 %d, 快取 %d, 失败 %d, 超出字数额度 %d)" % (
+        d.get("converted", 0) + d.get("cached", 0), d.get("converted", 0), d.get("cached", 0), d.get("failed", 0),
+        d.get("over_budget", 0))
+
+
+def doc_block_md(md):
+    """Lines under a document message: the 📄 label, then the text as a quote (indented to stay in the list item)."""
+    if md.get("doc_text"):
+        out = ["  📄 文件内文 (机器转出%s):" % (", 已截断" if md.get("doc_cut") else "")]
+        out += [("  > " + l) if l.strip() else "  >" for l in md["doc_text"].split("\n")]
+        if md.get("doc_cut"):
+            out.append("  > [已截断, 全文请开上面的路径]")
+        return out
+    if md.get("doc_over_budget"):
+        return ["  📄 文件内文没放: 本包的文件字数额度 (%d 字) 已用完, 请开上面的路径" % DOC_PACK_BUDGET]
+    if md.get("doc_error"):
+        return ["  📄 转不出文字: %s" % md["doc_error"]]
+    return []
+
+
+def reader_flag(v):
+    """Config booleans: true unless false, 0, or a word that means no."""
+    if isinstance(v, str):
+        return v.strip().lower() not in ("false", "0", "no", "off", "")
+    return v is None or bool(v)
+
+
 def render_md(doc):
     a = []
     w = doc["window"]
@@ -773,7 +1134,7 @@ def render_md(doc):
         parts.append("%s %d (本机 %d%s)" % (k, v["total"], v["have"], (", 缺 %d" % gap) if gap else ""))
     # gaps are always counted and printed, zero included: a pack with no media still says so
     a.append("- 媒体: " + (" · ".join(parts) if parts else "无") + " · 语音转字 %d 条 (快取 %d, 失败 %d)" %
-             (su["voice"]["transcribed"], su["voice"]["cache_hits"], su["voice"]["failed"]))
+             (su["voice"]["transcribed"], su["voice"]["cache_hits"], su["voice"]["failed"]) + doc_counts_md(su.get("documents")))
     a.append("- 窗外: 还有 %d 个对话窗内零讯息, 最近的一个停在 %s" % (su["beyond_window"]["chats"], (su["beyond_window"]["newest_at"] or "?")[:16].replace("T", " ")))
     a.append("- 只有系统讯息 (改名 / 进出群) 的对话 %d 个, 不算活动, 没列" % su["system_only_chats"])
     if doc["warnings"]:
@@ -782,7 +1143,7 @@ def render_md(doc):
         for x in doc["warnings"]:
             a.append("- " + x)
     a.append("")
-    a.append("⛔ 语音 transcript 是 raw 未校正; 图片 / 文件 / 影片列的是本机路径, 判断前自己打开看。缺口都已数出来, 静默漏掉才是问题。")
+    a.append("⛔ 语音 transcript 是 raw 未校正; 📄 下的文件内文是机器从文件转出的字, 不是对方打的; 图片 / 文件 / 影片列的是本机路径, 判断前自己打开看。缺口都已数出来, 静默漏掉才是问题。")
     a.append("")
     a.append("## 目录")
     a.append("")
@@ -854,11 +1215,14 @@ def render_md(doc):
                         line += " → ⛔ 不在本机, 读不到"
                 if m.get("text"):
                     line += " · 说明: %s" % m["text"].replace("\n", " ⏎ ")
+                doc_lines = doc_block_md(md)
             else:
                 line += (m.get("text") or "(空)").replace("\n", " ⏎ ")
             if m.get("starred"):
                 line += " ⭐"
             a.append(line)
+            if md:
+                a.extend(doc_lines)
         a.append("")
     return "\n".join(a) + "\n"
 
@@ -880,6 +1244,7 @@ def build_parser():
     p.add_argument("--include-days", type=int, default=30, help="how far back --include-jid reaches (default 30)")
     p.add_argument("--only-jid", action="append", default=[], help="read only these chats, window unchanged (repeatable; the lid and phone forms of a person both match)")
     p.add_argument("--no-transcribe", action="store_true", help="no new voice transcription (cached transcripts still show)")
+    p.add_argument("--no-documents", action="store_true", help="no document text in the pack this run (same as read_documents false)")
     p.add_argument("--out", default=None, help="output JSON path (the md gets the same name); default sweeps/sweep-<date>-<N>d.json")
     p.add_argument("--wa-root", default=None, help="WhatsApp Desktop data folder (tests and unusual installs; default $WA_LIVE_WA_ROOT, else the standard Group Containers folder)")
     p.add_argument("--selftest", action="store_true", help="run the built-in test on a fake database in a temp dir and exit")
@@ -928,6 +1293,7 @@ def main(argv=None):
         resolver = Resolver(conn, attached)
         transcriber = Transcriber(work / "transcripts-cache", cfg, bool(cfg.get("transcribe", True)) and not args.no_transcribe)
         warnings.extend(transcriber.notes)
+        docs = DocReader(work / "doc-text-cache", reader_flag(cfg.get("read_documents", True)) and not args.no_documents)
         if not transcriber.available():
             warnings.append("语音没有现转: %s。快取里转过的照用, 其余语音算缺口。" % transcriber.err)
 
@@ -973,7 +1339,7 @@ def main(argv=None):
                 start = now - timedelta(days=args.include_days)
             if s["ZLASTMESSAGEDATE"] is not None and core_to_dt(s["ZLASTMESSAGEDATE"]) < start:
                 continue
-            rec = read_session(conn, resolver, transcriber, s, start, now, my_phone, my_names, owner_label, media_root)
+            rec = read_session(conn, resolver, transcriber, s, start, now, my_phone, my_names, owner_label, media_root, docs)
             if rec is None:
                 # rows in the window but no content message: only renames, joins and the like
                 n_sys = conn.execute("SELECT COUNT(*) FROM ZWAMESSAGE WHERE ZCHATSESSION=? AND ZMESSAGEDATE>=?",
@@ -1013,6 +1379,7 @@ def main(argv=None):
         "media_missing": sum(v["total"] - v["have"] for v in media_tot.values()),
         "voice": {"transcribed": transcriber.done + transcriber.hit, "fresh": transcriber.done,
                   "cache_hits": transcriber.hit, "failed": transcriber.failed},
+        "documents": docs.counts(),
         "speaker_resolution": dict(resolver.stats),
         "pruned": pruned,
         "beyond_window": beyond,
@@ -1048,12 +1415,51 @@ def main(argv=None):
 
     print(json.dumps({"ok": True, "json": str(out_json), "md": str(out_md), "md_bytes": out_md.stat().st_size,
                       "chats": len(chats), "messages": summary["messages"], "days": days,
-                      "media_missing": summary["media_missing"], "voice": summary["voice"],
+                      "media_missing": summary["media_missing"], "voice": summary["voice"], "documents": summary["documents"],
                       "beyond_window": beyond, "warnings": len(warnings)}, ensure_ascii=False))
     return EXIT_OK
 
 
 # ---------------------------------------------------------------- selftest (fake database, fake tools, temp dir only)
+
+_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+
+
+def _fixture_xlsx(path):
+    """A tiny workbook: two sheets, shared strings, an inline string and a number (invented data)."""
+    import zipfile
+    with zipfile.ZipFile(str(path), "w") as z:
+        z.writestr("xl/workbook.xml", '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+                   'xmlns:r="%s"><sheets><sheet name="Prices" sheetId="1" r:id="rId1"/>'
+                   '<sheet name="Notes" sheetId="2" r:id="rId2"/></sheets></workbook>' % _REL_NS)
+        z.writestr("xl/_rels/workbook.xml.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                   '<Relationship Id="rId1" Target="worksheets/sheet1.xml"/>'
+                   '<Relationship Id="rId2" Target="worksheets/sheet2.xml"/></Relationships>')
+        z.writestr("xl/sharedStrings.xml", '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+                   '<si><t>Item</t></si><si><t>Price</t></si><si><r><t>Lemon </t></r><r><t>tart</t></r></si></sst>')
+        z.writestr("xl/worksheets/sheet1.xml", '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>'
+                   '<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row>'
+                   '<row r="2"><c r="A2" t="s"><v>2</v></c><c r="B2"><v>12.5</v></c></row></sheetData></worksheet>')
+        z.writestr("xl/worksheets/sheet2.xml", '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>'
+                   '<row r="1"><c r="A1" t="inlineStr"><is><t>Bring cups on Friday</t></is></c></row></sheetData></worksheet>')
+    return path
+
+
+def _fixture_pptx(path):
+    import zipfile
+    a = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    with zipfile.ZipFile(str(path), "w") as z:
+        z.writestr("ppt/presentation.xml", '<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+                   'xmlns:r="%s"><p:sldIdLst><p:sldId id="256" r:id="rId7"/><p:sldId id="257" r:id="rId8"/></p:sldIdLst>'
+                   '</p:presentation>' % _REL_NS)
+        z.writestr("ppt/_rels/presentation.xml.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                   '<Relationship Id="rId7" Target="slides/slide1.xml"/><Relationship Id="rId8" Target="slides/slide2.xml"/></Relationships>')
+        for n, words in ((1, ("Opening slide", "Welcome everyone")), (2, ("Second slide", "Snacks at noon"))):
+            body = "".join('<a:p><a:r><a:t>%s</a:t></a:r></a:p>' % w for w in words)
+            z.writestr("ppt/slides/slide%d.xml" % n, '<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+                       'xmlns:a="%s"><p:cSld><p:spTree><p:sp><p:txBody>%s</p:txBody></p:sp></p:spTree></p:cSld></p:sld>' % (a, body))
+    return path
+
 
 def _fake_whatsapp(wa, now):
     """A small WhatsApp Desktop data folder with invented people. Returns the media paths it created."""
@@ -1100,6 +1506,7 @@ def _fake_whatsapp(wa, now):
         (13, 6, core(h(5)), 0, 0, "Hello from a lid chat", None, None, None, 0, None),
         (14, 3, core(h(1)), 0, 0, "status text", None, None, None, 0, None),
         (15, 7, core(h(3)), 0, 10, None, 2, None, None, 0, None),
+        (16, 1, core(h(1.2)), 0, 8, None, None, None, None, 0, None),
     ]
     chat.executemany("INSERT INTO ZWAMESSAGE VALUES (?,?,?,?,?,?,?,?,?,?,?)", msgs)
     media = wa / "Message" / "Media"
@@ -1107,10 +1514,12 @@ def _fake_whatsapp(wa, now):
     for name, data in (("photo.jpg", b"\xff\xd8fakejpeg"), ("voice-cached.opus", b"OggS-cached"), ("voice-new.opus", b"OggS-new-voice")):
         (media / name).write_bytes(data)
         files[name] = media / name
+    files["notes.xlsx"] = _fixture_xlsx(media / "notes.xlsx")
     chat.executemany("INSERT INTO ZWAMEDIAITEM VALUES (?,?,?,?,?,?,?,?,?,?,?)", [
         (1, 3, "Media/photo.jpg", None, None, None, 10, None, None, None, None),
         (2, 4, "Media/voice-cached.opus", None, 7, None, 11, None, None, None, None),
         (3, 5, "Media/voice-new.opus", None, 12, None, 14, None, None, None, None),
+        (4, 16, "Media/notes.xlsx", None, None, "notes.xlsx", 900, None, None, None, None),
     ])
     chat.executemany("INSERT INTO ZWAPROFILEPUSHNAME VALUES (?,?,?)", [(1, "15550100003@s.whatsapp.net", "Cara")])
     chat.commit()
@@ -1129,6 +1538,111 @@ def _fake_whatsapp(wa, now):
     lid.commit()
     lid.close()
     return files
+
+
+def _doc_selftests(root, check_raw):
+    """DocReader on synthetic files only: real zip parsing, real /usr/bin/textutil when present."""
+    global TEXTUTIL_BIN
+
+    def check(name, ok, detail=""):
+        check_raw(name, ok, repr(detail))
+
+    root.mkdir(parents=True)
+    xlsx = _fixture_xlsx(root / "budget.xlsx")
+    pptx = _fixture_pptx(root / "deck.pptx")
+    t = _xlsx_text(xlsx, DOC_CHAR_LIMIT)
+    check("doc: xlsx reads shared strings, inline strings and both sheet names in order",
+          "[工作表 Prices]" in t and "Item | Price" in t and "Lemon tart | 12.5" in t and "[工作表 Notes]" in t
+          and "Bring cups on Friday" in t and t.index("Prices") < t.index("Notes"), t)
+    t = _pptx_text(pptx, DOC_CHAR_LIMIT)
+    check("doc: pptx reads both slides in slide order", "[投影片 1]" in t and "Welcome everyone" in t and "Snacks at noon" in t
+          and t.index("Opening slide") < t.index("Second slide"), t)
+
+    rtf = root / "letter.rtf"
+    rtf.write_text("{\\rtf1\\ansi Hello from the textutil fixture\\par}\n", encoding="utf-8")
+    if Path(TEXTUTIL_BIN).is_file():
+        dr = DocReader(root / "c-tu", True)
+        got = dr.read(rtf)
+        check("doc: textutil converts an rtf", got and "Hello from the textutil fixture" in (got["text"] or ""), got)
+    else:
+        print("  SKIP  doc: textutil converts an rtf (no %s on this Mac)" % TEXTUTIL_BIN)
+    seen = root / "textutil-args.txt"
+    fake_tu = root / "fake-textutil"
+    fake_tu.write_text("#!/bin/sh\nfor a in \"$@\"; do last=\"$a\"; done\nprintf '%%s' \"$last\" > '%s'\necho converted\n" % seen, encoding="utf-8")
+    os.chmod(str(fake_tu), 0o755)
+    saved_tu = TEXTUTIL_BIN
+    TEXTUTIL_BIN = str(fake_tu)
+    try:
+        got = DocReader(root / "c-fake", True).read(rtf)
+    finally:
+        TEXTUTIL_BIN = saved_tu
+    arg = seen.read_text(encoding="utf-8") if seen.exists() else ""
+    check("doc: textutil is handed a temporary copy, never the original file",
+          got and got["text"] == "converted" and arg and os.path.realpath(arg) != os.path.realpath(str(rtf))
+          and not arg.startswith(str(root)), (got, arg))
+
+    cache = root / "c-main"
+    calls = []
+    dr = DocReader(cache, True)
+    real_extract = dr.extract
+    dr.extract = lambda p: (calls.append(p), real_extract(p))[1]
+    first = dr.read(xlsx)
+    key = transcript_key(xlsx)
+    real = os.path.realpath(str(xlsx))
+    check("doc: cache key is the voice transcript key rule (sha1 of '<real path>|<size on disk>')",
+          (cache / (key + ".json")).is_file()
+          and key == hashlib.sha1(("%s|%d" % (real, os.path.getsize(real))).encode("utf-8")).hexdigest(), sorted(os.listdir(str(cache))) if cache.exists() else None)
+    check("doc: cache file is private (0600, folder 0700)",
+          (cache / (key + ".json")).is_file() and oct(os.stat(str(cache / (key + ".json"))).st_mode & 0o777) == "0o600"
+          and oct(os.stat(str(cache)).st_mode & 0o777) == "0o700")
+    dr2 = DocReader(cache, True)
+    calls2 = []
+    dr2.extract = lambda p: (calls2.append(p), real_extract(p))[1]
+    second = dr2.read(xlsx)
+    check("doc: second read is a cache hit and the extractor is not called again",
+          len(calls) == 1 and not calls2 and second and second["cached"] and second["text"] == first["text"]
+          and dr2.counts()["cached"] == 1 and dr2.counts()["converted"] == 0, (len(calls), len(calls2), dr2.counts()))
+
+    big = []
+    for i in range(6):
+        f = root / ("long-%d.xlsx" % i)
+        f.write_bytes(b"PK fake %d" % i)
+        big.append(f)
+    dr = DocReader(root / "c-budget", True)
+    dr.extract = lambda p: "x" * (DOC_CHAR_LIMIT + 1000)
+    res = [dr.read(f) for f in big]
+    check("doc: a document past 3000 characters is cut and marked",
+          res[0]["cut"] and len(res[0]["text"]) == DOC_CHAR_LIMIT
+          and "已截断" in "\n".join(doc_block_md({"doc_text": res[0]["text"], "doc_cut": True})), res[0] and len(res[0]["text"] or ""))
+    check("doc: once the 15000 character pack budget is spent, the next document is path only and counted over_budget",
+          all(r["text"] for r in res[:5]) and res[5]["over_budget"] and not res[5]["text"] and not res[5]["error"]
+          and dr.counts()["over_budget"] == 1 and dr.counts()["chars"] == DOC_PACK_BUDGET
+          and "额度" in "".join(doc_block_md({"doc_over_budget": True})), dr.counts())
+
+    huge = root / "huge.docx"
+    with open(str(huge), "wb") as f:
+        f.truncate(DOC_MAX_BYTES + 1)
+    dr = DocReader(root / "c-size", True)
+    dr.extract = lambda p: "should not run"
+    got = dr.read(huge)
+    check("doc: files over 30 MB are not converted, and the pack says why", got and not got["text"] and "太大" in (got["error"] or "")
+          and dr.counts()["failed"] == 1, got)
+
+    broken = root / "broken.xlsx"
+    broken.write_bytes(b"this is not a zip file")
+    dr = DocReader(root / "c-broken", True)
+    try:
+        got, raised = dr.read(broken), None
+    except Exception as e:
+        got, raised = None, e
+    check("doc: a conversion failure is reported, not raised", raised is None and got and got["error"] and not got["text"]
+          and dr.counts()["failed"] == 1 and doc_block_md({"doc_error": got["error"]})[0].startswith("  📄 转不出文字: "), (raised, got))
+
+    off = DocReader(root / "c-off", False)
+    off_calls = []
+    off.extract = lambda p: (off_calls.append(p), "x")[1]
+    check("doc: read_documents false converts nothing", off.read(xlsx) is None and not off_calls and not (root / "c-off").exists()
+          and reader_flag(False) is False and reader_flag("false") is False and reader_flag(None) is True, off_calls)
 
 
 def selftest():
@@ -1221,6 +1735,15 @@ def selftest():
             own_lines = [l for l in md.splitlines() if re.match(r"^- \d\d:\d\d \*\*", l)]
             check("the owner's own messages carry the configured owner label and nothing else",
                   len(own_lines) == 2 and all(l.split(": ", 1)[0].endswith("**Mika**") for l in own_lines), own_lines)
+            dmsg = [m["media"] for m in a.get("messages", []) if m["type"] == 8]
+            check("doc: a document message carries its text in the sweep json", len(dmsg) == 1 and "Lemon tart | 12.5" in (dmsg[0].get("doc_text") or ""), repr(dmsg))
+            dl = md.splitlines()
+            di = next((i for i, l in enumerate(dl) if "notes.xlsx" in l and l.startswith("- ")), -1)
+            check("doc: the pack shows a 📄 line and the quoted text under the document message",
+                  di >= 0 and dl[di + 1].startswith("  📄 ") and "  > Lemon tart | 12.5" in dl[di + 2:di + 8], repr(dl[di:di + 8]))
+            check("doc: summary and final JSON line carry the document counts",
+                  (su.get("documents") or {}).get("converted") == 1 and ((out or {}).get("documents") or {}).get("converted") == 1
+                  and "文件转字 1 份" in md, repr((su.get("documents"), (out or {}).get("documents"))))
             check("snapshots are deleted after the read (keep_snapshot false)", not (work / "ChatStorage.sqlite").exists())
             check("outputs are private (0600)", oct(os.stat(str(td / "out" / "sweep.md")).st_mode & 0o777) == "0o600")
             check("config.json is left untouched; last-sweep.json records the run",
@@ -1267,7 +1790,16 @@ def selftest():
             code, out = run(base + ["--out", str(td / "out5" / "sweep.json"), "--no-transcribe"])
             doc5 = json.loads((td / "out5" / "sweep.json").read_text(encoding="utf-8")) if code == 0 else {"warnings": []}
             check("--no-transcribe says why voice was not transcribed", any("没有现转" in w for w in doc5["warnings"]), doc5.get("warnings"))
+            code, out = run(base + ["--out", str(td / "out6" / "sweep.json"), "--no-documents"])
+            doc6 = json.loads((td / "out6" / "sweep.json").read_text(encoding="utf-8")) if code == 0 else {"chats": [], "summary": {}}
+            md6 = (td / "out6" / "sweep.md").read_text(encoding="utf-8") if code == 0 else "📄"
+            d6 = [m["media"] for c in doc6["chats"] for m in c["messages"] if m["type"] == 8]
+            check("doc: --no-documents leaves document text out (even a cached one)",
+                  code == 0 and len(d6) == 1 and not any(k.startswith("doc_") for k in d6[0]) and "📄 文件内文" not in md6
+                  and (doc6["summary"].get("documents") or {}).get("enabled") is False, repr((code, d6, doc6["summary"].get("documents"))))
             os.environ.pop("WA_WHISPER_MODEL", None)
+
+            _doc_selftests(td / "docs", check)
 
             code, _ = run(base + ["--days", "0"])
             check("--days 0 exits 2", code == EXIT_CONFIG, code)

@@ -20,13 +20,16 @@ Implementation contract (what wa_second_source calls):
 Config (`second_source.lark`): whitelist (read by the interface), owner_ids (optional list; empty asks `auth status`),
 page_limit (50), timeout_seconds (120), skip_chat_ids and system_name_patterns (read by the interface).
 
-Pits already paid for (lark-cli 1.0.89):
+Known pits (lark-cli 1.0.89):
 - open_id values are per app: the ids written into person notes must come from the same lark-cli profile that pulls.
 - +chat-messages-list with --order desc returns an empty first page for some chats: always --order asc.
 - create_time is a local time string; the day window is local midnight to local midnight with the offset.
 - +chat-members-list always with --page-all.
 - stdout may print progress lines before the JSON; launchd has no node on PATH (both handled in calendar_lark's plumbing).
 - Voice messages carry no transcript, only the duration placeholder.
+- On a failure (rc 1) the JSON envelope may arrive on stderr instead of stdout: both are read.
+- An encrypted chat answers API error 231203: the Lark API cannot read it at all, so it is skipped with that reason,
+  never counted as a failed chat (it would fail every night and hide real failures).
 
 Python 3.9 standard library only. Never calls a model, never writes a file.
 """
@@ -52,6 +55,8 @@ SYSTEM_NAME_PATTERNS = ("customer support", "lark assistant", "飞书助手", "�
 DIRECT_KINDS = ("一对一", "p2p", "direct")
 MSG_TEXT_MAX = 2000
 MAX_MEMBERS = 300
+ENCRYPTED_CHAT_CODE = 231203
+ENCRYPTED_CHAT_WHY = "encrypted chat, the Lark API cannot read it"
 
 json_from_output = parse_json_out
 
@@ -230,6 +235,31 @@ def is_bot_chat(chat, raw_messages, owner):
     return has_app and not has_other_human
 
 
+def output_json(stdout, stderr):
+    """The lark-cli JSON envelope: from stdout, else from stderr (a failing call may print it there). None when neither
+    holds one."""
+    j = json_from_output(stdout)
+    if isinstance(j, dict):
+        return j
+    j = json_from_output(stderr)
+    return j if isinstance(j, dict) else None
+
+
+def error_code(j):
+    """The numeric API error code of a failed envelope (error.code, error.detail.code or a top level code), else None."""
+    if not isinstance(j, dict):
+        return None
+    err = j.get("error") if isinstance(j.get("error"), dict) else {}
+    detail = err.get("detail") if isinstance(err.get("detail"), dict) else {}
+    for v in (err.get("code"), detail.get("code"), j.get("code")):
+        try:
+            if v is not None and str(v).strip() != "":
+                return int(str(v).strip())
+        except ValueError:
+            continue
+    return None
+
+
 def _sender_name(snd):
     name = str(snd.get("name") or "").strip()
     i18n = snd.get("sender_i18n_names") or {}
@@ -259,10 +289,13 @@ def fetch_day(cfg, chats, day, runner=None):
             errors.append("%s: runner raised %s" % (title, str(e)[:160]))
             failed += 1
             continue
-        j = json_from_output(stdout)
+        j = output_json(stdout, stderr)
         if not isinstance(j, dict):
             errors.append("%s: lark-cli returned no JSON (rc=%s) %s" % (title, rc, (stderr or stdout or "")[-160:].strip()))
             failed += 1
+            continue
+        if not j.get("ok") and error_code(j) == ENCRYPTED_CHAT_CODE:
+            skipped.append({"chat_id": cid, "title": title, "why": ENCRYPTED_CHAT_WHY})
             continue
         if not j.get("ok"):
             e = j.get("error") or j.get("msg") or j
@@ -463,6 +496,27 @@ def _selftest(check=None, tmp=None):
     boom = fetch_day(cfg, pull[:1], day, runner=lambda a: runner(a) if a[:2] == ["auth", "status"] else (_ for _ in ()).throw(OSError("spawn failed")))
     check("lark: a raising runner becomes an error, never an exception", boom["failed_chats"] == 1 and any("spawn failed" in e for e in boom["errors"]))
     check("lark: progress text before the JSON is skipped", json_from_output("[page 1] fetching {x}\n{\"ok\": true}") == {"ok": True})
+
+    def err_runner(where, code):
+        """Every chat fails with rc 1 and the envelope on `where` (stdout or stderr), API error `code`."""
+        env = json.dumps({"ok": False, "identity": "user", "error": {"type": "api", "code": code, "message": "invented failure"}})
+
+        def run(a):
+            if a[:2] == ["auth", "status"]:
+                return runner(a)
+            return (1, env, "") if where == "stdout" else (1, "", "[page 1] fetching...\n" + env)
+        return run
+    one = [{"chat_id": "oc_test_err", "name": "Broken Chat", "kind": "一对一", "pull": True}]
+    se = fetch_day(cfg, one, day, runner=err_runner("stderr", 99991663))
+    check("lark: JSON on stderr is read (the API error is reported, not 'no JSON')",
+          se["failed_chats"] == 1 and any("99991663" in e for e in se["errors"]) and not any("no JSON" in e for e in se["errors"]))
+    for where in ("stdout", "stderr"):
+        enc = fetch_day(cfg, one, day, runner=err_runner(where, ENCRYPTED_CHAT_CODE))
+        check("lark: an encrypted chat (code 231203, JSON on %s) is skipped, not an error, not a failed chat" % where,
+              enc["failed_chats"] == 0 and not [e for e in enc["errors"] if "Broken Chat" in e]
+              and enc["skipped"] == [{"chat_id": "oc_test_err", "title": "Broken Chat", "why": "encrypted chat, the Lark API cannot read it"}])
+    check("lark: error code read from error.detail.code and a string code",
+          error_code({"ok": False, "error": {"detail": {"code": "231203"}}}) == 231203 and error_code({"ok": False}) is None)
 
     pm = members(cfg, [{"chat_id": "oc_test_team", "name": "Project Maple Team"}], runner=runner)
     check("lark: members keeps people and bots apart", set(pm["users"]) == {ids["alex"], ids["maya"]} and "ou_test_botmember" in pm["bots"])

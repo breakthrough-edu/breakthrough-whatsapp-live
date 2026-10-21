@@ -6,7 +6,7 @@ confirmed_by_owner: false
 references: []
 tags: []
 ---
-<!-- seed: breakthrough-whatsapp-live playbooks/whatsapp-live-triage/whatsapp-live-triage-playbook.md v1.0.1 -->
+<!-- seed: breakthrough-whatsapp-live playbooks/whatsapp-live-triage/whatsapp-live-triage-playbook.md v1.1.0 -->
 
 # Playbook: 给 personal WhatsApp 装一个实时分诊 daemon
 
@@ -21,7 +21,7 @@ tags: []
 ## When to run it
 
 - 你的生意跑在**自己的 personal WhatsApp 号**上, 一天几十到几百封 inbound, 病不是「没看到」是「看了没接上」。
-- 你**不要**接 WhatsApp Business / Cloud API (不是 personal number, 而且 Meta 2026 年初关了通用型 AI 助理那道门), 也**不要**用 Baileys / whatsmeow / WAHA 那类 linked-device 库 (封号实证在那一路)。
+- 你**不要**接 WhatsApp Business / Cloud API (不是 personal number, 而且 Meta 2026 年初关了通用型 AI 助理那道门), 也**不要**用 Baileys / whatsmeow / WAHA 那类 linked-device 库 (公开报告里, 封号多半出在那一路)。
 - 你有: 一台**常驻**的 Mac (会合盖的笔电不算) + 上面登入着 WhatsApp Desktop + Claude Code 登入 + Tailscale (手机开板子用)。⛔ Windows 没有路: 这整套读的是 macOS 版 WhatsApp 写在本机的 SQLite。
 - 你接受**永不自动发送**: 系统出草稿, 人按 send。这不是保守, 是这条路唯一没有封号面的原因。我们默认这样, 而且 kit 里没有打开自动发送的开关, 也不要做一个。
 
@@ -37,20 +37,20 @@ tags: []
 
 **5 · 群的对话包要短。** 活跃群拉太多天加全部语音, 脑一跑就容易撞超时。群只拉 `brain.group_context_days` 天 (默认 3), 再截到 40k 字左右; 一对一拉 `brain.context_days` 天 (默认 7)。
 
-**6 · 板子不上云, 因为板上全是别人的私讯。** GitHub Pages 从 private repo 发出去的站仍然公开 (只有 Enterprise Cloud 能锁); Vercel 可以锁 (免费的 Vercel Authentication 能锁全部 deployment) 但要搬数据; 线上多维表格可以但要建表。最省也最私密的是 daemon 自己在本机开一个 port (`board.bind` 默认 `127.0.0.1`, `board.port` 默认 8787), 用 `tailscale serve` 挂到你的 tailnet, 手机开着 Tailscale 就能开, 数据一个 byte 不出这台机。⛔ 不准用 `tailscale funnel`, 那是公网。我们默认这样, 理由就是这一条。
+**6 · 板子不上云, 因为板上全是别人的私讯。** 任何云端托管都多一个私讯外泄的地方, 所以板子只在本机。最省也最私密的是 daemon 自己在本机开一个 port (`board.bind` 默认 `127.0.0.1`, `board.port` 默认 8787), 用 `tailscale serve` 挂到你的 tailnet, 手机开着 Tailscale 就能开, 数据一个 byte 不出这台机。⛔ 不准用 `tailscale funnel`, 那是公网。我们默认这样, 理由就是这一条。
 
-**7 · 草稿是可改的, 按钮永远带最新的字。** 板上草稿是 textarea, 一边改 `whatsapp://send?phone=…&text=…` 一边跟着变, 停手就存回。`@lid` 那种没号码的联络人, 去 `LID.sqlite` / `ContactsV2.sqlite` 解出电话, 一样能跳。⛔ 群跳不了: URL scheme 吃不了群, `chat?jid=` / `send?jid=` / `group?id=` 这三种写法都不行, 其中一种会打开「转发给…」的多选面板, 别再盲试未知的 scheme; 群只能复制。推播里的链接要用 `https://wa.me/<号码>`, 多数推播 app (例如 Telegram) 只把 http(s) 变成可点。
+**7 · 草稿是可改的, 按钮永远带最新的字。** 板上草稿是 textarea, 一边改 `whatsapp://send?phone=…&text=…` 一边跟着变, 停手就存回。`@lid` 那种没号码的联络人, 去 `LID.sqlite` / `ContactsV2.sqlite` 解出电话, 一样能跳。⛔ 群跳不了: WhatsApp 的网址格式开不了群, 有的写法会改开「转发给…」面板; 群只能复制。推播里的链接要用 `https://wa.me/<号码>`, 多数推播 app (例如 Telegram) 只把 http(s) 变成可点。
 
 **8 · headless Claude 在 launchd 底下, 跟桌面上不一样的四件事。**
 
-- (a) 全域 settings 里任何会等 GUI 的 hook (例如收工响一声的 `afplay`) 永不返回, claude 答完就永远不出 result。无人值守的 run 用自己的 `--settings` 写 `disableAllHooks: true` (kit 的 `claude-settings.json` 就是这样), 或把那条 hook 从全域拿掉。
-- (b) `--allowedTools` 读起来像「只准这些」, 实际是「这些也算进来」, 只加不减: 设成只准 `Read Grep Glob` 的唯读 bot, 实际载入的可能多出好几支, 能派子代理、能排定期工作、能找同机其他 session 的那几支从来没被允许过却自己进来了。真正关门的是 `--disallowedTools` 加 settings 的 `deny`, 而黑名单只关得住叫得出名字的东西, 所以再加一道 cage check: 每个 run 把 CLI 自己回报的 `system/init` 工具清单跟预期比, 多出来的就推一则错误。⛔ 模型说「我没有那个工具」不算闸有效, 那可能只是它在复述你给它的 system prompt; 要拿执行环境自己的说法。
+- (a) 全域 settings 里任何会等 GUI 的 hook (例如会播放声音或等待 GUI 回应的 hook) 永不返回, claude 答完就永远不出 result。无人值守的 run 用自己的 `--settings` 写 `disableAllHooks: true` (kit 的 `claude-settings.json` 就是这样), 或把那条 hook 从全域拿掉。
+- (b) `--allowedTools` 读起来像「只准这些」, 实际是「这些也算进来」, 只加不减: 允许清单之外的工具也可能被载入; 要靠 deny 清单挡, 并印出实际工具清单核对。真正关门的是 `--disallowedTools` 加 settings 的 `deny`, 而黑名单只关得住叫得出名字的东西, 所以再加一道 cage check: 每个 run 把 CLI 自己回报的 `system/init` 工具清单跟预期比, 多出来的就推一则错误。⛔ 模型说「我没有那个工具」不算闸有效, 那可能只是它在复述你给它的 system prompt; 要拿执行环境自己的说法。
 - (c) 工具笼子只挡工具种类, 不挡读哪里。外人传来的讯息原文会进提示, 一句话就可能叫脑去读推播钥匙、`config.json` 或别人的整份阅读包, 再写进草稿或摘要。所以 settings 的 `deny` 还要挡读秘密: 写成 `Read(//<绝对路径>)`, 两条斜线再接去掉开头斜线的绝对路径 (这种写法在 `claude -p --settings` 底下挡得住; `references/pitfalls.md` 第 10 条的金丝雀让你在自己机上验)。kit 的 `wa_setup.py init` 照你这台机的路径生成这几条。
 - (d) ⛔ 不能在 `ssh` 里直接跑 headless claude 来测, 拿不到 keychain 会假报 `Not logged in`。验收走 launchd 那条活路: kit 的 daemon 认 `live/commands/` 里的指令档, 丢一个 `probe-claude.json` 进去就是这个用途。
 
-**9 · 最大的坑: launchd 直起的 python 有 Full Disk Access, 它的子进程没有。** `/usr/bin/python3` 是个 stub, 会 exec 成 Command Line Tools 的 `Python.app`, 它自己拿到的授权不传给子进程。每个子进程碰到受保护的路径 (Documents、别的 app 的 Group Containers) 都被 tccd 挂起, 等一个没有画面能答的授权弹窗: ffmpeg 开 WhatsApp 的语音档、whisperkit 开 model、claude 开受保护的夹, 全部卡在 `open()`, 零 CPU, 直到超时。症状是「零输出 + 零 CPU + 越等越久」, 不是报错。因为没有报错, 很容易当成被叫的那支程式自己的 bug, 到错的地方去找; 语音不上板, 看起来又像 daemon 漏讯息。判法: 第一刀 `sample <pid>` 看堆叠是不是停在 `__open` / `__openat_nocancel`, 第二刀 `pgrep -P <pid>` 看子进程; 停在 `__open` 就是 TCC, 别去改码猜。「有时候自己好了」, 多半是有人刚好在那台机的屏幕前点掉了弹窗。修法: launchd 的程式换成有 Full Disk Access 的 node, 由它起 python (kit 装在 `~/WhatsApp-Live/launchd/run.mjs` 的那个十行的壳), 整棵树都通。系统设定里授权的必须是 plist 里写的那一支 node (`command -v node` 找; 官方安装包在 `/usr/local/bin/node`, Apple Silicon 的 Homebrew 在 `/opt/homebrew/bin/node`), 授给终端机没有用。三道保险留着, 因为它们各自独立成立: 语音档先由 python 复制到临时夹再给 ffmpeg; whisper model 副本住 `~/.cache/whisper-models/` (⛔ 不放 Documents、Desktop、Downloads); claude 不给任何 `--add-dir`, cwd 也不放 Documents。换 node 版本或路径之后, 先用 probe 复验一次。子进程这样卡住, 要是连主循环也被卡住, 板子的 `/health` 回 503 (`stalled …`), 卡太久 daemon 会推一则错误; 按掉弹窗之后用 `wa_setup.py restart` 重启。⛔ 不用 `launchctl kickstart -k`: 它只停 node 家长, 卡住的 python 跑不到自己的停止处理, 变成孤儿继续占着板子的端口, 新起来的那份绑不上, 板子显示的是旧进程或什么都没有。
+**9 · 最大的坑: launchd 直起的 python 有 Full Disk Access, 它的子进程没有。** `/usr/bin/python3` 是个 stub, 会 exec 成 Command Line Tools 的 `Python.app`, 它自己拿到的授权不传给子进程。每个子进程碰到受保护的路径 (Documents、别的 app 的 Group Containers) 都被 tccd 挂起, 等一个没有画面能答的授权弹窗: ffmpeg 开 WhatsApp 的语音档、whisperkit 开 model、claude 开受保护的夹, 全部卡在 `open()`, 零 CPU, 直到超时。症状是「零输出 + 零 CPU + 越等越久」, 不是报错。因为没有报错, 很容易当成被叫的那支程式自己的 bug, 到错的地方去找; 语音不上板, 看起来又像 daemon 漏讯息。判法: 第一刀 `sample <pid>` 看堆叠是不是停在 `__open` / `__openat_nocancel`, 第二刀 `pgrep -P <pid>` 看子进程; 停在 `__open` 就是 TCC, 别去改码猜。若有人在屏幕前点掉弹窗, 症状会暂时消失。修法: launchd 的程式换成有 Full Disk Access 的 node, 由它起 python (kit 装在 `~/WhatsApp-Live/launchd/run.mjs` 的那个十行的壳), 整棵树都通。系统设定里授权的必须是 plist 里写的那一支 node (`command -v node` 找; 官方安装包在 `/usr/local/bin/node`, Apple Silicon 的 Homebrew 在 `/opt/homebrew/bin/node`), 授给终端机没有用。三道保险留着, 因为它们各自独立成立: 语音档先由 python 复制到临时夹再给 ffmpeg; whisper model 副本住 `~/.cache/whisper-models/` (⛔ 不放 Documents、Desktop、Downloads); claude 不给任何 `--add-dir`, cwd 也不放 Documents。换 node 版本或路径之后, 先用 probe 复验一次。子进程这样卡住, 要是连主循环也被卡住, 板子的 `/health` 回 503 (`stalled …`), 卡太久 daemon 会推一则错误; 按掉弹窗之后用 `wa_setup.py restart` 重启。⛔ 不用 `launchctl kickstart -k`: 它只停 node 家长, 卡住的 python 跑不到自己的停止处理, 变成孤儿继续占着板子的端口, 新起来的那份绑不上, 板子显示的是旧进程或什么都没有。
 
-**10 · 时间戳。** Core Data 的秒数从 UTC 的 2001-01-01 起算, 直接当本地时间用会差你所在时区的时差 (UTC+8 就是 8 小时); 不转的话, 脑会把 burst 放错时段, 例如把上班时间进来的讯息看成半夜的。所有对外的时间都转本地。
+**10 · 时间戳。** Core Data 的秒数从 UTC 的 2001-01-01 起算, 直接当本地时间用会差你所在时区的时差 (例如 UTC+1 就差 1 小时); 不转的话, 脑会把 burst 放错时段, 例如把上班时间进来的讯息看成半夜的。所有对外的时间都转本地。
 
 **11 · 门铃往回看, 是为了不静默丢; 代价是重放, 要认得三个口。** 例如: 新对话的第一封, 编号 (`Z_PK`) 可能比同一秒的系统通知小, 却较晚写进库; 门铃先看到编号大的那封就把水位推过去, 小的那封从此永远在水位之下, 静默丢了。所以门铃每次扫库都往回看 `doorbell.lookback` 个编号 (默认 300), 用 `inbound_log` 判断哪些处理过。代价是有三个口会把旧讯息当新讯息跑, kit 各有一道护栏:
 
@@ -59,6 +59,8 @@ tags: []
 - **把别台机的 `state.sqlite` 放回来** (备援机接手、交回常驻机): 水位与 `inbound_log` 里的编号都是别台库的, 两样都要清, 步骤在 [[standby-machine-runbook]] 第 3 步。
 
 **12 · 读不到的要报出来; 射程只到你自己的号。** 语音转字是空的、图片开不了、影片只有缩图, 判断里明写读不到什么: 知道漏了不是问题, 静默漏掉才是。盯团队有没有做事不在范围内: 团队在群里报告的照样读得到, 那是副产品不是目标, 真要盯是共享进度工具的题。
+
+**13 · 「脑叫不动」不是那条对话跑坏了。** run 失败有两种。一种是那条对话自己的问题 (阅读包太大、超时、模型吐了坏的 JSON), 修法在那条对话里。另一种是脑根本叫不动: Claude Code 的登入失效, 或用量额度到顶。这一种不管哪条对话都会一样失败, 每进一封就多一个失败的 run, 那条对话里也没有东西可修。kit 的断路器专管这一种: 连续两次失败都是「叫不动」就打开, 不起新的 run, 待判的讯息留在队列里一封不丢; 每 `brain.gate_probe_seconds` 秒 (默认 900) 用最小的呼叫探一次, 通了就关上, 排队的讯息照顺序接着判。开与关各推一则, 板上挂一条横幅, 隔天日报的健康那块记停了几分钟。修法是登入或等: 登入失效, 就在常驻机上登入 Claude Code 一次 (daemon 用 setup token 时, 换一个新的 token); 额度到顶, 就等它探到通。⛔ 别为了这种失败去改闸、改提示, 或重判那条对话。
 
 ## The moves
 
@@ -81,9 +83,9 @@ tags: []
 ## 不建议的路, 与原因
 
 - WhatsApp Business / Cloud API (不是 personal number; 通用 AI 助理那道门已经关了)。
-- Baileys / whatsmeow / WAHA / OpenClaw 那类 linked-device 库 (封号实证)。
+- Baileys / whatsmeow / WAHA / OpenClaw 那类 linked-device 库 (有公开的封号报告)。
 - 浏览器自动化盯 WhatsApp Web (公开报告里有反复被封的例子)。
 - iPhone 端通知监听 (Shortcuts 不认第三方讯息); macOS 通知中心数据库 (只有消掉的才留档, 拿不到群 jid)。
-- 每个 run 都 push 一次部署 (Vercel Hobby 一天 100 次上限, 而且慢)。
+- 把板子部署到云端 (见第 6 条)。
 - 自动回覆、群发或广播、替你按 send: 永不代发。
 - 读别人的号、盯团队的号: 那是别人的隐私, 也是共享进度工具的题。

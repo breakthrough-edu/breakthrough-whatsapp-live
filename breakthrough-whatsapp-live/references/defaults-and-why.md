@@ -80,7 +80,7 @@ If you also work from a second Mac, manual reads (the `breakthrough-whatsapp-rea
 
 **Change it here** `direct_policy` (`all` or `skip`), `group_policies` (per group jid: `policy`, `name`), `unlisted_group_policy` (`skip`), `ignored_jids`, and `my_names` with `my_phone` for mention detection. `backfill.respect_gate` (true) keeps summary backfill behind the same list. Group changes need a daemon restart: `wa_setup.py restart --config <live>/config.json` (`<live>` is `paths.live_dir`).
 
-**Re-rule it** Station C2 shows your own three-day traffic from `wa_setup.py measure` (group names and counts only, never message text) and asks you to tick each group. It also asks where the whitelist's source of truth lives (this config, or a page you tick that is read back into it). The note names that place and the three policies; it does not list your group names.
+**Re-rule it** Station C2 shows your own three-day traffic from `wa_setup.py measure` (group names and counts only, never message text) and asks you to tick each group. Your ticks are written into `group_policies` in your config, the one place the whitelist lives. The note names the three policies; it does not list your group names.
 
 ## 3 · Sonnet for triage, and tokens instead of dollars
 
@@ -108,7 +108,7 @@ Triage runs dozens of times a day and sonnet judges well enough. Person notes ar
 
 **We default to** serving the board from the daemon on `127.0.0.1` only, reaching it from your phone through `tailscale serve` inside your own tailnet, never hosting it on any cloud; listing every recently active conversation, judged or not; in light mode, with one layout ruler.
 
-**Why** Everything on the board is private messages other people sent you, so privacy has to come from the structure: the data never leaves the machine, and there is nothing to deploy and nothing to pay. Any cloud host, even a locked one, is one more place to leak. Each hosting option adds exposure: a static site built from a private repository is still public unless you pay for an enterprise plan; a hosting platform can lock the site but adds a cloud and a storage service; a spreadsheet-style database used as the board adds a table and puts conversation content into that vendor.
+**Why** Everything on the board is private messages other people sent you, so privacy has to come from the structure: the data never leaves the machine, and there is nothing to deploy and nothing to pay. Any cloud host, even a locked one, is one more place to leak. Any hosted option adds a place for private messages to leak.
 
 Unjudged conversations are listed too, so one screen shows everything that moved recently and a judgment can be started from any row. The layout has one ruler, the CSS variables at the top of `board.html`: a second, separately written layout spec drifts the first time only one side is changed. The board has no login; the tailnet is its only lock (`references/privacy.md`).
 
@@ -122,9 +122,9 @@ Unjudged conversations are listed too, so one screen shows everything that moved
 
 **Why** Pushing every judgment turns the phone into noise: the owner stops reading, and the one real error drowns. Pushing nothing leaves silence ambiguous: a quiet day, or a dead daemon? The morning digest makes silence trustworthy, because on a quiet day it still says the day was quiet and the daemon is alive.
 
-Every run has a timeout and one retry, and a failed run still leaves a row and sends one push (at most one per conversation per half hour): a run that fails silently looks exactly like a message nobody sent. Pushes get a channel of their own, because alerts sharing a chat with another bot cannot be told apart. A new Telegram bot cannot message you until you press Start in it once; before that every send fails with "chat not found".
+Every run has a timeout and one retry, and a failed run still leaves a row and sends one push (at most one per conversation per half hour): a run that fails silently looks exactly like a message nobody sent. When Claude itself cannot be called (an expired login or a reached usage limit), the circuit breaker holds every new run and keeps the messages queued; its opening and its closing are the only extra pushes, so a dead brain is one alert instead of a failed run per message. Pushes get a channel of their own, because alerts sharing a chat with another bot cannot be told apart. A new Telegram bot cannot message you until you press Start in it once; before that every send fails with "chat not found".
 
-**Change it here** `notify.outlet` (`none`, `telegram`, `command`), `notify.mode` (`off`, `errors`, `needs_me`, `all`), `notify.telegram_file`, `notify.command`, `digest.enabled` (true), `digest.at` (08:00), `digest.push` (true), `doorbell.stale_alert_hours` (6), `brain.retries` (1), `brain.run_timeout_seconds` (600). The evening intake list is a second scheduled push and is off by default (`intake.evening_push`); turning it on re-rules this default as well (default 12).
+**Change it here** `notify.outlet` (`none`, `telegram`, `command`), `notify.mode` (`off`, `errors`, `needs_me`, `all`), `notify.telegram_file`, `notify.command`, `digest.enabled` (true), `digest.at` (08:00), `digest.push` (true), `doorbell.stale_alert_hours` (6), `brain.retries` (1), `brain.run_timeout_seconds` (600), `brain.gate_probe_seconds` (900, how often the open breaker probes). The evening intake list is a second scheduled push and is off by default (`intake.evening_push`); turning it on re-rules this default as well (default 12).
 
 **Re-rule it** Station O4 asks where alerts should go and reads this default; O6 asks when the digest should arrive. You can push every judgment for the first week to see real volume (`notify.mode: all`) and then switch to `errors`; that choice, with the day to switch back, goes in the same note.
 
@@ -150,7 +150,7 @@ Without the no-persistence flag every headless run leaves a full transcript on d
 
 **We default to** tagging each conversation with a world (which part of your life or which business, set by the first judgment and then kept), a stage (`new`, `talking`, `offered`, `won`, `active`, `done`, plus `parked`) that the machine may only move forward, and a priority (`now`, `soon`, `low`) judged fresh on every run and dropped to `low` when you reply. Only you move a stage back, on the board.
 
-**Why** A vocabulary of whose turn it is plus what kind of message it is overlaps and still cannot show where a conversation stands in the business. Many work chats are with people already being served rather than moving through a sale, so the board shows stage words where they help most (`new`, `talking`, `offered`, `won`, `parked`). Whose turn it is became a computed fact: whether the last message is yours.
+**Why** Whose turn it is is computed (whether the last message is yours), so it is not a judged field. Many work chats are with people already being served rather than moving through a sale, so the board shows stage words where they help most (`new`, `talking`, `offered`, `won`, `parked`).
 
 Stage only moves forward because a model reading a stretch of small talk easily moves `won` back to `talking`; moving back is a human judgment, so the machine's attempt is kept out and written into the reason instead. A conversation sitting at an early stage with no messages for 21 days becomes `parked` (21 by default; set it to your own sales rhythm at C2). Personal and other worlds carry no stage. A person who is both a customer and a partner gets one stage, for whatever matters most in that conversation now; who someone is to you belongs in the person note's `roles`, not in the stage.
 

@@ -1,6 +1,6 @@
 # Station C1 · The reader
 
-The reader is two scripts: `wa_sweep.py` turns WhatsApp Desktop's database into a reading pack (every message in a window, voice notes transcribed on the Mac, media paths listed), and `wa_context.py` lists the vault notes that may be about each chat. The daemon calls both on every run; the owner's own sessions call them through the `breakthrough-whatsapp-read` skill. This station links that skill, installs the voice tools and the model, creates the working tree and the config with `wa_setup.py init`, lands the playbooks the owner said yes to at C0, and proves one read with a voice note in it.
+The reader is two scripts: `wa_sweep.py` turns WhatsApp Desktop's database into a reading pack (every message in a window, voice notes transcribed on the Mac, the text of Word, Excel, PowerPoint, RTF, ODT and Pages attachments, media paths listed), and `wa_context.py` lists the vault notes that may be about each chat. The daemon calls both on every run; the owner's own sessions call them through the `breakthrough-whatsapp-read` skill. This station links that skill, installs the voice tools and the model, creates the working tree and the config with `wa_setup.py init`, lands the playbooks the owner said yes to at C0, and proves one read with a voice note in it.
 
 ```sh
 KIT=~/.claude/skills/breakthrough-whatsapp-live      # the folder holding SKILL.md, install/ and daemon/
@@ -91,7 +91,7 @@ case "$HOME_DIR $LABEL $PORT" in *"<"*|"~"*) echo "fill in HOME_DIR, LABEL and P
 
 Show the owner the dry run's plan (its first line names the home: it must be the header's), then run it. `init` never overwrites a file that exists: it reports it as kept and moves on. Writes:
 
-- folders, 0700: `runs-work/`, `prewarm/`, `transcripts-cache/`, `brain-cwd/`, `launchd/`, `live/`, `live/prompts/`, `live/digest/`, `live/runs/`, `live/commands/`, `live/dossier-backups/`, `live/variants/`
+- folders, 0700: `runs-work/`, `prewarm/`, `transcripts-cache/`, `doc-text-cache/` (text of documents people sent, converted on this Mac), `secrets/` (holds `deny-canary.txt`, a random marker for the deny probe, and later the optional setup token if the owner chooses it at C2, step 12), `brain-cwd/`, `launchd/`, `live/`, `live/prompts/`, `live/digest/`, `live/runs/`, `live/commands/`, `live/dossier-backups/`, `live/variants/`
 - `live/config.json` (0600): from `daemon/templates/config.example.json`, with the tools found on this Mac and the whisper model folder filled in
 - the owner copies `live/prompts/brain-prompt.md`, `live/prompts/second-source-prompt.md`, `live/prompts/backfill-prompt.md` and `live/topic-map.json`, each keeping its seed stamp
 - `live/claude-settings.json` (0600): the settings every headless run uses, with absolute Read deny rules for the secrets (C2 checks them)
@@ -153,7 +153,7 @@ case "$HOME_DIR $LABEL $PORT" in *"<"*|"~"*) echo "fill in HOME_DIR, LABEL and P
 
 The reader speaks Chinese whatever `board.lang` says: its warnings, the pack's report lines and its media labels (`图片` photo, `语音` voice note, `影片` video) are fixed Chinese text. Translate what matters for an owner who does not read Chinese.
 
-Read the top of the md with the owner: how many chats and messages, media counts, the warnings. With a vault set, look the chats up in it:
+Read the top of the md with the owner: how many chats and messages, media counts, document text counts (`文件转字 <n> 份`: documents converted to text), the warnings. A document someone sent shows under its message as `📄 文件内文 (机器转出):` and its text quoted: machine converted text of the document, never words the person typed. With a vault set, look the chats up in it:
 
 ```sh
 KIT=~/.claude/skills/breakthrough-whatsapp-live; HOME_DIR="<paths.home from the progress file header>"; PY=/usr/bin/python3
@@ -200,6 +200,7 @@ Writes one more sweep pair, and one transcript file per voice note into `<home>/
 | The owner's number recognized | `"$PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))["source"]["my_phone"])' "<the json path>"` | the owner's number, confirmed with them |
 | Voice | the `--only-jid` summary line; the two cache counts | `"voice"` with `"transcribed"` 1 or more and `"failed": 0`; the second count higher than the first; the owner agrees the words match |
 | Vault lookup (with a vault) | the `wa_context.py` summary line | `"ok": true` |
+| Document text (when a chat in the window holds a Word, Excel, PowerPoint, RTF, ODT or Pages file) | `grep -A3 "📄" "<the .md path of a read>"`; that read's summary line | `  📄 文件内文 (机器转出):` (document text, machine converted) with the document's text below it as `  > ` lines; the summary's `"documents"` with `"enabled": true` and `"failed": 0`. To turn it off: `reader.read_documents` false and `sync-reader-config` (K324, K325) |
 | Playbooks (with yeses) | `"$PY" "$KIT/daemon/wa_setup.py" seed-status --config "$LIVE/config.json"`; `grep -h "^confirmed_by_owner:" <each destination>/*.md`; `ls` of each destination | every landed file listed as `unchanged` with `copy v<x>, payload v<x>`, except the whatsapp-live-triage door, which reads `edited by owner` once its Recent runs row is in (expected); `confirmed_by_owner: true` for every file that carries the key; each destination folder `drwxr-xr-x`; the door's Recent runs holds exactly one row |
 
 ## Record
@@ -211,7 +212,7 @@ Under `### C1 reader` in `<home>/INSTALL-PROGRESS.md`:
 - the model: found or downloaded, and its path;
 - the `init` last line, the read-back of home, label, intake label, port and `bin.node`, and each value written because it differed from the header or from C0 step 6's node;
 - per playbook folder: landed (with its `seed-status` line) or declined, plus the Recent runs row;
-- the first read: chats, messages, `media_missing`;
+- the first read: chats, messages, `media_missing`, and the `documents` counts (converted, cached, failed), or that no document was in the window;
 - the voice proof: transcribed, failed, and the owner's yes on the words;
 - `ruled: default 1` (one Mac or two, and the stop when unreachable rule for a second Mac).
 

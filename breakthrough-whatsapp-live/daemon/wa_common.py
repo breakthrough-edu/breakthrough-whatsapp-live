@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-wa_common.py · the shared base every WhatsApp Live module imports (contract: DESIGN.md §12).
+wa_common.py · the shared base every WhatsApp Live module imports (contracts: references/interfaces.md).
 
   config        DEFAULT_CONFIG · DEFAULTS · load_config · apply_defaults · payload_dir · home_dir · live_dir ·
                 owner_lang · source_label
@@ -85,7 +85,7 @@ VIDEO_TYPES = (2, 11)
 
 MIN_PHONE_DIGITS = 8
 
-# ---------------------------------------------------------------- defaults (DESIGN.md §4)
+# ---------------------------------------------------------------- defaults (references/config-reference.md)
 
 DEFAULT_WORLDS = [
     {"key": "personal", "label": "私人", "label_en": "Personal", "business": False},
@@ -126,7 +126,7 @@ DEFAULTS = {
               "run_timeout_seconds": 600, "retries": 1, "sweep_timeout_seconds": 1500, "max_turns": 12,
               "warm_days": 2, "ground_every_days": 7,
               "whisper_model": "~/.cache/whisper-models/openai_whisper-large-v3-v20240930",
-              "whisper_language": "", "transcribe": True},
+              "whisper_language": "", "transcribe": True, "gate_probe_seconds": 900},
     "bin": {"claude": "<auto>", "python": "/usr/bin/python3", "node": "<auto>", "ffmpeg": "<auto>",
             "whisperkit": "<auto>", "lark_cli": "<auto>", "path_env": "<auto>"},
     "paths": {"home": DEFAULT_HOME, "live_dir": "<home>/live", "vault": "", "people_dir": "", "doctrine": "",
@@ -154,6 +154,7 @@ DEFAULTS = {
     "voice": {"enabled": True, "examples": 12, "pairs": "<live>/voice-pairs.jsonl"},
     "backfill": {"days": 30, "min_msgs": 10, "batch_size": 10, "respect_gate": True, "max_turns": 20, "max_images": 4},
     "launchd": {"label": "local.whatsapp-live", "intake_label": "local.whatsapp-live.intake"},
+    "reader": {"read_documents": True},
 }
 
 # Keys whose string values are owner text, never paths: placeholders and ~ are not touched inside them.
@@ -502,12 +503,39 @@ def resolve_bin(cfg, name):
     return _which(BIN_NAMES.get(name, name))
 
 
-def _auto_path_env(cfg):
+# The first lines of the optional setup token wrapper that `wa_setup.py render-claude-wrapper` writes (<home>/bin/claude-bot).
+CLAUDE_WRAPPER_MARKER = "# rendered by breakthrough-whatsapp-live wa_setup.py render-claude-wrapper"
+_WRAPPER_EXEC_RE = re.compile(r'^exec "((?:[^"\\]|\\.)*)" "\$@"\s*$', re.M)
+
+
+def claude_wrapper_target(path):
+    """The real claude a kit rendered wrapper execs, or "" when path is not such a wrapper."""
+    try:
+        with open(str(path), "rb") as f:
+            head = f.read(4096).decode("utf-8", "replace")
+    except OSError:
+        return ""
+    if CLAUDE_WRAPPER_MARKER not in head.splitlines():
+        return ""
+    m = _WRAPPER_EXEC_RE.search(head)
+    return re.sub(r"\\(.)", r"\1", m.group(1)) if m else ""
+
+
+def _auto_path_env(cfg, claude_dirs=None):
+    """PATH from the tools' folders plus the standard ones. claude_dirs replaces the folders found for claude (wa_setup
+    passes the wrapper's and the real claude's before the wrapper exists, so a dry run plans the same PATH)."""
     dirs = []
     for n in ("node", "claude", "ffmpeg", "whisperkit", "lark_cli", "python"):
+        if n == "claude" and claude_dirs:
+            dirs.extend(str(d) for d in claude_dirs if d)
+            continue
         p = resolve_bin(cfg, n)
         if p:
             dirs.append(os.path.dirname(p))
+            if n == "claude":   # the token wrapper's folder holds only the wrapper: keep the real claude's folder too
+                real = claude_wrapper_target(p)
+                if real:
+                    dirs.append(os.path.dirname(real))
     dirs += STANDARD_PATH
     out, seen = [], set()
     for d in dirs:
@@ -1071,7 +1099,7 @@ def write_json_atomic(path, obj, mode=0o600):
     return path
 
 
-# ---------------------------------------------------------------- push outlet (DESIGN.md §5.4)
+# ---------------------------------------------------------------- push outlet (references/interfaces.md)
 
 NOTIFY_OUTLETS = ("none", "telegram", "command")
 NOTIFY_KINDS = ("error", "needs_me", "digest", "info")
@@ -1349,8 +1377,21 @@ def _selftest():
         check(cfg["brain"]["whisper_model"].startswith(str(Path.home())), "tilde expanded in brain.whisper_model")
         check(cfg["owner_marker"] == "AR", "owner_marker defaults to initials (AR)")
         check(cfg["facts"]["floor"] == DEFAULT_FLOOR and cfg["facts"]["csv"]["columns"] == {}, "nested facts defaults")
+        check(cfg["brain"]["gate_probe_seconds"] == 900 and cfg["reader"]["read_documents"] is True,
+              "defaults: brain.gate_probe_seconds 900 and reader.read_documents true on a config without them")
         check(cfg["doorbell"]["wal_path"].endswith("no-whatsapp-here/ChatStorage.sqlite-wal"), "doorbell.wal_path <auto> follows wa_root()")
         check(cfg["bin"]["python"] == "/usr/bin/python3" and cfg["bin"]["path_env"], "bin.python default and path_env computed")
+        wbin, rbin = tmp / "home" / "bin", tmp / "real claude bin"
+        wbin.mkdir(parents=True)
+        rbin.mkdir()
+        (rbin / "claude").write_text("#!/bin/sh\n", encoding="utf-8")
+        os.chmod(str(rbin / "claude"), 0o755)
+        (wbin / "claude-bot").write_text("#!/bin/sh\n%s\nset -a\n. \"/x/claude-bot.env\"\nset +a\nexec \"%s\" \"$@\"\n"
+                                         % (CLAUDE_WRAPPER_MARKER, rbin / "claude"), encoding="utf-8")
+        os.chmod(str(wbin / "claude-bot"), 0o700)
+        wpath = apply_defaults({"bin": {"claude": str(wbin / "claude-bot")}}, live / "config.json")["bin"]["path_env"].split(os.pathsep)
+        check(str(wbin) in wpath and str(rbin) in wpath and claude_wrapper_target(wbin / "claude-bot") == str(rbin / "claude"),
+              "auto PATH with the token wrapper as bin.claude holds the wrapper folder and the real claude's folder")
         again = apply_defaults(copy.deepcopy(cfg), cfg["config_path"])
         again.pop("_load_warnings", None)
         first = dict(cfg)

@@ -260,7 +260,7 @@ Two layers. **The interface** `wa_second_source.fetch_day(cfg, day=None, runner=
 | `is_owner` | True for the owner's own messages (they never become a news line) |
 | `text` | Plain text, never empty; media as short placeholders such as `[image]` or `[voice 20s]` |
 
-Rules: only messages people sent (no bots, no system notices), not recalled, inside the day, oldest first. Chats with no messages may be left out. One chat failing adds a line to `errors`, adds 1 to `failed_chats`, and the pull goes on; never raise. Report the owner's ids in `owner_ids`, and add an error when they cannot be found (the owner's messages would otherwise look like other people's). Chats left out on purpose go to `skipped` with a reason.
+Rules: only messages people sent (no bots, no system notices), not recalled, inside the day, oldest first. Chats with no messages may be left out. One chat failing adds a line to `errors`, adds 1 to `failed_chats`, and the pull goes on; never raise. Report the owner's ids in `owner_ids`, and add an error when they cannot be found (the owner's messages would otherwise look like other people's). Chats left out on purpose go to `skipped` with a reason, and so do chats the source can never read (an encrypted chat, for instance): a chat that would fail every night is a known boundary, not an error, and counting it in `errors` and `failed_chats` would hide the real failures.
 
 `members(cfg, chats, runner=None)` returns `{"users": {id: {"name", "chats": [titles]}}, "bots": {id: {"name", "app_id", "chats"}}, "errors": [str]}`. It only feeds `--probe-members`, which prints candidates for a person to map; nothing is written.
 
@@ -288,6 +288,7 @@ Rules: only messages people sent (no bots, no system notices), not recalled, ins
 - One `lark-cli im +chat-messages-list ... --order asc --page-all --as user` call per chat for the local day (`second_source.lark.page_limit` 50, `timeout_seconds` 120).
 - Owner ids come from `second_source.lark.owner_ids`, else `lark-cli auth status`.
 - One-to-one chats whose other side is a bot are skipped; voice messages carry only a duration placeholder; long texts are cut at 2000 characters.
+- An encrypted chat (Lark answers API error `231203`; `lark-cli` may print that answer on stderr, which is read too) is listed in `skipped` with `why` `encrypted chat, the Lark API cannot read it`: never an error and never a failed chat. Take it off the whitelist (`pull` false) to stop seeing it.
 - Lark ids differ per app: the `lark_id` values on person notes must come from the same `lark-cli` login that pulls (`--probe-members` lists them).
 
 ### Adding an implementation

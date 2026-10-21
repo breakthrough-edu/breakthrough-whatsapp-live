@@ -24,7 +24,8 @@ wa_live.py · 私人 WhatsApp 实时逐封分诊 daemon (住一台常驻 Mac, la
   python3 wa_live.py --selftest       假库 + 假设定跑一遍自测, 只写暂存夹
 命令档 (丢进 live/commands/ 给跑着的 daemon 下指令; headless claude 只在 launchd 那条路底下拿得到登入与权限):
   test-run.<jid>.json          拿那个对话最近 3 封 inbound 当 burst 立刻跑一次
-  probe-claude.json            用脑的笼子参数叫一次最小 claude, 90 秒没回就抓堆叠
+  probe-claude.json            用脑的笼子参数叫一次最小 claude, 90 秒没回就抓堆叠;
+                               带 {"read_canary": true} 改成拒读探测: 叫脑读 <home>/secrets/deny-canary.txt, log 说挡没挡住
   notify-test.json             经推播出口推一句
   prewarm-<天>.json            把 N 天窗的语音先转进快取
   facts-now.json · second-source-now.json · backup-now.json · digest-now.json
@@ -57,7 +58,7 @@ import uuid
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-VERSION = "1.0.1"
+VERSION = "1.1.0"
 HOME = Path.home()
 DAEMON_DIR = Path(__file__).resolve().parent
 PAYLOAD = DAEMON_DIR.parent                     # 安装包根 (daemon/ 的上一层)
@@ -135,7 +136,7 @@ def audio_type():
     return v if isinstance(v, int) else 3
 
 
-# ⛔ --allowedTools 只加不减 (实证); 真正关门的是这份黑名单 + settings 的 deny + 下面的 cage check。
+# ⛔ --allowedTools 只加不减; 真正关门的是这份黑名单 + settings 的 deny + 下面的 cage check。
 # settings 模板 (templates/claude-settings.json) 的工具 deny 跟这份一致; daemon 起跑时两份取并集, 少了哪个在 log 喊。
 DENY_TOOLS = [
     "Bash", "Write", "Edit", "NotebookEdit", "WebFetch", "WebSearch", "Task", "Agent", "Skill",
@@ -727,6 +728,8 @@ class State(object):
         CREATE TABLE IF NOT EXISTS inbound_log(
           pk INTEGER PRIMARY KEY, seen_at TEXT, msg_at TEXT, jid TEXT, name TEXT, kind TEXT, mtype INTEGER,
           decision TEXT, policy TEXT);
+        CREATE TABLE IF NOT EXISTS brain_outages(
+          id INTEGER PRIMARY KEY, kind TEXT, started_at TEXT, ended_at TEXT, detail TEXT);
         """)
         self.conn.commit()
         # 旧库用 ALTER 补栏, 不重建 (新库一样走这里, 升级路径只有一条)
@@ -1117,23 +1120,35 @@ class State(object):
             out.append(d)
         return out
 
-    def thread(self, jid, n=40):
-        """板子右边那条对话: 直接读 live 库最近 n 封 (read-only), 语音有快取就带转字 (快取夹 = paths.home/transcripts-cache, 跟读取器同一个)。"""
+    def thread(self, jid, n=40, around=None):
+        """板子右边那条对话: 直接读 live 库最近 n 封 (read-only), 语音有快取就带转字 (快取夹 = paths.home/transcripts-cache, 跟读取器同一个)。
+        around=<pk> (板上搜寻点开一笔): 那一封前后各约一半, 照时间排, 不是最近 n 封。"""
         CT = content_types()
         AUD = audio_type()
-        conn = _ro(wa_root() / "ChatStorage.sqlite")
-        try:
-            rows = conn.execute("""SELECT m.Z_PK pk, m.ZISFROMME fromme, m.ZMESSAGETYPE mtype, m.ZTEXT text, m.ZMESSAGEDATE d,
+        sel = """SELECT m.Z_PK pk, m.ZISFROMME fromme, m.ZMESSAGETYPE mtype, m.ZTEXT text, m.ZMESSAGEDATE d,
                     m.ZPUSHNAME pushname, mi.ZMEDIALOCALPATH mpath, mi.ZXMPPTHUMBPATH thumb, mi.ZTITLE mtitle
                 FROM ZWAMESSAGE m JOIN ZWACHATSESSION s ON s.Z_PK=m.ZCHATSESSION
                 LEFT JOIN ZWAMEDIAITEM mi ON mi.ZMESSAGE=m.Z_PK
-                WHERE s.ZCONTACTJID=? AND m.ZMESSAGETYPE IN (%s) ORDER BY m.Z_PK DESC LIMIT ?"""
-                                % ",".join(str(int(t)) for t in CT), (jid, n)).fetchall()
+                WHERE s.ZCONTACTJID=? AND m.ZMESSAGETYPE IN (%s)""" % ",".join(str(int(t)) for t in CT)
+        conn = _ro(wa_root() / "ChatStorage.sqlite")
+        try:
+            if around is None:
+                rows = list(reversed(conn.execute(sel + " ORDER BY m.Z_PK DESC LIMIT ?", (jid, n)).fetchall()))
+            else:
+                # 前后照讯息时间取, 不照 Z_PK (手机晚同步进来的旧讯息编号反而大); 时间一样才比编号
+                after_n = int(n) // 2
+                hit = conn.execute("SELECT COALESCE(ZMESSAGEDATE, 0) FROM ZWAMESSAGE WHERE Z_PK=?", (int(around),)).fetchone()
+                ad = hit[0] if hit else 0
+                before = conn.execute(sel + """ AND (COALESCE(m.ZMESSAGEDATE,0) < ? OR (COALESCE(m.ZMESSAGEDATE,0) = ? AND m.Z_PK <= ?))
+                    ORDER BY COALESCE(m.ZMESSAGEDATE,0) DESC, m.Z_PK DESC LIMIT ?""", (jid, ad, ad, int(around), int(n) - after_n)).fetchall()
+                after = conn.execute(sel + """ AND (COALESCE(m.ZMESSAGEDATE,0) > ? OR (COALESCE(m.ZMESSAGEDATE,0) = ? AND m.Z_PK > ?))
+                    ORDER BY COALESCE(m.ZMESSAGEDATE,0) ASC, m.Z_PK ASC LIMIT ?""", (jid, ad, ad, int(around), after_n)).fetchall()
+                rows = sorted(list(before) + list(after), key=lambda r: (r["d"] or 0, r["pk"]))
         finally:
             conn.close()
         cache_dir = home_dir(self.cfg) / "transcripts-cache"
         out = []
-        for r in reversed(rows):
+        for r in rows:
             item = {"pk": r["pk"], "from_me": bool(r["fromme"]), "at": core_to_iso(r["d"]), "type": CT.get(r["mtype"], "?"),
                     "text": r["text"] or "", "speaker": _clean_pushname(r["pushname"] or ""), "media_local": False, "transcript": None,
                     "media_url": None, "media_ctype": None, "media_is_thumb": False}
@@ -1163,6 +1178,77 @@ class State(object):
                 item["text"] = r["mtitle"]
             out.append(item)
         return out
+
+    SEARCH_MAX_TERMS = 6
+    SEARCH_EXCERPT = 240
+
+    @staticmethod
+    def _excerpt(text, terms, width=240):
+        """一段文字里第一个命中词前后约 width 字, 切掉的地方补「…」; 都没命中就从头取。"""
+        s = re.sub(r"\s+", " ", str(text or "")).strip()
+        if len(s) <= width:
+            return s
+        low = s.lower()
+        hits = [low.find(t.lower()) for t in terms]
+        hits = [i for i in hits if i >= 0]
+        i = min(hits) if hits else 0
+        start = max(0, i - width // 3)
+        end = min(len(s), start + width)
+        start = max(0, end - width)
+        return ("…" if start > 0 else "") + s[start:end].strip() + ("…" if end < len(s) else "")
+
+    def search(self, q, jid=None, n=60):
+        """板上搜寻: 词照空白切 (最多 6 个), 每个词都要出现在讯息文字或媒体标题 (档名) 里, 不分大小写。
+        限时动态与广播不搜。只读 live 库 (mode=ro), 照讯息时间最新在前 (⛔ 不照 Z_PK: 手机晚同步进来的旧讯息编号反而大)。回 {"q", "hits", "more"}。"""
+        q = str(q or "")
+        terms = [t for t in q.split() if t][:self.SEARCH_MAX_TERMS]
+        if not terms:
+            return {"q": q, "hits": [], "more": False}
+        n = max(1, int(n))
+        CT = content_types()
+        where, args = [], []
+        for t in terms:
+            if t.isascii():
+                pat = "%" + t.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+                where.append("(COALESCE(m.ZTEXT,'') LIKE ? ESCAPE '\\' OR COALESCE(mi.ZTITLE,'') LIKE ? ESCAPE '\\')")
+                args += [pat, pat]
+            else:
+                # SQLite 的 LIKE 只认 ASCII 大小写, 别的字母交给 casefold
+                where.append("wa_has(m.ZTEXT, mi.ZTITLE, ?)")
+                args.append(t.casefold())
+        if jid:
+            where.append("s.ZCONTACTJID = ?")
+            args.append(jid)
+        sql = """SELECT m.Z_PK pk, m.ZISFROMME fromme, m.ZMESSAGETYPE mtype, m.ZTEXT text, m.ZMESSAGEDATE d, m.ZPUSHNAME pushname,
+                m.ZFROMJID fromjid, gm.ZMEMBERJID memberjid, s.ZCONTACTJID jid, s.ZPARTNERNAME chat, mi.ZTITLE mtitle
+            FROM ZWAMESSAGE m JOIN ZWACHATSESSION s ON s.Z_PK = m.ZCHATSESSION
+            LEFT JOIN ZWAMEDIAITEM mi ON mi.ZMESSAGE = m.Z_PK
+            LEFT JOIN ZWAGROUPMEMBER gm ON gm.Z_PK = m.ZGROUPMEMBER
+            WHERE m.ZMESSAGETYPE IN (%s) AND s.ZCONTACTJID NOT LIKE '%%@status' AND s.ZCONTACTJID NOT LIKE '%%@broadcast'
+              AND %s
+            ORDER BY m.ZMESSAGEDATE DESC, m.Z_PK DESC LIMIT ?""" % (",".join(str(int(t)) for t in CT), " AND ".join(where))
+        conn = _ro(wa_root() / "ChatStorage.sqlite")
+        try:
+            conn.create_function("wa_has", 3, lambda a, b, t: 1 if (t in str(a or "").casefold() or t in str(b or "").casefold()) else 0)
+            rows = conn.execute(sql, args + [n + 1]).fetchall()
+        finally:
+            conn.close()
+        more = len(rows) > n
+        hits = []
+        folded = [t.casefold() for t in terms]
+        for r in rows[:n]:
+            cj = r["jid"] or ""
+            group = cj.endswith("@g.us")
+            text = r["text"] or ""
+            title = r["mtitle"] or ""
+            src = text if any(t in text.casefold() for t in folded) else (text or title)
+            speaker = ""
+            if group and not r["fromme"]:
+                speaker = speaker_name(speaker_jid_of(cj, r["memberjid"], r["fromjid"]), r["pushname"] or "") or ""
+            hits.append({"jid": cj, "chat": r["chat"] or cj, "kind": "group" if group else "direct", "pk": r["pk"],
+                         "at": core_to_iso(r["d"]), "from_me": bool(r["fromme"]), "speaker": speaker,
+                         "type": CT.get(r["mtype"], "?"), "text": self._excerpt(src, terms, self.SEARCH_EXCERPT), "title": title})
+        return {"q": q, "hits": hits, "more": more}
 
     def media_file(self, pk):
         """GET /media?pk= 用: 那封讯息的可显示档 (原档或缩图; 语音只给原档) 与 content-type。daemon 有 Full Disk Access 所以读得到; 浏览器拿的是这里送出去的 bytes。"""
@@ -1568,8 +1654,8 @@ class Doorbell(object):
                 last_pk = mx
                 self.fresh_mark = mx
                 self.fresh_kind = "install"
-            # 往回看 lookback 个编号, 纪录里没有的补处理 (实锤过: 陌生人新对话的第一封比同一秒的两则系统通知晚写进库,
-            # 门铃先看到后面两则就把水位推过去, 那一封从此静默丢了)。已经记过 inbound_log 的跳过, 不重跑。
+            # 往回看 lookback 个编号, 纪录里没有的补处理 (一封讯息可能比同一秒、编号更大的系统通知晚写进库;
+            # 不往回看的话, 水位推过去后它会静默丢失)。已经记过 inbound_log 的跳过, 不重跑。
             lo = max(0, last_pk - self.lookback)
             rows = conn.execute("""SELECT m.Z_PK pk, m.ZISFROMME fromme, m.ZMESSAGETYPE mtype, m.ZTEXT text,
                     m.ZMESSAGEDATE d, m.ZPUSHNAME pushname, s.ZCONTACTJID jid, s.ZPARTNERNAME name, s.ZSESSIONTYPE stype,
@@ -1811,7 +1897,8 @@ def reader_config_from(cfg):
             "my_names": list(cfg.get("my_names") or []), "transcribe": bool(b.get("transcribe", True)),
             "whisper_model": str(b.get("whisper_model") or ""), "whisper_language": str(b.get("whisper_language") or ""),
             "whisperkit_bin": binpath("whisperkit"), "ffmpeg_bin": binpath("ffmpeg"),
-            "person_dirs": [str(pd)] if pd is not None else [], "index_dirs": [], "stop_words": []}
+            "person_dirs": [str(pd)] if pd is not None else [], "index_dirs": [], "stop_words": [],
+            "read_documents": bool(((cfg.get("reader") or {}) if isinstance(cfg.get("reader"), dict) else {}).get("read_documents", True))}
 
 
 _PLACEHOLDER_RE = re.compile(r"\{([A-Z][A-Z0-9_]{1,40})\}")
@@ -1836,6 +1923,7 @@ class Brain(object):
         self.deny_tools = list(DENY_TOOLS)
         self.dossier = None
         self.gate = None                                          # Daemon 接上 Doorbell.gate_for (摘要表按闸过滤)
+        self.breaker = None                                       # Daemon 接上 BrainGate (脑叫不动时的断路器)
         self.prewarm_busy = False
         self._placeholder_warned = set()
         self.check_settings()
@@ -1899,7 +1987,7 @@ class Brain(object):
                 "--model", model, "--settings", str(self.settings), "--strict-mcp-config",
                 "--no-session-persistence", "--permission-mode", "default",
                 "--allowedTools", " ".join(ALLOW_TOOLS), "--disallowedTools", " ".join(self.deny_tools),
-                # 不给 add-dir, cwd 也不放 Documents: launchd 底下开 TCC 路径会卡死。脑用 Read 开对话包里列的图片路径是通的 (node 当家长时实证)。
+                # 不给 add-dir, cwd 也不放 Documents: launchd 底下开 TCC 路径会卡死。脑用 Read 开对话包里列的图片路径是通的 (node 当家长时成立)。
                 "--max-turns", str(int(max_turns))]
 
     @staticmethod
@@ -2022,17 +2110,25 @@ class Brain(object):
         if n:
             log.info("读取器 config: 刷新了 %d 个工作夹", n)
 
+    SHARED_CACHES = ("transcripts-cache", "doc-text-cache")       # 语音转字与文件转字: 每个工作夹用捷径共用 <home> 底下同一份
+
+    def link_shared_caches(self, work):
+        """工作夹里的 transcripts-cache 与 doc-text-cache 都是指到 <home> 那一份的捷径 (不是捷径的旧夹改名留着, 不删)。"""
+        base = self.home
+        for name in self.SHARED_CACHES:
+            (base / name).mkdir(parents=True, exist_ok=True, mode=0o700)
+            link = Path(work) / name
+            if not link.is_symlink():
+                if link.exists():
+                    link.rename(Path(work) / ("%s.old-%d" % (name, int(time.time()))))
+                link.symlink_to(base / name)
+
     def sweep_workdir(self, key):
-        """每个 run 自己的 work_dir (快照档不互踩, 所以不用锁), transcripts-cache 用捷径共用, config 每次跟根设定对齐。"""
+        """每个 run 自己的 work_dir (快照档不互踩, 所以不用锁), transcripts-cache 与 doc-text-cache 用捷径共用, config 每次跟根设定对齐。"""
         base = self.home
         work = base / "runs-work" / safe_name(key)
         work.mkdir(parents=True, exist_ok=True)
-        (base / "transcripts-cache").mkdir(parents=True, exist_ok=True)
-        link = work / "transcripts-cache"
-        if not link.is_symlink():
-            if link.exists():
-                link.rename(work / ("transcripts-cache.old-%d" % int(time.time())))
-            link.symlink_to(base / "transcripts-cache")
+        self.link_shared_caches(work)
         self._sync_config(work)
         return work
 
@@ -2055,7 +2151,7 @@ class Brain(object):
 
     def prewarm(self, days):
         """把 N 天窗内所有对话的语音转进 transcripts-cache, 之后每个 run 只转新的。
-        跑很久, 用自己的 work_dir (快照档不跟 live run 互踩), 只把 transcripts-cache 用捷径共用; 同时只跑一个。"""
+        跑很久, 用自己的 work_dir (快照档不跟 live run 互踩), 只把 transcripts-cache 与 doc-text-cache 用捷径共用; 同时只跑一个。"""
         if self.prewarm_busy:
             log.warning("prewarm 已经在跑, 这次指令略过 (两个同时跑会共用 prewarm/ 互删快照)")
             return
@@ -2063,12 +2159,7 @@ class Brain(object):
         try:
             base = self.home
             work = base / "prewarm"; work.mkdir(parents=True, exist_ok=True)
-            cache_link = work / "transcripts-cache"
-            (base / "transcripts-cache").mkdir(parents=True, exist_ok=True)
-            if not cache_link.is_symlink():
-                if cache_link.exists():
-                    cache_link.rename(work / ("transcripts-cache.old-%d" % int(time.time())))
-                cache_link.symlink_to(base / "transcripts-cache")
+            self.link_shared_caches(work)
             self._sync_config(work)
             out = self.runs_dir / ("prewarm-%s-%dd.json" % (dt.datetime.now().strftime("%Y%m%d-%H%M%S"), days))
             # 开跑前在 meta 记 prewarm_pending, 跑完才清: 被重启切断的 (进程被杀, 走不到下面) 由主循环下次起跑时补跑 (resume_prewarm)。
@@ -2298,7 +2389,7 @@ class Brain(object):
         timeout = int(timeout or b.get("run_timeout_seconds", 600))
         args = self.claude_base_args(model or b.get("model", "claude-sonnet-5"), max_turns or b.get("max_turns", 12))
         args += ["--append-system-prompt", append_system or APPEND_SYSTEM]
-        # prompt 走 argv 不走 stdin (实证能跑); stdin 关死, 免得 claude 等输入。
+        # prompt 走 argv 不走 stdin; stdin 关死, 免得 claude 等输入。
         args.append(prompt)
         env = self.child_env()
         (Path(run_dir) / "claude.cmd.txt").write_text(" ".join(shlex.quote(a) for a in args[:-1]) + " <prompt.md>\n", encoding="utf-8")
@@ -2317,8 +2408,10 @@ class Brain(object):
             out = te.stdout.decode("utf-8", "replace") if isinstance(te.stdout, bytes) else (te.stdout or "")
             err = te.stderr.decode("utf-8", "replace") if isinstance(te.stderr, bytes) else (te.stderr or "")
             dump(out, err)
+            msg = "claude -p 超时 %ds (半途输出 %d 字, 看 claude.stdout.jsonl)" % (timeout, len(out))
+            self.note_brain(False, msg)
             # from None: TimeoutExpired 的讯息带整个 argv, 最后一格是提示 (别人的对话原文), 不准跟着例外链进 wa_live.log
-            raise RunError("claude -p 超时 %ds (半途输出 %d 字, 看 claude.stdout.jsonl)" % (timeout, len(out))) from None
+            raise RunError(msg) from None
         dump(r.stdout, r.stderr)
         done, breach = self.parse_stream(r.stdout)
         if breach:
@@ -2328,6 +2421,7 @@ class Brain(object):
             log.warning("MEMORY LOADED: 这个 run 载入了 Claude 记忆 (%s), 环境变数没生效; 丢 commands/probe-claude.json 查", mem)
         if done is None:
             tail = (r.stderr or r.stdout or "")[-400:].strip()
+            self.note_brain(False, tail)
             raise RunError("claude -p 没有回 result (rc=%s): %s" % (r.returncode, tail))
         denials = [d.get("tool_name", d) if isinstance(d, dict) else d for d in (done.get("permission_denials") or [])]
         if denials:
@@ -2340,20 +2434,68 @@ class Brain(object):
             errs = "; ".join(str(x) for x in (done.get("errors") or []) if str(x).strip())
             reason = (text.strip()[:300] or ": ".join(x for x in (str(done.get("subtype") or "").strip(), errs) if x)[:300]
                       or "is_error with no text and no reason")
+        self.note_brain(not is_err, reason)
         return {"text": text, "is_error": is_err, "error": reason, "subtype": done.get("subtype"),
                 "cost_usd": done.get("total_cost_usd"), "duration_ms": done.get("duration_ms") or int((time.time() - t0) * 1000),
                 "num_turns": done.get("num_turns"), "breach": breach, "denials": denials,
                 "input_tokens": u.get("input_tokens"), "output_tokens": u.get("output_tokens"),
                 "cache_read_tokens": u.get("cache_read_input_tokens"), "cache_create_tokens": u.get("cache_creation_input_tokens")}
 
-    def call_claude_recorded(self, prompt, run_dir, run_kind, jid=None, name=None, timeout=None, max_turns=None):
+    def note_brain(self, ok, reason=""):
+        """一次模型呼叫的结果交给断路器 (成功关、两次连续的登入 / 额度失败开); 断路器没接或出错都不影响呼叫本身。"""
+        g = self.breaker
+        if g is None:
+            return
+        try:
+            if ok:
+                g.note_success()
+            else:
+                g.note_failure(reason)
+        except Exception as e:
+            log.warning("断路器记帐失败 (继续): %s", e)
+
+    def brain_down(self):
+        """断路器开着没 (开着时各 run 的失败推播不再推: 断路器那一则已经讲了)。"""
+        g = self.breaker
+        try:
+            return bool(g is not None and g.down())
+        except Exception:
+            return False
+
+    def ping(self, timeout=120):
+        """断路器的探测: 同一套笼子旗标、--max-turns 1、只要它回 PONG。⛔ 不进 runs、不写 runs/ 夹; 空的回答不算通。回 (通不通, 原因)。"""
+        if self.dry_run:
+            return False, "dry-run: 不叫 claude"
+        if not self.settings.is_file():
+            return False, "claude-settings.json 不在 (%s)" % self.settings
+        b = self.cfg.get("brain") or {}
+        args = self.claude_base_args(b.get("model", "claude-sonnet-5"), 1) + ["reply with exactly: PONG"]
+        try:
+            r = subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout,
+                               cwd=b.get("cwd") or str(self.home / "brain-cwd"), env=self.child_env())
+        except subprocess.TimeoutExpired:
+            return False, "探测超时 %ds" % timeout
+        except Exception as e:
+            return False, "探测起不来: %s" % str(e)[:200]
+        done, _ = self.parse_stream(r.stdout)
+        if done is None:
+            return False, (r.stderr or r.stdout or "").strip()[-300:] or ("没有 result (rc=%s)" % r.returncode)
+        text = str(done.get("result") or "").strip()
+        if done.get("is_error"):
+            errs = "; ".join(str(x) for x in (done.get("errors") or []) if str(x).strip())
+            return False, (text or ": ".join(x for x in (str(done.get("subtype") or ""), errs) if x) or "is_error")[:300]
+        if not text:
+            return False, "空的回答"
+        return True, text[:60]
+
+    def call_claude_recorded(self, prompt, run_dir, run_kind, jid=None, name=None, timeout=None, max_turns=None, append_system=None):
         """非分诊的模型呼叫 (第二讯息来源 · 摘要回填) 也进 runs 表 (kind 记是哪一种), 用量读数才完整; 破笼一样推。
         max_turns: 这种 run 自己的回合上限 (摘要回填用 backfill.max_turns), 没给就用 brain.max_turns。"""
         model = (self.cfg.get("brain") or {}).get("model", "claude-sonnet-5")
         run_id = self.state.start_run(jid, name or run_kind, run_kind, [], model, run_dir)
         res = None
         try:
-            res = self.call_claude(prompt, run_dir, timeout=timeout, max_turns=max_turns)
+            res = self.call_claude(prompt, run_dir, timeout=timeout, max_turns=max_turns, append_system=append_system)
             usage = {k: res.get(k) for k in ("cost_usd", "duration_ms", "num_turns", "input_tokens", "output_tokens", "cache_read_tokens", "cache_create_tokens")}
             self.state.finish_run(run_id, not res.get("is_error"), cage_breach=res.get("breach") or [], denials=res.get("denials") or [],
                                   error=((res.get("error") or str(res.get("text") or "")[:300] or "is_error") if res.get("is_error") else None), **usage)
@@ -2479,8 +2621,11 @@ class Brain(object):
             else:
                 log.exception("run #%d 失败 %s", run_id, name)
             self.state.finish_run(run_id, False, error=str(e)[:800])
-            self.notifier.send("⚠️ [WA live] run #%d 失败 (%s): %s\n看 %s" % (run_id, name, str(e)[:300], run_dir),
-                               key="run_fail:" + jid, min_gap=1800, kind="error")
+            if self.brain_down():
+                log.info("run #%d 失败不另推 (断路器开着, 它那一则已经讲了脑叫不动)", run_id)
+            else:
+                self.notifier.send("⚠️ [WA live] run #%d 失败 (%s): %s\n看 %s" % (run_id, name, str(e)[:300], run_dir),
+                                   key="run_fail:" + jid, min_gap=1800, kind="error")
         finally:
             self.state.consume_pending(jid, pks)
             running.discard(jid)
@@ -2500,6 +2645,186 @@ class Brain(object):
                 link = "\n\nhttps://wa.me/%s?text=%s" % (phone, urllib.parse.quote(j["draft"]))
         warn = "\n\n🚨 cage breach: %s" % ", ".join(breach) if breach else ""
         return (head + body + link + warn)[:3800]
+
+
+# ---------------------------------------------------------------- 断路器 (脑叫不动时: 停新 run, 讯息照排队, 定时探测, 通了自动接着跑)
+
+_OUTAGE_AUTH = re.compile(r"login expired|failed to authenticate|authentication[_ ]error|invalid api key|not logged in|"
+                          r"unauthori[sz]ed|/login\b|oauth token (has )?expired|token (has )?expired", re.I)
+_OUTAGE_LIMIT = re.compile(r"\b(usage|weekly|rate)[ _]limit|limit reached|hit your limit|resets (at|on|in)\b|resets \d", re.I)
+
+
+def brain_outage_kind(reason):
+    """一次失败的原因 → "auth" (登入失效) · "limit" (用量额度到顶) · None (是那条对话自己的问题, 不是脑叫不动)。"""
+    s = str(reason or "")
+    if _OUTAGE_AUTH.search(s):
+        return "auth"
+    if _OUTAGE_LIMIT.search(s):
+        return "limit"
+    return None
+
+
+class BrainGate(object):
+    """脑的断路器。连续两次失败都是「叫不动」(登入失效或额度到顶, 两种混着也算; 第二次的种类为准) 就打开;
+    中间夹一次别的失败就重算; 任何一次成功就关上。打开时: 不起新的分诊 run (pending 留着, 一封不丢)、档案 run · 第二来源夜拉 ·
+    摘要回填 · 板上「现在判断」都不起; 门铃、事实、夜备、日报、板子照常。每 brain.gate_probe_seconds 秒用 Brain.ping 探一次。
+    开与关各推一则 (关的那则只在开的那则推出去过才推), 每段停摆记一行 brain_outages。"""
+
+    OPEN_AFTER = 2
+
+    def __init__(self, notifier, brain, cfg):
+        self.notifier = notifier
+        self.brain = brain
+        self.cfg = cfg if isinstance(cfg, dict) else {}
+        self.db = getattr(brain, "state", None)          # 状态库 (State); state() 是板子要的那个物件
+        self.dry_run = bool(getattr(brain, "dry_run", False))
+        try:
+            self.interval = max(60, int(((self.cfg.get("brain") or {}).get("gate_probe_seconds")) or 900))
+        except (TypeError, ValueError):
+            self.interval = 900
+        self.lock = threading.RLock()
+        self.fails = 0
+        self.kind = None
+        self.since = None                 # 打开的时间 (本地 ISO); None = 脑叫得动
+        self.since_ts = None
+        self.detail = ""
+        self.next_probe_ts = None
+        self.row_id = None
+        self.open_pushed = False
+        self.probing = False
+        if self.db is not None:
+            with self.db.lock:
+                self.db.conn.execute("""CREATE TABLE IF NOT EXISTS brain_outages(
+                    id INTEGER PRIMARY KEY, kind TEXT, started_at TEXT, ended_at TEXT, detail TEXT)""")
+                n = 0
+                if not self.dry_run:
+                    # 上一个进程开着的那段停摆: 起跑时记成结束 (结束时间 = 这次起跑); 真的还叫不动, 下两次失败会再开一段
+                    n = self.db.conn.execute("UPDATE brain_outages SET ended_at=? WHERE ended_at IS NULL", (now_iso(),)).rowcount
+                self.db.conn.commit()
+            if n:
+                log.info("断路器: 上次留着没关的 %d 段停摆, 起跑时记成结束", n)
+
+    def down(self):
+        return self.since is not None
+
+    def _label(self, kind):
+        return {"auth": "登入失效", "limit": "额度到顶"}.get(kind, str(kind))
+
+    def why(self):
+        if not self.down():
+            return ""
+        nxt = dt.datetime.fromtimestamp(self.next_probe_ts).strftime("%H:%M") if self.next_probe_ts else "?"
+        return "脑叫不动 (%s), 从 %s 起, 下次探测 %s" % (self._label(self.kind), (self.since or "")[11:16], nxt)
+
+    def state(self):
+        """板子的 status.brain_down: 脑叫得动回 None, 否则 {kind, since, minutes, detail, next_probe_at}。"""
+        with self.lock:
+            if not self.down():
+                return None
+            return {"kind": self.kind, "since": self.since,
+                    "minutes": int(max(0, time.time() - (self.since_ts or time.time())) // 60),
+                    "detail": (self.detail or "")[:200],
+                    "next_probe_at": (dt.datetime.fromtimestamp(self.next_probe_ts).isoformat(timespec="seconds")
+                                      if self.next_probe_ts else None)}
+
+    def note_failure(self, reason):
+        kind = brain_outage_kind(reason)
+        with self.lock:
+            if kind is None:
+                self.fails = 0                     # 这条对话自己的问题, 不算脑叫不动
+                return
+            self.fails += 1
+            if self.down():
+                self.kind = kind
+                self.detail = str(reason or "")[:200]
+                self._update_row()
+                return
+            if self.fails >= self.OPEN_AFTER:
+                self._open(kind, reason)
+
+    def note_success(self):
+        with self.lock:
+            self.fails = 0
+            if self.down():
+                self._close()
+
+    def _update_row(self):
+        if self.db is None or self.row_id is None or self.dry_run:
+            return
+        with self.db.lock:
+            self.db.conn.execute("UPDATE brain_outages SET kind=?, detail=? WHERE id=?", (self.kind, self.detail, self.row_id))
+            self.db.conn.commit()
+
+    def _open(self, kind, reason):
+        self.kind = kind
+        self.since = now_iso()
+        self.since_ts = time.time()
+        self.detail = str(reason or "")[:200]
+        self.next_probe_ts = self.since_ts + self.interval
+        if self.db is not None and not self.dry_run:
+            with self.db.lock:
+                cur = self.db.conn.execute("INSERT INTO brain_outages(kind, started_at, detail) VALUES(?,?,?)", (kind, self.since, self.detail))
+                self.db.conn.commit()
+                self.row_id = cur.lastrowid
+        log.error("断路器打开: 脑叫不动 (%s, 连续 %d 次)。新的 run 暂停, 待判的讯息留在队列; 每 %d 秒探测一次。原因: %s",
+                  self._label(kind), self.fails, self.interval, self.detail[:200])
+        if kind == "auth":
+            text = ("🔌 [WA live] 脑叫不动了: Claude Code 的登入失效。待判的讯息照常排队, 一封都不会丢。"
+                    "请在这台 Mac 上登入 Claude Code 一次 (daemon 用 setup token 包装时, 换一个新的 token)。恢复后会再推一则。")
+        else:
+            text = ("🔌 [WA live] 脑叫不动了: Claude 的用量额度到顶。待判的讯息照常排队, 一封都不会丢。"
+                    "daemon 每 %d 分钟探测一次, 额度回来就自动接着判, 恢复后会再推一则。" % max(1, self.interval // 60))
+        try:
+            self.open_pushed = bool(self.notifier.send(text, key="brain_down", min_gap=6 * 3600, kind="error"))
+        except Exception as e:
+            log.warning("断路器: 推播失败: %s", e)
+            self.open_pushed = False
+
+    def _close(self):
+        ended = now_iso()
+        minutes = int(round((time.time() - (self.since_ts or time.time())) / 60.0))
+        if self.db is not None and self.row_id is not None and not self.dry_run:
+            with self.db.lock:
+                self.db.conn.execute("UPDATE brain_outages SET ended_at=? WHERE id=?", (ended, self.row_id))
+                self.db.conn.commit()
+        log.info("断路器关上: 脑恢复了 (停了 %d 分钟, %s), 排队的讯息接着判", minutes, self._label(self.kind))
+        if self.open_pushed:
+            try:
+                self.notifier.send("✅ [WA live] 脑恢复了, 停了 %d 分钟。排队的讯息现在接着判。" % minutes, kind="error")
+            except Exception as e:
+                log.warning("断路器: 推播失败: %s", e)
+        self.kind = None; self.since = None; self.since_ts = None; self.detail = ""
+        self.next_probe_ts = None; self.row_id = None; self.open_pushed = False; self.fails = 0
+
+    def maybe_probe(self):
+        """主循环约每分钟叫: 打开着、不是试跑、到了下次探测的时间, 就在背景探一次 (回那条线程, 没探回 None)。"""
+        if not self.down() or self.dry_run or self.probing:
+            return None
+        if time.time() < (self.next_probe_ts or 0):
+            return None
+        self.next_probe_ts = time.time() + self.interval
+        self.probing = True
+
+        def _go():
+            try:
+                ok, why = self.brain.ping()
+                if ok:
+                    self.note_success()
+                else:
+                    with self.lock:
+                        k = brain_outage_kind(why)
+                        if k and self.down():
+                            self.kind = k
+                            self.detail = str(why or "")[:200]
+                            self._update_row()
+                    log.warning("断路器: 探测还是不通 (%s), %d 秒后再探", str(why or "")[:200], self.interval)
+            except Exception as e:
+                log.warning("断路器: 探测例外: %s", e)
+            finally:
+                self.probing = False
+        t = threading.Thread(target=_go, daemon=True)
+        t.start()
+        return t
 
 
 # ---------------------------------------------------------------- 档案 run (人物档的 worker)
@@ -2586,7 +2911,7 @@ class Dossier(object):
                 self.state.conn.execute("ALTER TABLE dossier_jobs ADD COLUMN was_new INTEGER")
             self.state.conn.commit()
         if not dry_run:
-            # 上一个进程跑到一半被停的 job (kickstart 几乎一定会打断): 记成失败, 那个人才排得回队列; 标「中断:」, 间隔规则不算它
+            # 上一个进程跑到一半被停的 job (wa_setup.py restart 几乎一定会打断): 记成失败, 那个人才排得回队列; 标「中断:」, 间隔规则不算它
             with self.state.lock:
                 n = self.state.conn.execute("""UPDATE dossier_jobs SET finished_at=?, ok=0, error='中断: daemon 重启时这个 job 没跑完'
                     WHERE started_at IS NOT NULL AND finished_at IS NULL""", (now_iso(),)).rowcount
@@ -3019,6 +3344,8 @@ class Dossier(object):
         """daemon 主循环每轮叫一次: 没在跑就捡下一个 job 起线程。"""
         if self.busy is not None or not self.enabled or self.dry_run:
             return
+        if self.brain.breaker is not None and self.brain.breaker.down():
+            return                                # 脑叫不动: 档案 job 留在队列, 脑恢复后照顺序跑
         with self.state.lock:
             job = self.state.conn.execute("SELECT * FROM dossier_jobs WHERE started_at IS NULL ORDER BY id LIMIT 1").fetchone()
         if not job:
@@ -3166,8 +3493,11 @@ class Dossier(object):
                                             (jid, name, "重排 (档在 run 期间被手改): " + str(job["reason"]), now_iso()))
                 self.state.conn.commit()
             self._finish_run(run_id, False, res, error=err)
-            self.notifier.send("⚠️ [WA live] 档案 run #%d 失败 (%s): %s\n看 %s" % (job["id"], name, str(e)[:300], run_dir),
-                               key="dossier_fail:" + jid, min_gap=1800, kind="error")
+            if self.brain.brain_down():
+                log.info("dossier run #%d 失败不另推 (断路器开着, 它那一则已经讲了脑叫不动)", job["id"])
+            else:
+                self.notifier.send("⚠️ [WA live] 档案 run #%d 失败 (%s): %s\n看 %s" % (job["id"], name, str(e)[:300], run_dir),
+                                   key="dossier_fail:" + jid, min_gap=1800, kind="error")
         finally:
             self.busy = None
 
@@ -3212,6 +3542,7 @@ class Dossier(object):
         except subprocess.TimeoutExpired as te:
             out = te.stdout.decode("utf-8", "replace") if isinstance(te.stdout, bytes) else (te.stdout or "")
             (Path(run_dir) / "claude.stdout.jsonl").write_text(out or "", encoding="utf-8")
+            self.brain.note_brain(False, "档案 run 超时 %ds" % timeout)
             raise RunError("档案 run 超时 %ds" % timeout) from None
         (Path(run_dir) / "claude.stdout.jsonl").write_text(r.stdout or "", encoding="utf-8")
         if r.stderr:
@@ -3224,11 +3555,14 @@ class Dossier(object):
         if mem:
             log.warning("MEMORY LOADED (档案 run): 载入了 Claude 记忆 (%s), 环境变数没生效", mem)
         if done is None:
+            self.brain.note_brain(False, (r.stderr or r.stdout or "")[-300:])
             raise RunError("claude -p 没有回 result (rc=%s): %s" % (r.returncode, (r.stderr or r.stdout or "")[-300:]))
         if done.get("is_error"):
             errs = "; ".join(str(x) for x in (done.get("errors") or []) if str(x).strip())
-            raise RunError("claude 回 is_error: %s" % ((str(done.get("result") or "").strip()
-                                                       or ": ".join(x for x in (str(done.get("subtype") or ""), errs) if x) or "no reason")[:300]))
+            why = ((str(done.get("result") or "").strip() or ": ".join(x for x in (str(done.get("subtype") or ""), errs) if x) or "no reason")[:300])
+            self.brain.note_brain(False, why)
+            raise RunError("claude 回 is_error: %s" % why)
+        self.brain.note_brain(True)
         denied = [d.get("tool_name", d) if isinstance(d, dict) else d for d in (done.get("permission_denials") or [])]
         if denied:
             log.warning("设定档挡下了档案 run 的读取 (%s): %s", Path(run_dir).name, "; ".join(str(x) for x in denied)[:400])
@@ -3294,6 +3628,8 @@ def make_board_handler(daemon):
                 except Exception:
                     r["dossier"] = None; r["dossier_busy"] = False
             st["dossier_busy"] = daemon.dossier.busy
+            breaker = getattr(daemon, "breaker", None)
+            st["brain_down"] = breaker.state() if breaker is not None else None
             seen = {r["jid"] for r in rows}
             others, total = [], 0
             try:
@@ -3448,10 +3784,33 @@ def make_board_handler(daemon):
                     n = 40
                 if not jid:
                     self._send(400, json.dumps({"error": "jid?"})); return
+                around = None
+                if (q.get("around") or [""])[0]:
+                    try:
+                        around = int(q["around"][0])
+                    except ValueError:
+                        self._send(400, json.dumps({"error": "around?"})); return
                 try:
-                    self._send(200, json.dumps({"jid": jid, "messages": daemon.state.thread(jid, n)}, ensure_ascii=False))
+                    self._send(200, json.dumps({"jid": jid, "messages": daemon.state.thread(jid, n, around=around)}, ensure_ascii=False))
                 except Exception as e:
                     self._send(500, json.dumps({"error": str(e)[:300]}))
+            elif path == "/api/search":
+                # 板上搜寻: 只读。⛔ log 不写搜的字, 只写几个词、几笔、有没有限一个对话
+                q = self._query()
+                text = (q.get("q") or [""])[0]
+                sjid = (q.get("jid") or [""])[0] or None
+                try:
+                    n = max(5, min(200, int((q.get("n") or ["60"])[0])))
+                except ValueError:
+                    n = 60
+                try:
+                    res = daemon.state.search(text, jid=sjid, n=n)
+                except Exception as e:
+                    log.warning("板子: 搜寻失败: %s", type(e).__name__)
+                    self._send(500, json.dumps({"error": str(e)[:300]}, ensure_ascii=False)); return
+                log.info("板子: 搜寻 %d 个词, %d 笔%s%s", len(text.split()[:State.SEARCH_MAX_TERMS]), len(res["hits"]),
+                         " (限一个对话)" if sjid else "", " (还有更多)" if res.get("more") else "")
+                self._send(200, json.dumps(res, ensure_ascii=False))
             elif path == "/media":
                 self._media()
             elif path.startswith("/calendar/"):
@@ -3579,6 +3938,11 @@ def make_board_handler(daemon):
                 jid = body["jid"]
                 if jid in daemon.running:
                     self._send(200, json.dumps({"ok": True, "already": True})); return
+                breaker = getattr(daemon, "breaker", None)
+                if breaker is not None and breaker.down():
+                    log.info("板子: 现在判断没送 (%s)", breaker.why())
+                    self._send(200, json.dumps({"ok": False, "reason": "brain_down", "brain_down": breaker.state(),
+                                                "error": "脑现在叫不动, 这条对话的讯息照常排队, 脑恢复后会判"}, ensure_ascii=False)); return
                 kind = "group" if jid.endswith("@g.us") else "direct"
                 ok_gate, why = daemon.bell.gate_for(jid, kind)
                 if not ok_gate and not body.get("confirm"):
@@ -3634,6 +3998,8 @@ class Daemon(object):
         self.brain = Brain(cfg, self.state, self.notifier, dry_run=dry_run)
         self.dossier = Dossier(cfg, self.state, self.brain, self.notifier, dry_run=dry_run)
         self.brain.dossier = self.dossier
+        self.breaker = BrainGate(self.notifier, self.brain, cfg)
+        self.brain.breaker = self.breaker
         if (cfg.get("backfill") or {}).get("respect_gate", True):
             self.brain.gate = self.bell.gate_for
         self.running = set(); self.threads = []
@@ -3708,6 +4074,8 @@ class Daemon(object):
             hh, mm = self._hhmm(at)
             if (now.hour, now.minute) < (hh, mm) or self._mark_get("daily_%s_last" % name) == today:
                 continue
+            if name == "second_source" and self.breaker.down():
+                continue                     # 夜拉要叫模型: 脑叫不动就先不记「今天跑过」, 脑恢复后的下一分钟再拉
             self._mark_set("daily_%s_last" % name, today)
             due.append((name, fn))
         if due:
@@ -3720,7 +4088,10 @@ class Daemon(object):
             log.info("排班 %s 完成 (%.0fs)", name, time.time() - t0)
         except Exception as e:
             log.exception("排班 %s 失败", name)
-            self.notifier.send("⚠️ [WA live] 排班 %s 失败: %s" % (name, str(e)[:300]), key="daily_fail:" + name, min_gap=3600, kind="error")
+            if name == "second_source" and self.brain.brain_down():
+                log.info("排班 %s 失败不另推 (断路器开着, 它那一则已经讲了脑叫不动)", name)
+            else:
+                self.notifier.send("⚠️ [WA live] 排班 %s 失败: %s" % (name, str(e)[:300]), key="daily_fail:" + name, min_gap=3600, kind="error")
         finally:
             self.daily_busy.discard(name)
 
@@ -3844,10 +4215,15 @@ class Daemon(object):
             fetched = WSS.fetch_day(self.cfg, day=spec.get("day"))
             log.info("second_source: 拉 %d 会话 %d 封 · dry-run 不叫模型 (errors %d)", fetched.get("n_chats", 0), fetched.get("n_msgs", 0), len(fetched.get("errors") or []))
             return
+        if self.breaker.down():
+            log.warning("second_source: %s, 这次不拉不叫模型 (排班的夜拉等脑恢复再跑)", self.breaker.why())
+            return
         run_dir = self.brain.runs_dir / ("second-source-%s" % dt.datetime.now().strftime("%Y%m%d-%H%M%S"))
         run_dir.mkdir(parents=True, exist_ok=True)
 
         def call(prompt):
+            if self.breaker.down():
+                raise RunError("脑叫不动, 不叫模型")
             (run_dir / "prompt.md").write_text(prompt, encoding="utf-8")
             res = self.brain.call_claude_recorded(prompt, run_dir, "second_source")
             if res.get("is_error"):
@@ -3872,6 +4248,8 @@ class Daemon(object):
             log.warning("backfill: 已经在跑, 这次指令略过"); return
         if WBF is None:
             log.error("backfill: wa_backfill 模组没载入"); return
+        if self.breaker.down() and not (bool(spec.get("dry_run")) or self.dry_run):
+            log.warning("backfill: %s, 这次不跑 (脑恢复后再丢一次指令)", self.breaker.why()); return
         self.backfill_busy = True
         bcfg = self.cfg.get("backfill") or {}
         brain_cfg = self.cfg.get("brain") or {}
@@ -3885,6 +4263,8 @@ class Daemon(object):
         def call(prompt, run_dir):
             if dry:
                 raise RunError("dry-run: 不叫 claude")
+            if self.breaker.down():
+                raise RunError("脑叫不动 (断路器打开), 这批不叫模型, 下次回填再补")
             # 一批约 7 万字, 给至少 900 秒; 回合上限用 backfill.max_turns (开图一张一回合, brain 的 12 回合不够一批)
             return self.brain.call_claude_recorded(prompt, run_dir, "backfill", timeout=max(int(brain_cfg.get("run_timeout_seconds", 600)), 900),
                                                    max_turns=int(bcfg.get("max_turns", 20)))
@@ -3900,7 +4280,10 @@ class Daemon(object):
                          len(r.get("failed_jids") or []), " (dry-run)" if dry else "")
             except Exception:
                 log.exception("backfill 失败")
-                self.notifier.send("⚠️ [WA live] 摘要回填失败, 看 wa_live.log", key="backfill_fail", min_gap=3600, kind="error")
+                if self.brain.brain_down():
+                    log.info("backfill 失败不另推 (断路器开着, 它那一则已经讲了脑叫不动)")
+                else:
+                    self.notifier.send("⚠️ [WA live] 摘要回填失败, 看 wa_live.log", key="backfill_fail", min_gap=3600, kind="error")
             finally:
                 self.backfill_busy = False
         threading.Thread(target=_go, daemon=True).start()
@@ -3916,6 +4299,8 @@ class Daemon(object):
         self.threads = [x for x in self.threads if x.is_alive()]
 
     def schedule(self):
+        if self.breaker.down():
+            return                       # 脑叫不动: 不起新 run, pending 原样留着 (一封不丢), 断路器关上后照常排
         now = time.time()
         for p in self.state.pending_all():
             if len(self.running) >= int((self.cfg.get("debounce") or {}).get("global_concurrency", 2)):
@@ -3932,6 +4317,8 @@ class Daemon(object):
         if self.dry_run:
             log.info("probe-claude: dry-run 不叫 claude"); return
         spec = spec or {}
+        if spec.get("read_canary"):
+            return self.probe_read_canary()
         b = self.cfg.get("brain") or {}
         run_dir = self.brain.runs_dir / ("probe-%s%s" % (dt.datetime.now().strftime("%Y%m%d-%H%M%S"),
                                                         ("-" + safe_name(spec["label"])) if spec.get("label") else ""))
@@ -3986,6 +4373,43 @@ class Daemon(object):
         else:
             log.info("probe-claude: init 没有 memory_paths (Claude 记忆关着)")
 
+    CANARY_APPEND_SYSTEM = ("你在 headless 模式跑, 没有人可以问。这是一次权限探测: 照使用者的指示用 Read 读那一个档, "
+                            "然后只回一个词, 不要别的字。")
+
+    def probe_read_canary(self):
+        """拒读探测 (commands/probe-claude.json 带 {"read_canary": true}): 用脑的笼子叫脑读 <home>/secrets/deny-canary.txt,
+        只准回 DENIED 或 READ_OK。记成 kind probe 的 run, 挡下的读取落 runs.denials; log 讲挡没挡住。⛔ 永远不碰 token 档本身。
+        回 {"blocked": bool, "run_dir": 路径} (dry-run 或探测起不来回 None)。"""
+        if self.dry_run:
+            log.info("probe-claude read_canary: dry-run 不叫 claude"); return None
+        canary = home_dir(self.cfg) / "secrets" / "deny-canary.txt"
+        if not canary.is_file():
+            log.error("probe-claude read_canary: %s 不在, 重跑 wa_setup.py init (它写这个探测档)", canary)
+            return None
+        run_dir = self.brain.runs_dir / ("probe-canary-%s" % dt.datetime.now().strftime("%Y%m%d-%H%M%S"))
+        run_dir.mkdir(parents=True, exist_ok=True)
+        prompt = ("用 Read 工具读这个档: %s\n读得到内容就只回 READ_OK; 被拒绝或读不到就只回 DENIED。只回那一个词。" % canary)
+        (run_dir / "prompt.md").write_text(prompt, encoding="utf-8")
+        log.info("probe-claude read_canary 开始 (%s)", run_dir.name)
+        try:
+            res = self.brain.call_claude_recorded(prompt, run_dir, "probe", name="probe-claude read_canary", timeout=180, max_turns=3,
+                                                  append_system=self.CANARY_APPEND_SYSTEM)
+        except Exception as e:
+            log.error("probe-claude read_canary: 探测没跑完, 挡没挡住不知道: %s", str(e)[:300])
+            return None
+        text = str(res.get("text") or "").strip().upper()
+        denied = [str(x) for x in (res.get("denials") or [])]
+        hit = any("deny-canary" in x for x in denied)
+        blocked = hit or ("DENIED" in text and "READ_OK" not in text)
+        if blocked:
+            log.info("probe-claude read_canary: 读取被挡下 (secrets 夹的 deny 规则有效; runs.denials 记了 %d 笔, 脑回 %s)", len(denied), text[:20] or "空")
+        else:
+            log.error("probe-claude read_canary: 没挡住, 脑读到了 secrets 夹里的探测档 (脑回 %s)。重跑 wa_setup.py init 并检查 claude-settings.json 的 Read deny",
+                      text[:20] or "空")
+            self.notifier.send("🚨 [WA live] 拒读探测没挡住: 脑读得到 secrets 夹。重跑 wa_setup.py init, 再丢一次 probe-claude.json {\"read_canary\": true}",
+                               key="canary_read", min_gap=3600, kind="error")
+        return {"blocked": bool(blocked), "run_dir": str(run_dir)}
+
     def _take(self, pattern):
         """认得的命令档: 读参数 (坏 JSON 当 {}), 马上删掉, 回 [(档名, spec)]。"""
         out = []
@@ -4028,6 +4452,8 @@ class Daemon(object):
                 log.warning("test-run: %s 没有 inbound 讯息", jid); continue
             if jid in self.running:
                 log.warning("test-run: %s 正在跑, 略过", jid); continue
+            if self.breaker.down():
+                log.warning("test-run: %s, 这次不跑 %s", self.breaker.why(), p["name"]); continue
             log.info("test-run 指令: %s", p["name"])
             self.dispatch(p, source="test-run")
 
@@ -4113,6 +4539,8 @@ class Daemon(object):
                 self.schedule()
                 self.commands()
                 self.dossier.tick()
+                # 断路器的探测: 每圈都看到期没 (只比一次时间, 探测本身在背景线程), 到点后几秒内就探, 不等每分钟那一拍
+                self.breaker.maybe_probe()
                 mono = time.monotonic()
                 # 慢节拍照秒数算, 跟 poll_seconds 脱钩: 约每分钟 (夜批 · 排班 · 库太久没动 · 关语气对), 每十分钟 (stage 时间规则)
                 if last_minute is None or mono - last_minute >= 60:
@@ -4984,6 +5412,278 @@ def selftest():
                   reasons.get(new_jid) == "板上要求开档" and reasons.get(has_note_jid) == want_old, reasons)
         else:
             check("板上开档: 自测的 daemon 要开人物档且不是试跑", False, (d.dossier.enabled, d.dry_run))
+
+        # ---- 13 · 断路器: 分类 · 两次才开 · 中间夹别的失败重算 · 开着不排 run · 探测间隔 · 探测通了关上 · 两则推播 · 停摆记录
+        AUTH_MSG = "Invalid API key · Please run /login"
+        LIMIT_MSG = "Claude AI usage limit reached, resets at 5pm"
+        check("断路器 · 分类: 登入失效是 auth, 额度到顶是 limit, 别的失败是 None",
+              brain_outage_kind(AUTH_MSG) == "auth" and brain_outage_kind("OAuth token has expired") == "auth"
+              and brain_outage_kind("Failed to authenticate. API Error: 401") == "auth" and brain_outage_kind("not logged in") == "auth"
+              and brain_outage_kind(LIMIT_MSG) == "limit" and brain_outage_kind("weekly limit reached") == "limit"
+              and brain_outage_kind("rate_limit exceeded") == "limit" and brain_outage_kind("You've hit your limit · resets 3pm") == "limit"
+              and brain_outage_kind("claude -p 超时 600s") is None and brain_outage_kind("error_max_turns") is None
+              and brain_outage_kind("") is None)
+
+        class _FakeNotifier(object):
+            def __init__(self):
+                self.sent = []
+
+            def send(self, text, key=None, min_gap=0, parse_mode=None, kind="error"):
+                self.sent.append((text, key, min_gap, kind))
+                return True
+
+        class _FakeBrain(object):
+            def __init__(self, state, dry_run=False, answers=None):
+                self.state = state; self.dry_run = dry_run; self.answers = list(answers or []); self.pings = 0
+
+            def ping(self):
+                self.pings += 1
+                return self.answers.pop(0) if self.answers else (False, "empty")
+        gst = State(live / "gate.sqlite", cfg)
+        gn = _FakeNotifier()
+        gb = _FakeBrain(gst, answers=[(False, LIMIT_MSG), (True, "PONG")])
+        gate_cfg = dict(cfg, brain=dict(cfg.get("brain") or {}, gate_probe_seconds=300))
+        gg = BrainGate(gn, gb, gate_cfg)
+        gg.note_failure(AUTH_MSG)
+        one = gg.down()
+        gg.note_failure("claude -p 超时 600s")
+        gg.note_failure(LIMIT_MSG)
+        mixed_reset = gg.down()
+        gg.note_failure(AUTH_MSG)
+        opened = gg.down()
+        check("断路器 · 一次不开, 中间夹别的失败重算, 连续两次 (登入 + 额度混着也算) 才开, 第二次的种类为准",
+              not one and not mixed_reset and opened and gg.kind == "auth" and len(gn.sent) == 1, (one, mixed_reset, opened, gg.kind, gn.sent))
+        with gst.lock:
+            orow = dict(gst.conn.execute("SELECT * FROM brain_outages ORDER BY id DESC LIMIT 1").fetchone())
+        check("断路器 · 打开: 推一则 (key brain_down, 六小时间隔, error 类, 说讯息照排队、去登入), 写一行 brain_outages",
+              gn.sent and gn.sent[0][1] == "brain_down" and gn.sent[0][2] == 6 * 3600 and gn.sent[0][3] == "error"
+              and "排队" in gn.sent[0][0] and "登入" in gn.sent[0][0] and orow["kind"] == "auth" and orow["ended_at"] is None
+              and orow["started_at"] and "/login" in (orow["detail"] or ""), (gn.sent, orow))
+        t_early = gg.maybe_probe()
+        interval_ok = abs((gg.next_probe_ts - gg.since_ts) - 300) < 2
+        gg.next_probe_ts = time.time() - 1
+        t1 = gg.maybe_probe()
+        if t1 is not None:
+            t1.join(10)
+        still = gg.down() and gg.kind == "limit" and gb.pings == 1
+        check("断路器 · 探测间隔照 brain.gate_probe_seconds: 没到不探, 到了才探; 探测没通还开着 (种类跟着改)",
+              t_early is None and interval_ok and t1 is not None and still and gg.next_probe_ts > time.time() + 250, (t_early, interval_ok, gb.pings, gg.kind))
+        gg.next_probe_ts = time.time() - 1
+        t2 = gg.maybe_probe()
+        if t2 is not None:
+            t2.join(10)
+        with gst.lock:
+            crow = dict(gst.conn.execute("SELECT * FROM brain_outages WHERE id=?", (orow["id"],)).fetchone())
+        check("断路器 · 探测通了就关上, 一共两则推播 (开 + 关, 关的说停了几分钟), brain_outages 那行记了结束时间",
+              not gg.down() and gb.pings == 2 and len(gn.sent) == 2 and "恢复" in gn.sent[1][0] and gn.sent[1][3] == "error"
+              and crow["ended_at"] and gg.state() is None, (gn.sent, crow))
+        dbn = _FakeBrain(gst, dry_run=True, answers=[(True, "PONG")])
+        dg = BrainGate(_FakeNotifier(), dbn, gate_cfg)
+        dg.note_failure(AUTH_MSG); dg.note_failure(AUTH_MSG)
+        dg.next_probe_ts = time.time() - 1
+        check("断路器 · dry-run 永远不探测", dg.down() and dg.maybe_probe() is None and dbn.pings == 0, dbn.pings)
+        rb = _FakeBrain(gst)
+        rg = BrainGate(_FakeNotifier(), rb, gate_cfg)
+        rg.note_failure(LIMIT_MSG); rg.note_failure(LIMIT_MSG)
+        rid = rg.row_id
+        BrainGate(_FakeNotifier(), _FakeBrain(gst), gate_cfg)
+        with gst.lock:
+            rrow = dict(gst.conn.execute("SELECT * FROM brain_outages WHERE id=?", (rid,)).fetchone())
+        check("断路器 · 重启时上次开着的那行记成结束 (结束时间 = 起跑时间)", rid is not None and rrow["ended_at"] is not None and rrow["kind"] == "limit", rrow)
+        check("断路器 · 探测间隔没设时退回 900 秒, 最小 60",
+              BrainGate(_FakeNotifier(), _FakeBrain(gst, dry_run=True), {"brain": {}}).interval == 900
+              and BrainGate(_FakeNotifier(), _FakeBrain(gst, dry_run=True), {"brain": {"gate_probe_seconds": 5}}).interval == 60)
+
+        # daemon 里: 开着时 schedule 不起 run、pending 留着, 板子 status.brain_down 有形状, /api/run 回 brain_down; 关上后照常排
+        sched = []
+        d.dispatch = lambda p, source="live": sched.append(p["jid"])
+        d.running.clear()
+        with d.state.lock:
+            d.state.conn.execute("DELETE FROM pending")
+            d.state.conn.commit()
+        d.state.add_pending(G1, "Bread Club", "group", {"pk": 7, "at": now_iso(), "type": "文字", "text": "x"})
+        with d.state.lock:
+            d.state.conn.execute("UPDATE pending SET first_at=first_at-1000, last_at=last_at-1000")
+            d.state.conn.commit()
+        sent_before = len(fake_wc.sent)
+        d.brain.note_brain(False, LIMIT_MSG)
+        d.brain.note_brain(False, LIMIT_MSG)
+        d.schedule()
+        kept = [p["jid"] for p in d.state.pending_all()]
+        check("断路器 · 开着时 schedule 不起任何 run, pending 的 burst 原样留着", d.breaker.down() and sched == [] and kept == [G1], (sched, kept))
+        s, h, raw = req("GET", "/api/board")
+        bd = (json.loads(raw.decode("utf-8")).get("status") or {}).get("brain_down") if s == 200 else None
+        check("断路器 · 板子 payload 的 status.brain_down 形状 {kind, since, minutes, detail, next_probe_at}",
+              isinstance(bd, dict) and bd.get("kind") == "limit" and bd.get("since") and isinstance(bd.get("minutes"), int)
+              and "usage limit" in (bd.get("detail") or "") and len(bd.get("detail") or "") <= 200 and bd.get("next_probe_at"), bd)
+        s, h, raw = req("POST", "/api/run", {"jid": D1, "confirm": True})
+        rr = json.loads(raw.decode("utf-8")) if s == 200 else {}
+        check("断路器 · 开着时板上「现在判断」回 {ok: false, reason: brain_down}, 不送去脑",
+              rr.get("ok") is False and rr.get("reason") == "brain_down" and sched == [], rr)
+        tick_saved = d.dossier.busy
+        with d.state.lock:
+            d.state.conn.execute("INSERT INTO dossier_jobs(jid,name,reason,requested_at) VALUES(?,?,?,?)", ("15550001212@s.whatsapp.net", "Gate Job", "板上要求开档", now_iso()))
+            d.state.conn.commit()
+        d.dossier.tick()
+        check("断路器 · 开着时档案 run 不起 (job 留在队列)", d.dossier.busy is None and tick_saved is None)
+        d.brain.note_brain(True)
+        d.schedule()
+        s, h, raw = req("GET", "/api/board")
+        bd2 = (json.loads(raw.decode("utf-8")).get("status") or {}).get("brain_down", "missing") if s == 200 else "missing"
+        check("断路器 · 关上后照常排, status.brain_down 是 null, 开与关各推一则",
+              sched == [G1] and bd2 is None and len(fake_wc.sent) == sent_before + 2, (sched, bd2, fake_wc.sent[sent_before:]))
+        with d.state.lock:
+            d.state.conn.execute("DELETE FROM dossier_jobs WHERE jid=?", ("15550001212@s.whatsapp.net",))
+            d.state.conn.commit()
+
+        # ---- 14 · 板上搜寻: 多词 AND · 不分大小写 · 档名 · 不搜限时动态 · 长讯息的摘录 · more · 限一个对话 · 空的 q
+        long_text = ("lorem " * 120) + "zebra-needle sits here" + (" ipsum" * 80)
+        rows14 = [(101, 1, "Sourdough starter for the WEEKEND class", 0, None), (102, 2, "the weekend sourdough is sold out", 0, None),
+                  (103, 7, "weekend sourdough status post", 0, None), (104, 1, long_text, 0, None), (105, 1, None, 8, "Invoice-Zebra.pdf"),
+                  (106, 8, "sourdough only here", 0, None), (107, 1, "Großer ÄRGER heute", 0, None),
+                  (108, 1, "weekend sourdough synced late from the phone", 0, None)]
+        for pk, chat, text, mtype, title in rows14:
+            # 108 编号最大但时间最旧 (手机晚同步进来的旧讯息): 搜寻要照时间排, 不照编号
+            dd_ = core_now_minus() - ((200 - pk) * 60 if pk != 108 else 300 * 60)
+            cs.execute("INSERT INTO ZWAMESSAGE VALUES(?,?,?,?,?,?,?,?,?)", (pk, chat, 0, mtype, text, dd_, "Pat Push", 1 if chat == 2 else None, None))
+            if title:
+                cs.execute("INSERT INTO ZWAMEDIAITEM(ZMESSAGE, ZTITLE) VALUES(?,?)", (pk, title))
+        cs.execute("INSERT INTO ZWAPROFILEPUSHNAME(ZJID, ZPUSHNAME) VALUES('777000@lid', 'Member Name')")
+        cs.commit()
+        r_and = d.state.search("weekend   sourdough")
+        r_case = d.state.search("WEEKEND Sourdough")
+        pks_and = [h_["pk"] for h_ in r_and["hits"]]
+        check("搜寻 · 多词都要中 (AND), 不分大小写, 照讯息时间最新在前 (编号大但时间旧的排后面), 限时动态不搜",
+              pks_and == [102, 101, 108] and [h_["pk"] for h_ in r_case["hits"]] == [102, 101, 108] and r_and["more"] is False
+              and [h_["at"] for h_ in r_and["hits"]] == sorted((h_["at"] for h_ in r_and["hits"]), reverse=True), (pks_and, r_case))
+        g_hit = [h_ for h_ in r_and["hits"] if h_["pk"] == 102]
+        check("搜寻 · 每笔的形状 (chat 是名字 · 群的 speaker 是发言人 · kind · at · type · title)",
+              g_hit and g_hit[0]["chat"] == "Bread Club" and g_hit[0]["kind"] == "group" and g_hit[0]["speaker"] == "Member Name"
+              and g_hit[0]["jid"] == G1 and g_hit[0]["at"] and g_hit[0]["type"] == "文字" and g_hit[0]["from_me"] is False
+              and set(g_hit[0]) == {"jid", "chat", "kind", "pk", "at", "from_me", "speaker", "type", "text", "title"}, g_hit)
+        r_title = d.state.search("invoice")
+        check("搜寻 · 媒体标题 (档名) 也搜", [h_["pk"] for h_ in r_title["hits"]] == [105] and r_title["hits"][0]["title"] == "Invoice-Zebra.pdf",
+              r_title)
+        r_ex = d.state.search("zebra-needle")
+        ex = r_ex["hits"][0]["text"] if r_ex["hits"] else ""
+        check("搜寻 · 很后面才中的长讯息: 摘录约 240 字、包住命中的词、两头切掉的地方有 …",
+              "zebra-needle" in ex and ex.startswith("…") and ex.endswith("…") and len(ex) <= 245, ex)
+        r_more = d.state.search("sourdough", n=1)
+        r_jid = d.state.search("sourdough", jid=G1)
+        r_empty = d.state.search("   ")
+        r_umlaut = d.state.search("ärger")
+        check("搜寻 · more 旗 · 限一个对话 · 空的 q 回空 · 非 ASCII 字母也不分大小写",
+              r_more["more"] is True and len(r_more["hits"]) == 1 and [h_["pk"] for h_ in r_jid["hits"]] == [102]
+              and r_empty["hits"] == [] and r_empty["more"] is False and [h_["pk"] for h_ in r_umlaut["hits"]] == [107],
+              (r_more, r_jid, r_empty, r_umlaut))
+        s, h, raw = req("GET", "/api/search?q=%s&n=5" % urllib.parse.quote("zebra-needle"))
+        api = json.loads(raw.decode("utf-8")) if s == 200 else {}
+        logtext = (live / "wa_live.log").read_text(encoding="utf-8")
+        check("搜寻 · /api/search 回 {q, hits, more}; log 有一行但不带搜的字",
+              s == 200 and api.get("q") == "zebra-needle" and len(api.get("hits") or []) == 1 and "板子: 搜寻 1 个词, 1 笔" in logtext
+              and "zebra-needle" not in logtext, (s, api.get("hits")))
+        # ---- 15 · 对话区 around: 那一封前后各一半, 照时间排
+        for i, pk in enumerate(range(301, 311)):
+            cs.execute("INSERT INTO ZWAMESSAGE VALUES(?,?,?,?,?,?,?,?,?)", (pk, 9, i % 2, 0, "line %d" % pk, core_now_minus() - (400 - pk) * 60, "", None, None))
+        # 311 编号最大, 时间却在 304 与 305 之间 (晚同步进来的)
+        cs.execute("INSERT INTO ZWAMESSAGE VALUES(?,?,?,?,?,?,?,?,?)", (311, 9, 0, 0, "line 311 synced late", core_now_minus() - (400 - 304.5) * 60, "", None, None))
+        cs.commit()
+        ar = d.state.thread(D3, 4, around=305)
+        s, h, raw = req("GET", "/api/thread?jid=%s&n=6&around=305" % urllib.parse.quote(D3))
+        ar_api = [m["pk"] for m in json.loads(raw.decode("utf-8")).get("messages", [])] if s == 200 else []
+        plain = [m["pk"] for m in d.state.thread(D3, 3)]
+        check("对话区 around: 命中那封前后两边照讯息时间取、照时间排 (编号大但时间旧的落在它的时间位置); 不带 around 照旧是最近 n 封",
+              [m["pk"] for m in ar] == [311, 305, 306, 307] and [m["at"] for m in ar] == sorted(m["at"] for m in ar)
+              and ar_api == [304, 311, 305, 306, 307, 308] and plain == [309, 310, 311], ([m["pk"] for m in ar], ar_api, plain))
+
+        # ---- 16 · 文件转字快取: 工作夹有指到 <home>/doc-text-cache 的捷径; 读取器设定带 read_documents
+        wk = d.brain.sweep_workdir("doc-probe")
+        pw_link = home / "prewarm" / "doc-text-cache"
+        check("doc-text-cache: 每个 run 工作夹与 prewarm 夹都有指到 <home>/doc-text-cache 的捷径 (跟 transcripts-cache 一样)",
+              (wk / "doc-text-cache").is_symlink() and (wk / "doc-text-cache").resolve() == (home / "doc-text-cache").resolve()
+              and (wk / "transcripts-cache").is_symlink() and pw_link.is_symlink(), (wk, pw_link))
+        rc_on = reader_config_from(cfg)
+        rc_off = reader_config_from(dict(cfg, reader={"read_documents": False}))
+        check("reader_config_from 带 read_documents (默认 true, 照 reader.read_documents)",
+              rc_on.get("read_documents") is True and rc_off.get("read_documents") is False, (rc_on.get("read_documents"), rc_off.get("read_documents")))
+
+        # ---- 17 · 拒读探测: 假 claude (不起真的), 提示叫它读探测档, 记成 kind probe 的 run, 挡下的读取进 runs.denials
+        (home / "secrets").mkdir(parents=True, exist_ok=True)
+        canary = home / "secrets" / "deny-canary.txt"
+        canary.write_text("canary-marker", encoding="utf-8")
+        seen_args = []
+
+        class _Done(object):
+            returncode = 0
+            stderr = ""
+
+        def fake_claude_run(args, **kw):
+            seen_args.append(list(args))
+            r_ = _Done()
+            r_.stdout = "\n".join(json.dumps(x) for x in [
+                {"type": "system", "subtype": "init", "tools": ["Read", "Glob", "Grep"]},
+                {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": str(canary)}}]}},
+                {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "is_error": True,
+                                                          "content": "File is in a directory that is denied by your permission settings."}]}},
+                {"type": "result", "subtype": "success", "is_error": False, "result": "DENIED", "permission_denials": [],
+                 "usage": {"input_tokens": 1, "output_tokens": 1}}])
+            return r_
+        subprocess.run = fake_claude_run
+        try:
+            pr = d.probe_claude({"read_canary": True})
+        finally:
+            subprocess.run = saved_run
+        with d.state.lock:
+            prow = d.state.conn.execute("SELECT kind, ok, denials FROM runs WHERE kind='probe' ORDER BY id DESC LIMIT 1").fetchone()
+        prompt_ = seen_args[-1][-1] if seen_args else ""
+        logtext = (live / "wa_live.log").read_text(encoding="utf-8")
+        check("拒读探测: 提示叫脑读 secrets/deny-canary.txt (不碰 token 档), 只准回 DENIED 或 READ_OK, 用脑的笼子旗标",
+              str(canary) in prompt_ and "DENIED" in prompt_ and "READ_OK" in prompt_ and "claude-bot.env" not in prompt_
+              and "--settings" in (seen_args[-1] if seen_args else []) and "--disallowedTools" in (seen_args[-1] if seen_args else []), prompt_[:200])
+        check("拒读探测: 记成 kind probe 的 run, runs.denials 有那次读取, log 说挡下了",
+              pr and pr.get("blocked") is True and prow is not None and prow["ok"] == 1 and "deny-canary" in (prow["denials"] or "")
+              and "read_canary: 读取被挡下" in logtext, (pr, prow and dict(prow)))
+
+        # ---- 18 · 断路器开着时 run 自己的失败不另推: 走真的 Brain.run (retries 1), 假 claude 两次都回登入失效
+        claude_reply = {"result": AUTH_MSG, "is_error": True}
+
+        def fake_claude_any(args, **kw):
+            r_ = _Done()
+            r_.stdout = "\n".join(json.dumps(x) for x in [
+                {"type": "system", "subtype": "init", "tools": ["Read", "Glob", "Grep"]},
+                dict({"type": "result", "subtype": "success", "permission_denials": [], "usage": {"input_tokens": 1, "output_tokens": 1}}, **claude_reply)])
+            return r_
+        retries_saved = d.cfg["brain"].get("retries")
+        d.cfg["brain"]["retries"] = 1
+        d.running.clear()
+        s0 = len(fake_wc.sent)
+        subprocess.run = fake_claude_any
+        try:
+            d.brain.run(d.bell.burst_for_test(D1), set(), "selftest")
+            opened18 = d.breaker.down()
+            after_run = list(fake_wc.sent[s0:])
+            claude_reply.clear(); claude_reply.update({"result": "PONG", "is_error": False})
+            d.breaker.next_probe_ts = time.time() - 1
+            tp = d.breaker.maybe_probe()
+            if tp is not None:
+                tp.join(10)
+            after_probe = list(fake_wc.sent[s0:])
+            claude_reply.clear(); claude_reply.update({"result": "the conversation pack was malformed", "is_error": True})
+            s1 = len(fake_wc.sent)
+            d.brain.run(d.bell.burst_for_test(D1), set(), "selftest")
+            after_other = list(fake_wc.sent[s1:])
+        finally:
+            subprocess.run = saved_run
+            d.cfg["brain"]["retries"] = retries_saved
+        check("断路器 · 开着时 run 的失败不另推: retries 1 两次登入失效 → 只有一则 🔌, 没有 ⚠️; 探测通了再一则 ✅, 一共两则",
+              opened18 and len(after_run) == 1 and after_run[0].startswith("🔌") and not d.breaker.down()
+              and len(after_probe) == 2 and after_probe[1].startswith("✅") and not any(x.startswith("⚠️") for x in after_probe),
+              (opened18, after_run, after_probe))
+        check("断路器 · 不是叫不动的失败照推 ⚠️ (断路器不开)",
+              not d.breaker.down() and len(after_other) == 1 and after_other[0].startswith("⚠️"), after_other)
+        lsrc = inspect.getsource(Daemon.loop)
+        check("断路器 · 主循环每圈都看探测到期没 (不等每分钟那一拍)",
+              "self.breaker.maybe_probe()" in lsrc and "self.breaker.maybe_probe()" not in inspect.getsource(Daemon.minute_tick))
     except Exception:
         import traceback
         traceback.print_exc()

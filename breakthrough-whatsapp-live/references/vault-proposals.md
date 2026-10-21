@@ -348,7 +348,7 @@ It belongs to the morning entry only, like the other doorbells in that list.
 
 ## f · Registry entries
 
-**Where.** In the owner's machine registry note if they keep one (a note listing every resident program on every machine, for example `99_Meta/machine-installs.md`); otherwise in `<home>/INSTALLED.md`. Each resident job gets its own entry, and a capability added to the daemon later gets a short addition under the daemon's entry.
+**Where.** In the owner's machine registry note if they keep one (your machine registry note: one note listing every resident program on every machine); otherwise in `<home>/INSTALLED.md`. Each resident job gets its own entry, and a capability added to the daemon later gets a short addition under the daemon's entry.
 
 **When.** At install, by the session that installs, in the same act as the install: a job installed without its entry is how a machine ends up running something nobody can stop (`references/pitfalls.md`, pit 6). The six cells come from the resident-workers playbook (read · write · limits · stop · proof · rollback); a cell nobody can fill is a hole to fix before the job runs. **Stop** must hold across a reboot. **Proof** must be something read back from outside, never an exit code. Write the Mac's own name in each entry, never "this machine": a registry that syncs to other machines turns "this" into a false statement there. Write the cells in the owner's language.
 
@@ -358,11 +358,19 @@ It belongs to the morning entry only, like the other doorbells in that list.
 Mac: <the Mac's name> · plist ~/Library/LaunchAgents/<label>.plist · node <bin.node> runs <home>/launchd/run.mjs, which runs python with <KIT>/daemon/wa_live.py
 code: wa_live.py sha256 <shasum -a 256 of it> · VERSION <x> · recorded <date> (refreshed after every update)
 read: WhatsApp Desktop's database and media, read only, checked every doorbell.poll_seconds · <live>/config.json · the vault notes topic-map.json points at, and person notes of people named in a chat · <live>/facts.json · the reader's working copies under <home>/runs-work/
-write: <home>/ (runs-work, transcripts-cache, prewarm) · <live>/ (state.sqlite, summaries.md, runs/, digest/, logs, calendar/) · the vault: recent lines in existing person notes, intake buffer entries when intake.enabled is true, filing-log lines (the person note writer below adds whole notes) · pushes through notify.outlet · never WhatsApp, never a message sent
+write: <home>/ (runs-work, transcripts-cache, doc-text-cache, prewarm) · <live>/ (state.sqlite, summaries.md, runs/, digest/, logs, calendar/) · the vault: recent lines in existing person notes, intake buffer entries when intake.enabled is true, filing-log lines (the person note writer below adds whole notes) · pushes through notify.outlet · never WhatsApp, never a message sent
 limits: debounce 45 s quiet, 180 s at most · 2 runs at once, 1 per conversation · 600 s per run, 1 retry, 12 turns · tools Read, Glob, Grep with the cage check · Read denied on secrets · board on 127.0.0.1:<port> only
 stop: wa_setup.py uninstall-launchd --config <live>/config.json boots the job out, then stops any python of this install left running, disables it and removes its plist, so it stays stopped after a reboot (install-launchd brings it back); a raw launchctl bootout is not a stop, it can leave a frozen python holding the board port · remove the board's tailscale serve rule · leaves no half state: bursts in progress run again at the next start, and a person note job cut off is marked failed at start
 proof: curl -s http://127.0.0.1:<port>/health answers 200 with a body starting ok (503 stalled means the main loop is frozen) · after a restart, wa_setup.py restart ends with proof: one daemon · launchctl print gui/$(id -u)/<label> shows state = running · a test message produces a new row in the runs table and a row on the board · the morning digest arrives (silence is not proof)
 rollback: wa_setup.py uninstall-launchd, then remove <home> (install/uninstall.md) · a person note restored from <live>/dossier-backups/<note>/ · an intake entry removed by hand
+```
+
+**Only when the daemon runs on a setup token** (`install/C2-daemon.md`, step 12), the daemon's entry carries a seventh cell, and its `stop` and `rollback` cells gain one clause each:
+
+```
+expires: the setup token in <home>/secrets/claude-bot.env, made <date>, renew by <renewal date, about a year later> · renew: claude setup-token in the owner's own terminal, the new token written into that file with a text editor, then probe-claude.json · never the token itself in this note
+stop (add): set bin.claude back to its previous value (recorded at install, usually <auto>), then wa_setup.py render-launchd and follow its next: line (install-launchd, or restart when nothing is to reinstall) to leave the token unused
+rollback (add): bin.claude back to its previous value, render-launchd and follow its next: line, delete <home>/secrets/claude-bot.env and <home>/bin/claude-bot, revoke the token from the Claude account
 ```
 
 ### The evening intake job (`<intake_label>`), installed only when `intake.evening_push` is true

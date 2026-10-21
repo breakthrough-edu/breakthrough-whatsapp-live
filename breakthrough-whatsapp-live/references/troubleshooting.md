@@ -84,31 +84,43 @@ A push `⚠️ [WA live] 水位 <old> 比 WhatsApp 库最大编号 <max> 还大 
 
 ## Runs are stuck with zero output
 
-A `run #<id> 开始` with no `完成` for many minutes, or failures that say nothing was produced.
+A `run #<id> 开始` with no `完成` for many minutes, failures that say nothing was produced, or messages that pass the gate and wait without a run.
 
-1. **What did the run say?**
+1. **Is the brain down?** When two model calls in a row fail because Claude cannot be called (the login expired, or the usage limit is reached), the daemon opens its circuit breaker: it starts no new runs until a probe answers again, so every message in the meantime would otherwise turn into a failed run of its own.
+   ```sh
+   curl -s "http://127.0.0.1:$PORT/api/board" | "$PY" -c 'import json, sys; print(json.load(sys.stdin)["status"].get("brain_down"))'
+   grep -e "断路器" "$LIVE/wa_live.log" | tail -4
+   sqlite3 -readonly "$LIVE/state.sqlite" "select id, kind, started_at, ended_at, substr(detail, 1, 80) from brain_outages order by id desc limit 3"
+   ```
+   - `None`, no open `brain_outages` row (`ended_at` filled on every row): the brain answers; go to check 2.
+   - An object `{'kind': ..., 'since': ..., 'minutes': ..., 'detail': ..., 'next_probe_at': ...}`, the board's banner (`The brain cannot log in to Claude` or `Claude usage limit reached`; in Chinese `脑登不进 Claude` or `Claude 用量到顶了`), a log line `断路器打开: 脑叫不动 (<登入失效|额度到顶>, 连续 <n> 次)。新的 run 暂停, 待判的讯息留在队列; 每 <s> 秒探测一次。原因: <reason>`, and a row with an empty `ended_at`: the breaker is open. `detail` is the start of the failure Claude reported.
+   - `kind` `auth` (登入失效, the login expired or was refused): open Claude Code in the terminal on this Mac itself (not over ssh) and log in once. When `bin.claude` points at the setup token wrapper (`wa_setup.py doctor` prints `authentication: setup token through ...`), the token expired or was revoked instead: the owner runs `claude setup-token` in their own terminal and writes the new token into `<home>/secrets/claude-bot.env`, never into a chat (`install/C2-daemon.md`, step 12). No restart is needed either way.
+   - `kind` `limit` (额度到顶, the usage limit is reached): wait. The daemon probes every `brain.gate_probe_seconds` (900 by default) with the smallest possible call, and `next_probe_at` says when the next one is (it fires at or shortly after that time). A probe that still fails logs `断路器: 探测还是不通 (<why>), <s> 秒后再探`.
+   - Either way, pending messages stay queued and nothing is dropped. When a probe answers, the log says `断路器关上: 脑恢复了 (停了 <n> 分钟, <登入失效|额度到顶>), 排队的讯息接着判`, the banner disappears, the queued bursts run, and the phone gets a second push (`✅ [WA live] 脑恢复了, 停了 <n> 分钟。…`). The opening push (`🔌 [WA live] 脑叫不动了: …`) and that one are the only two pushes an outage sends.
+   - To see the error now instead of waiting for the next probe: `echo '{}' > "$LIVE/commands/probe-claude.json"` (one tiny model call; the breaker does not hold this command back) and read `stderr.txt` in the newest `runs/probe-*` folder.
+2. **What did the run say?**
    ```sh
    grep -e "开始" -e "失败" -e "超时" "$LIVE/wa_live.log" | tail -6
    ```
-   - `claude -p 超时 <n>s (半途输出 0 字, 看 claude.stdout.jsonl)`: claude produced nothing; go to check 2.
+   - `claude -p 超时 <n>s (半途输出 0 字, 看 claude.stdout.jsonl)`: claude produced nothing; go to check 3.
    - `wa_sweep 超时 <n>s (语音多的对话第一次要转很久; 先丢 commands/prewarm-<days>.json 把快取喂饱)`: the reader is transcribing a voice-heavy chat for the first time. `echo '{}' > "$LIVE/commands/prewarm-7.json"`, wait for `prewarm 完成`, then Judge now.
-   - `claude -p 没有回 result (rc=<rc>): <tail>`: the tail names it (a usage limit, a login problem, a crash).
+   - `claude -p 没有回 result (rc=<rc>): <tail>`: the tail names it (a usage limit, a login problem, a crash). Two of those in a row for a limit or a login open the breaker (check 1).
    - `claude 回 is_error: <text>`: claude answered with an error; the text names it.
-2. **Can claude answer from launchd at all?**
+3. **Can claude answer from launchd at all?**
    ```sh
    echo '{}' > "$LIVE/commands/probe-claude.json"
    ```
    A minute later: `grep "probe-claude 结束" "$LIVE/wa_live.log" | tail -1`, and `ls` of the newest `runs/probe-*` folder.
    - `rc=killed after 90s` and a `sample.txt` whose stack sits in `__open`: the node binary launchd starts lacks Full Disk Access, so every child hangs on a privacy prompt nobody can answer (`references/pitfalls.md`, pit 1). `plutil -extract ProgramArguments.0 raw ~/Library/LaunchAgents/$LABEL.plist` names the binary; the owner grants it in System Settings, Privacy & Security, Full Disk Access; `"$PY" "$KIT/daemon/wa_setup.py" restart --config "$LIVE/config.json"`; probe again. A node upgrade changes the path, so the grant must be given again.
    - `stderr.txt` names a login problem: log in to Claude Code in the terminal on the Mac itself, then probe again.
-   - `rc=0` in a few seconds: claude is fine; the stall is in the reader (check 3) or the run's size.
-3. **Are children hanging?**
+   - `rc=0` in a few seconds: claude is fine; the stall is in the reader (check 4) or the run's size.
+4. **Are children hanging?**
    ```sh
    ps -A -o pid,etime,%cpu,command | grep -e "claude -p" -e ffmpeg -e whisperkit -e wa_sweep.py | grep -v grep
    ```
-   `ffmpeg`, `whisperkit-cli` or `claude` minutes old at 0% CPU is the same privacy stall as check 2.
-4. **Is the working folder in a protected place?** A log line `brain.cwd 在 ~/<folder> 底下 (<path>): launchd 底下的 claude 开 TCC 保护的夹会卡死, 换到家目录下的一个空夹` means `brain.cwd` sits under Documents, Desktop or Downloads. Point it at an empty folder under the home folder (the default `<home>/brain-cwd`) and restart.
-5. **Is the cage file there?** `claude-settings.json 不在 (<path>): 先跑 wa_setup.py init 渲染, 不然每个 run 都会失败` means every run fails at once: `"$PY" "$KIT/daemon/wa_setup.py" init --config "$LIVE/config.json"` renders it without overwriting anything else.
+   `ffmpeg`, `whisperkit-cli` or `claude` minutes old at 0% CPU is the same privacy stall as check 3.
+5. **Is the working folder in a protected place?** A log line `brain.cwd 在 ~/<folder> 底下 (<path>): launchd 底下的 claude 开 TCC 保护的夹会卡死, 换到家目录下的一个空夹` means `brain.cwd` sits under Documents, Desktop or Downloads. Point it at an empty folder under the home folder (the default `<home>/brain-cwd`) and restart.
+6. **Is the cage file there?** `claude-settings.json 不在 (<path>): 先跑 wa_setup.py init 渲染, 不然每个 run 都会失败` means every run fails at once: `"$PY" "$KIT/daemon/wa_setup.py" init --config "$LIVE/config.json"` renders it without overwriting anything else.
 
 ## Voice notes have no transcript
 
@@ -345,14 +357,14 @@ A minute later: `grep "probe-claude: " "$LIVE/wa_live.log" | tail -1`, and `clau
 
 - `probe-claude: MEMORY LOADED, init 带 memory_paths <paths>: Claude 记忆没关掉` (memory was not switched off): confirmed. Report it upstream with the Claude Code version and that one line (never the contents of the memory files). Until a fixed kit ships, watch for runs failing with `error_max_turns`.
 - `probe-claude: init 没有 memory_paths (Claude 记忆关着)` (memory is off): the probe is clean, so the warning came from a process still running older code. Restart with `wa_setup.py restart` and check that the newest start line names the current version.
-- `probe-claude: 没有 init 事件, 记忆开关查不到` (no init event, so the switch cannot be read): claude did not start properly; see "Runs are stuck with zero output", check 2.
+- `probe-claude: 没有 init 事件, 记忆开关查不到` (no init event, so the switch cannot be read): claude did not start properly; see "Runs are stuck with zero output", check 3.
 
 ## Known limits
 
 What this version does not do, so nobody hunts for a bug that is a boundary.
 
 - **Usage from two paths is not in the `runs` table**: the evening intake pre-sort's model call, and `wa_backfill.py --run` from the terminal. A terminal backfill also rewrites `live/summaries.md` without the gate filter until the daemon's next run rewrites it. Use the `backfill-summaries.json` command file instead.
-- **`live/runs/` is never cleaned**, and neither are `<home>/runs-work/` and `<home>/transcripts-cache/` (`references/operating.md`, "Housekeeping").
+- **`live/runs/` is never cleaned**, and neither are `<home>/runs-work/`, `<home>/transcripts-cache/` and `<home>/doc-text-cache/` (`references/operating.md`, "Housekeeping").
 - **Nothing technical stops two Macs from running at once.** The rule lives in the runbook and in `uninstall-launchd`; a standby that was installed and not uninstalled comes back at its next login.
 - **The board has no login.** The tailnet is its only lock; anyone in the tailnet can open it (`references/privacy.md`).
 - **Board buttons and `test-run` skip the concurrency limit**: Judge now, Full re-judge and `test-run.<jid>.json` start at once, beyond `debounce.global_concurrency` (only a run already going on that same chat holds them back).
@@ -364,9 +376,11 @@ What this version does not do, so nobody hunts for a bug that is a boundary.
 - **The age gate covers only messages older than `doorbell.max_message_age_hours` (48)**: after WhatsApp Desktop links again, the last two days of synced history can be judged once.
 - **Times are local clock strings.** Around a daylight saving change or a move to another time zone, ordering and "yesterday" can be off by the size of the shift.
 - **WhatsApp Desktop's database is undocumented.** An app update can change its shape; `doctor`'s `message table readable` line and a reader run are the first place it shows.
-- **Media WhatsApp Desktop did not download is a gap**, counted in every pack and never fetched from the phone; documents are listed, not shown inline.
+- **Media WhatsApp Desktop did not download is a gap**, counted in every pack and never fetched from the phone. The board lists documents by name and does not show them inline; their text reaches the brain through the reading pack only (Word, Excel, PowerPoint, RTF, ODT and Pages; a PDF is listed by its path for the brain to open).
 - **The backup leaves out a few files in `live/` without naming them on its never list**: the dated `config.json.bak-<time>` copies (the current config is backed up, redacted), the rotated `wa_live.log.<n>` files, and the database's `-wal` and `-shm` files, whose content the online backup already holds.
 - **Your own adapters are backed up as they are**: `live/adapters/` is copied without redaction, so a token kept in a file there lands in every backup folder.
 - **`check-config` knows your own adapter by name only**: it accepts `facts.source`, `second_source.source` or `calendar.destination` naming a file in `live/adapters/`, but reports a config block the example does not list (such as `facts.<name>`) as an unknown key; and `wa_calendar.py --probe` accepts only the shipped destinations (`references/interfaces.md`, "Where a new implementation lives").
 - **A side stage should keep the key `parked`**: the judgment rules, the time rule and the person note writer honor `side: true` on another key, but `check-config` asks for a stage keyed `parked` while `stage_rules.parked_after_days` is above 0, and the board draws only `parked` as the gray side stage.
 - **Probing `claude` over ssh gives a false `Not logged in`**; every claude probe runs on the Mac itself.
+- **The circuit breaker holds only the daemon's own model calls.** The evening intake job is a separate launchd job: on an expired login or a reached limit its pre-sort fails on its own, outside the breaker.
+- **Board search reads only what WhatsApp Desktop keeps on this Mac**: message text and file names, never voice transcripts or document text, and never status or broadcast chats.

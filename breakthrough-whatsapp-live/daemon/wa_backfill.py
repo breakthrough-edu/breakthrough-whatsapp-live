@@ -23,7 +23,8 @@ Rules:
 - "Enough messages" counts content messages only (wa_common.CONTENT_TYPES), both directions.
 - The prompt is the owner copy <live>/prompts/backfill-prompt.md; when it is missing the payload seed is used and a
   WARNING says so.
-- Opening an image costs the model one turn, and a model told "at most 4" has opened twelve. So the cap is mechanical:
+- Opening an image costs the model one turn, and a limit stated only in the prompt does not bind the model, so the cap
+  is enforced in code:
   a batch's packs keep the local path on at most backfill.max_images image or file lines (newest first, taking turns
   across the batch's chats); every other media line keeps its label and caption but loses its path. The batch runs with
   its own turn limit, backfill.max_turns, and a failed call is logged with its reason (subtype and errors when the

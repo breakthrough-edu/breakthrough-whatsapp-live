@@ -27,6 +27,7 @@ One question at a time. Before each question that names a default, read that def
 7. **What does each business sell?** (`vocab.business_context`) One paragraph written with the owner: what each business world sells, the price points, how people pay. The brain reads it on every run.
 8. **Other people's conversations** (default 7). Read the five parts and ask the owner to confirm or narrow them. Then the topic map: which vault notes answer the questions people actually ask (project briefs, SOPs, decisions, a price and link registry), and which words point at each?
 9. **A conversation for the first judgment**: one chat whose last message is from the other side, ideally one the gate passes.
+10. **Later, once the daemon runs** (step 12): should it run on its own setup token? Ask it only after step 11 and its checks pass.
 
 ## Do
 
@@ -75,7 +76,7 @@ Edit `live/topic-map.json`, the owner copy, with the Edit tool. Its example rule
 
 ### 4 · The cage
 
-`init` rendered `live/claude-settings.json`: every tool but Read, Glob and Grep denied, all hooks off, and 24 absolute Read deny rules for the push token, the config, the state database, other runs, the reader's working copies, WhatsApp's own databases, SSH keys, the keychain and credential files (the full list: `references/privacy.md`, "The Read deny rules, and why"). Check it with the Verify rows below. The proof that a deny rule really blocks on this Mac is the canary in `references/pitfalls.md`, pit 10 (one model call, run in the terminal on this Mac, never over ssh); offer it.
+`init` rendered `live/claude-settings.json`: every tool but Read, Glob and Grep denied, all hooks off, and 26 absolute Read deny rules for the push token, the config, the state database, other runs, the reader's working copies, the document text cache, the `secrets/` folder, WhatsApp's own databases, SSH keys, the keychain and credential files (the full list: `references/privacy.md`, "The Read deny rules, and why"). Check it with the Verify rows below. The proof that a deny rule really blocks on this Mac is the canary in `references/pitfalls.md`, pit 10 (one model call, run in the terminal on this Mac, never over ssh); offer it. Once the daemon runs (after step 8), `echo '{"read_canary": true}' > "$LIVE/commands/probe-claude.json"` proves the same from launchd for the `secrets/` folder, using the marker `init` wrote (one tiny model call; K333).
 
 ### 5 · The registry entry, before the install
 
@@ -159,6 +160,42 @@ This is the restart every later station uses. It stops the python child with SIG
 
 Then wait for a real message in a chat the gate passes, or ask a friend to send one. A run follows within a minute of the last message of the burst. When the owner's gate passes nothing on purpose (`direct_policy` `skip`, and no group at `all` or `mention`), no message can start a run: wait for any real inbound message instead, and check 12 reads its branch for that gate.
 
+### 12 · Optional: the daemon on its own setup token
+
+Only after step 11 and Verify checks 1 to 12 pass. Optional, and the default is no: the daemon keeps using the Claude Code login of this Mac user.
+
+**Ask.** One question: **should the daemon run on its own long lived token, so that a login that expires on the desk does not stop it?** The reason: the login Claude Code keeps for the desktop can expire or be signed out, and a background job cannot sign in again by itself, so every run fails until someone logs in on this Mac (the circuit breaker holds the queue meanwhile, and pushes once). What it costs: the owner runs `claude setup-token` once, in their own terminal, and writes the token into the file below, never into this chat (rule 9 in `SKILL.md`); and renews it before it expires, about a year later. The risk: a long lived secret on disk that can use their Claude account and shares its usage. A no is logged and nothing below runs. Only on a yes:
+
+**Do.**
+
+1. The owner, in their own terminal on this Mac, runs `claude setup-token` and keeps the token it prints on screen. Then the owner creates the file, so the token never goes on a command line:
+   ```sh
+   HOME_DIR="<paths.home from the progress file header>"
+   mkdir -p -m 700 "$HOME_DIR/secrets" && touch "$HOME_DIR/secrets/claude-bot.env" && chmod 600 "$HOME_DIR/secrets/claude-bot.env"
+   open -e "$HOME_DIR/secrets/claude-bot.env"
+   ```
+   and writes exactly one line in it, `CLAUDE_CODE_OAUTH_TOKEN=<the token>`, saves, closes the editor, and runs the `chmod 600` above once more (an editor may save a new file with a wider mode). ⛔ This session never reads, prints, pastes or asks for that file's content; it only checks its mode.
+2. Render the wrapper:
+   ```sh
+   KIT=~/.claude/skills/breakthrough-whatsapp-live; HOME_DIR="<paths.home from the progress file header>"; LIVE="$HOME_DIR/live"; PY=/usr/bin/python3
+   "$PY" "$KIT/daemon/wa_setup.py" render-claude-wrapper --config "$LIVE/config.json" --dry-run
+   "$PY" "$KIT/daemon/wa_setup.py" render-claude-wrapper --config "$LIVE/config.json"
+   ```
+   A missing file, a mode other than 600, a link, or a file without the token line is refused (exit 3) with the exact fix, and nothing is written. Writes: `<home>/bin/` (0700) and `<home>/bin/claude-bot` (0700), which loads the token file and runs the real `claude`; `bin.claude` in `live/config.json` (0600, every other key kept); `<home>/secrets/deny-canary.txt` (0600, a random marker for the deny probe), when `init` has not written it already; the reader config, refreshed. It prints `previous bin.claude: <value>` (record it: it is the way back), the proof command and the next steps; its first `next:` line says whether the plist must be rendered and installed again or a restart is enough.
+3. Reload the daemon, then probe: follow the first `next:` line `render-claude-wrapper` printed: normally `wa_setup.py render-launchd --config "$LIVE/config.json"`, then `wa_setup.py install-launchd --config "$LIVE/config.json"` (with `bin.path_env` at `<auto>` the daemon's PATH follows `bin.claude`, so the plist changes; `install-launchd` restarts the daemon), or `wa_setup.py restart --config "$LIVE/config.json"` when it says the plist does not change (the daemon reads `bin.claude` only at start). Then `echo '{}' > "$LIVE/commands/probe-claude.json"`, and once that has answered, `echo '{"read_canary": true}' > "$LIVE/commands/probe-claude.json"` (two tiny model calls).
+
+**Verify.**
+
+- The owner runs the proof command `render-claude-wrapper` printed, in their own terminal: `env -i HOME="$(mktemp -d)" PATH=/usr/bin:/bin "<home>/bin/claude-bot" auth status --json`. Pass: the answer holds `"authMethod": "oauth_token"` (a login from the Keychain cannot be seen from that empty home, so only the token can pass). (K332)
+- `"$PY" "$KIT/daemon/wa_setup.py" doctor --config "$LIVE/config.json"`. Pass: `authentication: setup token through <home>/bin/claude-bot (token file present, 0600, last changed <date>)` and no blocker. (K332)
+- The plain probe, read as check 9 below. Pass: `"is_error":false` in the newest `runs/probe-*` folder.
+- The deny probe. Pass: `probe-claude read_canary: 读取被挡下 (secrets 夹的 deny 规则有效; runs.denials 记了 <n> 笔, 脑回 DENIED)` (the read was blocked) in `$LIVE/wa_live.log`, and the newest `probe` row's `denials` names `deny-canary.txt`: `sqlite3 -readonly "$LIVE/state.sqlite" "select id, ok, denials from runs where kind = 'probe' order by id desc limit 1"`. `没挡住` fails it, with a push: run `init` again and check `live/claude-settings.json`. (K333)
+- The token appears nowhere it should not: `grep -c "sk-ant-" "$HOME_DIR/bin/claude-bot" "$LIVE/wa_live.log"` prints `0` for both. (K334)
+
+**Record.** Under `### C2 daemon`: the answer; on a yes, the previous `bin.claude` value the command printed, the date the token was made and its renewal date (about a year later), the proof's `authMethod`, the doctor line, the deny probe's line and its run id. The renewal date also goes into the daemon's registry entry as its `expires` cell (`references/vault-proposals.md`, proposal f). ⛔ Never the token, not even its first characters.
+
+To go back to the Keychain login: set `bin.claude` to the previous `bin.claude` value (the `previous bin.claude:` line `render-claude-wrapper` printed, recorded at C2 step 12; usually `<auto>`) with the config edit ritual, then `wa_setup.py render-launchd --config "$LIVE/config.json"` and follow its `next:` line (`install-launchd` when the plist changes, otherwise `wa_setup.py restart`); `references/privacy.md`, "The setup token file", says how to remove the token.
+
 ## Verify
 
 Run each probe with the station's opening block in front of it, at the point its title names: several checks read a state that later steps change. Every check must pass.
@@ -175,7 +212,7 @@ Run each probe with the station's opening block in front of it, at the point its
    ```sh
    "$PY" -c 'import json,sys,pathlib; tm=json.load(open(sys.argv[1])); print([f for r in tm["rules"] for f in r["files"] if not (pathlib.Path(sys.argv[2])/f).exists()])' "$LIVE/topic-map.json" "<vault>"
    ```
-4. **The deny rules were rendered** (step 4). Pass: two equal numbers (`24 24` in this version: the template's `Read(/{...})` rules, then the rendered `Read(//...)` rules, counted in the JSON so the file's comment is not counted), then `0`.
+4. **The deny rules were rendered** (step 4). Pass: two equal numbers (`26 26` in this version: the template's `Read(/{...})` rules, then the rendered `Read(//...)` rules, counted in the JSON so the file's comment is not counted), then `0`.
    ```sh
    "$PY" -c 'import json,sys; n=lambda p, pre: sum(1 for r in json.load(open(p))["permissions"]["deny"] if r.startswith(pre)); print(n(sys.argv[1], "Read(/"), n(sys.argv[2], "Read(//"))' "$KIT/daemon/templates/claude-settings.json" "$LIVE/claude-settings.json"
    grep -cE '[{](LIVE_DIR|WA_HOME|HOME)[}]' "$LIVE/claude-settings.json"
@@ -234,6 +271,7 @@ Under `### C2 daemon` in `<home>/INSTALL-PROGRESS.md`:
 - the prewarm, when step 9 ran: its `prewarm 完成` (or `prewarm 失败`) line with the seconds, logged before the restart in step 11;
 - the first judgment: run id, the chips, and whether the owner agreed with the draft;
 - the time observation started (`doorbell.enabled` true) and the first real run's id, or, for a gate that passes nothing on purpose, the `skip:` decision the first real message got;
+- step 12: the answer, and on a yes the token's date and renewal date (never the token), the proof and doctor lines and the deny probe line;
 - `ruled:` defaults 2, 3, 4, 7 and 8, one note each.
 
 Tick `- [x] C2 daemon` only when every check passes. Next: `install/C3-board.md`.

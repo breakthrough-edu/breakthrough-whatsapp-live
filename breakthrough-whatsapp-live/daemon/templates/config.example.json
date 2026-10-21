@@ -35,7 +35,8 @@
     "ground_every_days": 7,
     "whisper_model": "~/.cache/whisper-models/openai_whisper-large-v3-v20240930",
     "whisper_language": "",
-    "transcribe": true
+    "transcribe": true,
+    "gate_probe_seconds": 900
   },
   "bin": {
     "claude": "<auto>",
@@ -307,7 +308,8 @@
       "01_Daily"
     ],
     "stop_words": [],
-    "keep_snapshot": false
+    "keep_snapshot": false,
+    "read_documents": true
   },
   "_help": {
     "_about": "Explanations for every key above, keyed by dotted path. Code never reads this object. wa_setup.py init writes live/config.json from this file without it. Placeholders: <home> is paths.home, <live> is paths.live_dir, <payload> is the installed skill folder, <auto> is detected at load time. The full reference with the station that sets each key is references/config-reference.md.",
@@ -343,7 +345,8 @@
     "brain.whisper_model": "Whisper model folder used for voice notes. Keep the copy under ~/.cache (a model under Documents stalls under launchd). wa_setup.py init fills it when it finds one model folder.",
     "brain.whisper_language": "Language hint for transcription, for example zh or en. Empty lets whisper detect.",
     "brain.transcribe": "false turns voice transcription off everywhere (runs, board, reader).",
-    "bin.claude": "Absolute path of the claude CLI. <auto> searches PATH plus the usual install folders.",
+    "brain.gate_probe_seconds": "While the brain cannot be called (login expired or usage limit reached, two failures in a row), seconds between the small probe calls that check whether it answers again. Pending messages stay queued meanwhile. Minimum 60. Changes need a daemon restart.",
+    "bin.claude": "Absolute path of the claude CLI. <auto> searches PATH plus the usual install folders. wa_setup.py render-claude-wrapper sets it to <home>/bin/claude-bot when the daemon uses a setup token instead of the Keychain login.",
     "bin.python": "Python that runs every module. macOS system python 3.9 is the tested one.",
     "bin.node": "Absolute path of the node binary that launchd starts. This exact binary needs Full Disk Access.",
     "bin.ffmpeg": "ffmpeg, used to convert voice notes before transcription.",
@@ -458,6 +461,7 @@
     "reader.low_priority_dirs": "Vault folders whose weak name hits are ignored. An empty list means the reader's defaults, which are the values shown.",
     "reader.stop_words": "Extra words never used as name keys (your company and brand names).",
     "reader.keep_snapshot": "true keeps the reader's database snapshot after each read (debugging only; it is a full copy of your chats).",
+    "reader.read_documents": "true: Word, Excel, PowerPoint, RTF, ODT and Pages attachments are converted to text in the reading pack (cached in <home>/doc-text-cache). false: they show as file names only. Takes effect at the next run.",
     "person.section_roles.gaps": "Heading whose numbered questions count as open gaps (the board shows the count).",
     "person.section_roles.notes": "Heading whose items may never be lost when a note is rewritten.",
     "person.section_roles.owner_notes": "Heading of the owner's own words: every line stays word for word (<marker> is owner_marker).",
