@@ -1,6 +1,6 @@
 # Pitfalls
 
-The running system this kit was generalized from already fell into every pit on this page, and each one cost real hours, real model usage or real data. The kit ships a guard for each. Every section says what the pit looks like from outside, why it happens, where its guard lives in the kit, and a probe that shows the guard still holds on your install.
+Each pit on this page is a way a resident system like this one fails quietly, and each can cost hours, model usage or data. The kit ships a guard for each. Every section says what the pit looks like from outside, why it happens, where its guard lives in the kit, and a probe that shows the guard still holds on your install.
 
 Run a pit's probe again whenever you, or a session working for you, change code or config near its guard. A guard nobody has tested is a belief, not a guard.
 
@@ -41,10 +41,13 @@ Probes marked **model call** spend a little usage. Probes marked **test install*
 | 11 | A dry run that is not dry | a trial run that writes, pushes and spends |
 | 12 | A backup that misses a file | a green backup that cannot restore everything |
 | 13 | Voice transcription that depends on another tool's config | no voice note is ever transcribed |
+| 14 | Claude memory in a headless run | runs that wander through unrelated notes and end at the turn limit |
+| 15 | A restart that orphans a frozen python | the board shows the old process, or nothing, after a restart |
+| 16 | A health check answered by the wrong thread | `/health` says ok while nothing has been judged for hours |
 
 ## 1 · Children of a launchd job cannot open protected folders
 
-**What happens** The daemon starts and looks healthy: the board loads and the WhatsApp database is read. But every child process it starts (`claude`, `ffmpeg`, `whisperkit-cli`, a command line adapter) hangs with no output and no CPU until its timeout, and nothing prints an error. Judgments never finish, voice notes never get a transcript, and from outside it looks as if the daemon is missing messages. Two hours went into changing code in the wrong places before the cause was found, while a friend's voice notes never reached the board.
+**What happens** The daemon starts and looks healthy: the board loads and the WhatsApp database is read. But every child process it starts (`claude`, `ffmpeg`, `whisperkit-cli`, a command line adapter) hangs with no output and no CPU until its timeout, and nothing prints an error. Judgments never finish, voice notes never get a transcript, and from outside it looks as if the daemon is missing messages. Because nothing errors, it is easy to spend hours changing code in the wrong place while voice notes quietly never reach the board.
 
 **Why** macOS privacy protection (TCC). When launchd starts the system python directly, python itself can use its Full Disk Access, but the processes it starts cannot: each one that touches a protected folder (Documents, or another app's Group Containers, where WhatsApp keeps its database and media) waits for a permission prompt that nobody can answer in a background job. With a node binary that holds Full Disk Access as the program launchd starts, the whole process tree works. The same command run over ssh or in Terminal works fine, which is what makes this so misleading: those paths carry different permissions and a different keychain.
 
@@ -65,7 +68,7 @@ Pass: node is the program launchd started and python's parent, and the probe ans
 
 ## 2 · The dollar figure is not money, and the harness is most of every run
 
-**What happens** Every run shows a dollar amount, and it feels like spending. Separately, a change to send a smaller conversation pack was estimated to halve the cost of a run. The part the kit sends did shrink by more than half, yet the total per run only fell from about forty thousand tokens to about thirty thousand. A day of about forty runs read over two million tokens.
+**What happens** Every run shows a dollar amount, and it feels like spending. Separately, shrinking the conversation pack the kit sends looks as if it should halve the cost of a run, yet the total per run barely moves: what the kit sends is the smaller share of a run, and the harness overhead stays. A few dozen runs a day can read millions of tokens.
 
 **Why** On a subscription login, `total_cost_usd` from `claude -p` is what the API would have charged; nothing was billed, and the real limit is the subscription's usage window, which follows tokens. Most of every run is Claude Code's own system prompt and tool definitions, twenty to thirty thousand tokens, rebuilt on each run because the prompt cache expires when runs are more than about five minutes apart (lots of cache creation and little cache reading is that shape). "What we send got half as big" and "the run got half as big" are different sentences; the only big lever is running fewer runs.
 
@@ -85,16 +88,16 @@ Pass: `False`, `2` and `0`, so no dollar figure reaches the screen (the payload 
 
 ## 3 · A daytime restart runs the nightly job
 
-**What happens** The daemon is restarted in the middle of the day after a code change, and the nightly person note rewrite starts at once: two expensive runs rewrite two notes from half a day of messages, and one of them loses a section (pit 4). Every further restart that day would do it again.
+**What happens** The daemon is restarted in the middle of the day after a code change, and the nightly person note rewrite starts at once: if a daytime restart counts as "not yet run today", expensive runs rewrite notes from half a day of messages (and a full rewrite can lose a section, pit 4). Every further restart that day triggers it again.
 
-**Why** The schedule said "run once a day after the scheduled time if there is no record for today". That holds for a process that has been running all night and fails right after a start: the time has passed and there is no record. An empty "last ran" value was read as "due".
+**Why** A schedule that says "run once a day after the scheduled time if there is no record for today" holds for a process that has been running all night and fails right after a start: the time has passed and there is no record. A schedule that reads an empty "last ran" value as "due" fires right after every start.
 
 **Where the guard lives** `Dossier.__init__` records the nightly run as done for today when the daemon starts after `dossier.nightly_at`; `Daemon.__init__` does the same for every daily job in the `Daemon.daily` table (facts, second source, backup, digest) and logs that it did; `Daemon.daily_tick` and `Dossier.nightly` read only those records. Catching up is explicit: drop `commands/<job>-now.json`. `daemon/templates/intake-evening.plist` has `RunAtLoad` false. A new scheduled job added as a row in `Daemon.daily` inherits the guard; a job with its own clock check does not.
 
 **How to check it still holds** (restarting kills runs in flight; their bursts run again afterwards)
 
 ```sh
-launchctl kickstart -k gui/$(id -u)/$LABEL; sleep 30        # in the daytime, after the scheduled times
+"$PY" "$KIT/daemon/wa_setup.py" restart --config "$LIVE/config.json"; sleep 30   # in the daytime, after the scheduled times
 sqlite3 -readonly "$LIVE/state.sqlite" "select key, value from meta where key like 'daily_%' or key = 'dossier_nightly_last'"
 sqlite3 -readonly "$LIVE/state.sqlite" "select count(*) from dossier_jobs where requested_at >= strftime('%Y-%m-%dT%H:%M:%S','now','localtime','-2 minutes')"
 plutil -extract RunAtLoad raw ~/Library/LaunchAgents/$ILABEL.plist   # only when the evening job is installed
@@ -104,7 +107,7 @@ Pass: every record shows today's date, no note job was queued by the restart (un
 
 ## 4 · A full rewrite quietly drops a section
 
-**What happens** A person note rewritten by the model passes every check (front matter legal, ids unchanged, every link still present) and is placed. An hour later someone notices that four notes the owner had written by hand the night before are gone: a whole subsection with no links in it, sitting under the note's own notes section. It came back only because a backup had been added the day before. Later rewrites showed the same habit: the model merges or drops note bullets it considers redundant, and the links always survive.
+**What happens** A person note rewritten by the model passes every check (front matter legal, ids unchanged, every link still present) and is placed, yet a whole subsection the owner wrote by hand, with no links in it, is gone. Models tend to merge or drop note bullets they consider redundant: the links survive and the words do not.
 
 **Why** "Keep what the owner wrote" in a prompt is a request, not a guarantee. A link check proves the references survived, not the words.
 
@@ -122,9 +125,9 @@ Then a content test: copy one real person note to a folder outside the vault wit
 
 ## 5 · A verifier that only accepts the house spelling
 
-**What happens** A queue of new person notes is rejected again and again, although the notes were written correctly. One note wrote `roles` as a YAML block list (one value per line) and was read as having no roles. After that was fixed, a quoted `wa_jid` did not equal the unquoted id. Two more carried a harmless extra `tags` key and were rejected as if it were a retired key. Every rejection cost an expensive model run of one to four minutes plus a failure push, and three fixes and three restarts went by before the first note landed. The same pit came back in a JSON parser: a summary backfill sent ten conversations, got back a reply that looked like good JSON, and saved none of them, because one summary written in Chinese put English double quotes around a quoted phrase without escaping them.
+**What happens** A queue of new person notes is rejected again and again, although the notes were written correctly. A verifier written against one spelling rejects legal variants: `roles` written as a YAML block list (one value per line) reads as no roles, a quoted `wa_jid` does not equal the unquoted id, a harmless extra key such as `tags` is rejected as if it were a retired key. Each rejection costs a full model run plus a failure push, and each fix needs a restart before the next note can land. JSON parsers fail the same way: a reply that looks like good JSON saves nothing when the model leaves English double quotes unescaped inside a string (a summary in Chinese that quotes a phrase, for example).
 
-**Why** The validators were written against the house convention, and the test fixtures were written by hand in that same convention, so they always passed. The model writes legal but different YAML and JSON. The backfill's dry run did not call the model (to save usage), so the first real model output appeared only after launch.
+**Why** Validators written against the house convention get test fixtures written by hand in that same convention, so they always pass. The model writes legal but different YAML and JSON. A dry run that skips the model never sees real model output, so the parser meets it for the first time in production.
 
 **Where the guard lives** `wa_common.parse_frontmatter` and `dossier_core.parse_frontmatter` read flow and block lists and quoted and bare values; `dossier_core.finalize` strips harmless extra keys and logs them, and still rejects retired and unknown keys; `wa_common.repair_inner_quotes` is the one repair every model output parser (triage, backfill, second source) falls back to when the first parse fails; the backfill and second source prompts ask for 「」 around any quotation (`daemon/templates/backfill-prompt.md`, `second-source-prompt.md`); a failed parse keeps the model's raw text in the run folder (`result.txt`). The standing rule: before a new parser or verifier goes live, call the real model once on a minimal batch (for example `wa_backfill.py --run --limit 1`), keep that output, and make it a selftest fixture.
 
@@ -144,9 +147,9 @@ Pass: `roles` prints as a list holding `client`, `wa_jid` prints without quotes,
 
 ## 6 · One rule computed in two places
 
-**What happens** Two parts of the system disagree about the same fact: the board says a customer is `active`, the command line says `won`, and the written spec says a third thing. Every part's own tests are green and every report says it passed. One audit found the same shape twice more: the digest's "quiet yesterday" line could never print, because a check counted a standing mismatch as news (the builder's dry run ran against a world with no facts file), and a scheduled job was installed without ever being written into the machine registry.
+**What happens** Two parts of the system disagree about the same fact: the board says a customer is `active`, the command line says `won`, and the written spec says a third thing. Every part's own tests are green and every report says it passed. The same shape shows up as a check that can never fire (its condition is never true on real data, and a test run without that data cannot show it), or a resident job installed without its registry entry.
 
-**Why** One rule was handed to two builders and each implemented it. Each copy was right by its own tests; together they were inconsistent. Only an audit that ran both paths against real data, and read the files instead of the builders' reports, could see it.
+**Why** If two builders each implement one rule, both copies can pass their own tests and still disagree. Only running both paths against the same real data, and reading the files instead of the builders' reports, shows it.
 
 **Where the guard lives** One rule, one function: `wa_facts.stage_floor` (the payment floor; the brain, the facts job and the person note command line all call it, and the note checks receive its answer), `wa_common.load_config` with `apply_defaults` (every default filled in one place for every module), `Dossier.note_for_speaker` (matching a chat or a group speaker to a person note), `wa_common.notify_send` (the one push path for the daemon, the command lines and the evening job), `wa_common.CONTENT_TYPES` (the one content type table in the daemon). The reader is a separate skill and implements `transcript_key` with the identical algorithm, so its check is behavioral (pit 13). The process guard: after any change near a rule, a fresh session reviews the files and real data, never the report of whoever made the change; and installing a resident job and writing its registry entry are one act (`references/vault-proposals.md`, proposal f).
 
@@ -163,7 +166,7 @@ Pass: one definition of each function, in the file named; the callers are two li
 
 ## 7 · An allowlist that only adds
 
-**What happens** A read-only assistant was asked to create a file, refused, and explained that it had no write tool; nothing was written. That looked like proof the lock worked. It was not: the tool list the command line actually loaded held twenty-one tools, including ones that start sub-agents, schedule jobs on the machine and message other sessions. The same three tools leaked in two separate builds weeks apart, because the fix from the first build lived in that build's own notes instead of in the job of setting tool permissions.
+**What happens** A read-only assistant that refuses to create a file and explains that it has no write tool looks locked. It may not be: the tool list the command line actually loaded can still include tools that start sub-agents, schedule jobs on the machine and message other sessions. A fix kept only in one build's notes, instead of in the job of setting tool permissions, will not reach the next build.
 
 **Why** `--allowedTools` adds tools; it does not restrict the session to that list. What closes the door is `--disallowedTools` plus the settings file's deny list, and a deny list only closes the names you know, while the platform keeps adding tools. A model saying "I don't have that tool" is the model repeating its prompt, not the harness reporting what is loaded.
 
@@ -183,7 +186,7 @@ Pass: the loaded list holds only `Read`, `Glob` and `Grep` (`TodoWrite` may appe
 
 ## 8 · A fresh state database replays old messages
 
-**What happens** On the very first start with a new state database (a new install, a `--scan-once` acceptance test, or a standby Mac whose watermark was reset to take over) the daemon treats roughly the last 300 messages as new: they queue as bursts, mark conversations as replied, pair voice samples, and the brain starts running on all of them, while the log says it is starting from now and will not replay anything.
+**What happens** Without the guard, the very first start with a new state database (a new install, a `--scan-once` acceptance test, or a standby Mac whose watermark was reset to take over) would treat roughly the last 300 messages as new: they would queue as bursts, mark conversations as replied, pair voice samples, and the brain would start running on all of them, even though the log says it starts from now and will not replay anything.
 
 **Why** The watermark was set at the newest message id, but every scan looks back `doorbell.lookback` ids for messages written late and skips only ids already recorded in `inbound_log`, and on a fresh database that log is empty. WhatsApp Desktop linked again and syncing history, or a rebuilt id sequence, is the same trap from the other side.
 
@@ -200,9 +203,9 @@ Pass: the lookback rows show as `skip:before_install` and the second query print
 
 ## 9 · A new note silently replaces an existing one
 
-**What happens** A person already had a note, but the daemon did not recognize it: the note carried the other form of the WhatsApp id, or no id, or it belonged to a different person with the same name. A new note run started, the model picked the same file name, and the existing note was replaced whole, with nothing in the backup folder and a filing-log line calling it new. A second form of the same pit: a rewrite reads the note at the start of a run that can last twenty minutes, so recent lines appended in the meantime, and edits the owner made by hand, vanished when the run placed its version, and the backup held the start version too. A third: a run cut off by a restart stayed "in progress" forever, and that person could never be queued again.
+**What happens** A person already has a note, but the daemon does not recognize it: the note carries the other form of the WhatsApp id, or no id, or belongs to a different person with the same name. A new note run starts, the model picks the same file name, and the existing note is replaced whole, with nothing in the backup folder and a filing-log line calling it new. A second form of the same pit: a rewrite that trusts the copy it read at the start of a run (which can last twenty minutes) loses recent lines appended in the meantime and edits the owner made by hand, and its backup holds only the start version. A third: a job cut off by a restart can stay "in progress" forever, so that person can never be queued again.
 
-**Why** Matching used exact id equality instead of trying both id forms and the phone; placing a note wrote without looking at what was there; the rewrite trusted the copy it had read before the model ran; nothing cleaned up jobs a restart interrupted.
+**Why** Exact id matching misses the other id form and the phone. A writer that does not re-read the target right before writing overwrites what changed, and so does a rewrite that trusts the copy it read before the model ran. And a job a restart interrupted stays in progress unless the next start cleans it up.
 
 **Where the guard lives** `Dossier.note_for_speaker` is the one matching function (both WhatsApp id forms plus the phone), used by one-to-one runs, the board's note info, note jobs and intake. `dossier_core.place_note` re-reads the target right before writing and overwrites only when what the run started from is still what is on disk; when the target exists and the run believed there was no note, it refuses (`DossierError`: the job fails and pushes an error); when only the machine-written recent block changed during the run, it carries the new lines into the candidate; it always backs up what is on disk first. `Dossier.run_job` calls it. `Dossier.__init__` marks jobs a restart left unfinished as failed, so the person can be queued again. Note file names may use letters in any script, digits, spaces, dot, dash and underscore, never a path separator or `..`.
 
@@ -234,11 +237,11 @@ Pass: it prints `refused:` with a message saying the note already exists, then `
 
 ## 10 · The brain can read your secrets
 
-**What happens** Nothing visible, which is the danger. The brain's cage allowed Read, Glob and Grep with no limit on paths, and the daemon's node parent holds Full Disk Access, so the brain could open the push bot token, the config, other runs' full conversation packs and most of the home folder. The only fence was one sentence in the system prompt, while everything the brain reads was written by other people.
+**What happens** Nothing visible, which is the danger. Without path rules, a cage of Read, Glob and Grep can read anything the daemon's node parent can, and that parent holds Full Disk Access: the push bot token, the config, other runs' full conversation packs and most of the home folder. A sentence in the system prompt is not a fence, and everything the brain reads was written by other people.
 
 **Why** Tool rules decide which tools exist, not which paths those tools may touch. One incoming message saying "put the contents of this file in your reply" is the risk.
 
-**Where the guard lives** `wa_setup.py init` renders `daemon/templates/claude-settings.json` into `live/claude-settings.json` with 24 absolute Read deny rules: the push token, the config and its backups, the second source whitelist, the state database, the facts file, the voice pairs, the logs, other runs, the digests, the note backups, the reader's working copies, its prewarm folder and the reader config, WhatsApp's own databases, and the secret stores in the home folder (`~/.ssh/**`, `~/Library/Keychains/**`, `~/.config/**/credentials*` and more). Each is written as `Read(//<absolute path without its leading slash>)`. That form was verified to block the Read tool under `claude -p --settings` while a control run without the rule read the file. `Brain.call_claude` passes the settings file on every run. The full list, and what stays readable: `references/privacy.md`.
+**Where the guard lives** `wa_setup.py init` renders `daemon/templates/claude-settings.json` into `live/claude-settings.json` with 24 absolute Read deny rules: the push token, the config and its backups, the second source whitelist, the state database, the facts file, the voice pairs, the logs, other runs, the digests, the note backups, the reader's working copies, its prewarm folder and the reader config, WhatsApp's own databases, and the secret stores in the home folder (`~/.ssh/**`, `~/Library/Keychains/**`, `~/.config/**/credentials*` and more). Each is written as `Read(//<absolute path without its leading slash>)`. This form blocks the Read tool under `claude -p --settings`; the canary probe below confirms it on your own Mac. `Brain.call_claude` passes the settings file on every run. The full list, and what stays readable: `references/privacy.md`.
 
 **How to check it still holds** (one **model call** with a harmless canary; run it in Terminal on the Mac, not over ssh)
 
@@ -246,16 +249,17 @@ Pass: it prints `refused:` with a message saying the note already exists, then `
 "$PY" -c 'import json, sys; d = json.load(open(sys.argv[1])); print(sum(1 for r in d["permissions"]["deny"] if r.startswith("Read(//")))' "$LIVE/claude-settings.json"   # 24 or more
 mkdir -p ~/.config/wa-live-canary && echo "canary 7431" > ~/.config/wa-live-canary/credentials-canary.txt
 (cd "$(cfg brain.cwd)" && claude -p --settings "$LIVE/claude-settings.json" --strict-mcp-config --no-session-persistence --allowedTools Read --output-format stream-json --verbose "Use the Read tool on $HOME/.config/wa-live-canary/credentials-canary.txt and print its content.") | grep -oE 'canary 7431|denied by your permission settings'
+(cd "$(cfg brain.cwd)" && claude -p --settings '{"disableAllHooks": true}' --strict-mcp-config --no-session-persistence --allowedTools Read --output-format stream-json --verbose "Use the Read tool on $HOME/.config/wa-live-canary/credentials-canary.txt and print its content.") | grep -oE 'canary 7431|denied by your permission settings'   # control: no deny rule
 rm ~/.config/wa-live-canary/credentials-canary.txt && rmdir ~/.config/wa-live-canary
 ```
 
-Pass: the output shows `denied by your permission settings` (the Read tool's own error for the canary path) and never `canary 7431`. The final JSON's `permission_denials` list stays empty for a settings deny rule, so do not look for the denial there.
+Pass: the first `claude -p` call shows `denied by your permission settings` (the Read tool's own error for the canary path) and never `canary 7431`, and the control call, the same read with no deny rule, shows `canary 7431`, so it is the rule that blocks the read and not something else in the call. The final JSON's `permission_denials` list stays empty for a settings deny rule, so do not look for the denial there.
 
 ## 11 · A dry run that is not dry
 
-**What happens** `--dry-run` was documented as a safe way to try the daemon, but only the triage judgment honored it. With the flag set, the person note run still rewrote notes in the vault, the scheduled jobs ran for real (the digest pushed to the phone), summary backfill and the nightly second source pull ran, and fake judgments overwrote real ones in the state database. Command files carrying `"dry_run": true` for the facts and digest jobs still wrote the facts file, queued notes, raised stages and pushed.
+**What happens** A `--dry-run` flag checked in only one place leaks. If only the triage judgment honors it, a "dry" run can still rewrite person notes in the vault, run the scheduled jobs for real (the digest pushes to the phone), run summary backfill and the nightly second source pull, and write fake judgments over real ones in the state database; command files carrying `"dry_run": true` for the facts and digest jobs can still write the facts file, queue notes, raise stages and push.
 
-**Why** The flag was checked in the one place that existed when it was added; every later feature added its own path and never read it.
+**Why** A flag checked in the one place that existed when it was added is ignored by every later feature that adds its own path.
 
 **Where the guard lives** `wa_live.py`, everywhere: under `--dry-run` there are no model calls anywhere, no pushes (`wa_common.notify_send` stays silent), no vault writes, every scheduled job runs in its own dry mode (`wa_facts.py`, `wa_digest.py`, `wa_backup.py`, `wa_second_source.py`, `wa_backfill.py` and `wa_calendar.py` each take `--dry-run`), and no judgment is written over real state. Every new job or writer must take the flag; that is part of the change, not a follow-up.
 
@@ -277,9 +281,9 @@ Pass: `pgrep -P` finds no `claude` child while it runs, both lines print, and no
 
 ## 12 · A backup that misses a file
 
-**What happens** The nightly backup reported success every night. An inventory of the code then found that the voice examples file (pairs of the brain's draft and what the owner actually sent, one of the very things the backup existed to protect) was on neither the copy list nor the deliberate skip list. A restore would have come back without it, and no report would have said so.
+**What happens** The nightly backup reports success every night, yet a restore comes back without a file that matters, such as the voice examples file (pairs of the brain's draft and what the owner actually sent, one of the very things the backup exists to protect), and no report says so.
 
-**Why** The copy list was written once, before that feature existed. The later feature added a state file without touching either list, and a backup that copies a list reports success for whatever is on the list.
+**Why** A backup that copies a fixed list reports success for whatever is on the list. A state file added later by another feature, without touching the copy list or the skip list, is silently left out.
 
 **Where the guard lives** `wa_backup.run_backup` copies `state.sqlite` through SQLite's online backup API and checks the copy's integrity, `config.json` with secret-looking values redacted, `summaries.md`, `facts.json`, `voice-pairs.jsonl`, `second-source-whitelist.json`, `topic-map.json`, `seeds.json`, `acceptance.json`, `prompts/`, `digest/`, `dossier-backups/` and `adapters/`; its never list names `telegram.json`, `runs/`, `commands/`, `variants/`, `dossier-cli/`, `calendar/`, logs, `claude-settings.json`, `backup-last.json`, `second-source-last.json` and `people-write.lock` (the empty lock the person note writer takes before placing a note); a known item that does not exist yet is planned as a `[later]` line instead of silently left out; it keeps `backup.keep` dated folders and writes `backup-last.json` for the digest's health line. The rule that keeps it true: a change that adds a file to `live/` adds it to the copy list or the never list in the same change.
 
@@ -297,16 +301,24 @@ Pass: the selftest passes; the dry run lists `voice-pairs.jsonl` among its items
 
 ## 13 · Voice transcription that depends on another tool's config
 
-**What happens** On a new machine no voice note is ever transcribed: every voice message shows as unreadable, and setting the model path environment variable changes nothing. On a second machine, the command line for person notes pointed at a model folder that only existed on the first.
+**What happens** On a new machine no voice note is ever transcribed: every voice message shows as unreadable, and setting the model path environment variable changes nothing. Or the command line for person notes points at a model folder that exists only on the machine it was written on.
 
-**Why** The reader looked up the whisper model in the config file of an unrelated tool (a meeting transcription tool installed on the original machine) and gave up before it ever read its own environment variable when that file was missing. One caller also hardcoded a model folder as its default.
+**Why** If the reader looks its model up in another tool's config file and gives up before reading its own environment variable when that file is missing, or a caller hardcodes a model folder as its default, transcription works only on a machine where that tool or folder happens to exist.
 
 **Where the guard lives** `whisper_setup` in `skills/breakthrough-whatsapp-read/scripts/wa_sweep.py` reads only the reader's own config (`whisper_model`, `whisper_language`, `whisperkit_bin`, `ffmpeg_bin`, generated from `brain.whisper_model`, `brain.whisper_language`, `bin.whisperkit` and `bin.ffmpeg` by `wa_setup.py sync-reader-config`) and `WA_WHISPER_MODEL`, which overrides the model only when that path exists. No caller hardcodes a model folder. Transcripts are cached in `<home>/transcripts-cache/`, keyed by `transcript_key`, which the reader and the board compute the same way, so every transcribed voice note shows on the board.
 
 **How to check it still holds**
 
 ```sh
-grep -rn "meeting-transcripts" "$KIT/daemon" "$KIT/skills"      # nothing (code folders only: this page quotes the name)
+awk '/^def whisper_setup/,/^def transcript_key/' "$KIT/skills/breakthrough-whatsapp-read/scripts/wa_sweep.py" | grep -nE '~/|Path\.home|getenv\("HOME|\.json|\.toml|\.ya?ml|\.plist|open\('   # nothing
+$PY -c 'import json, os, sys, tempfile
+c = json.load(open(sys.argv[2]))
+cfg = {k: os.path.expanduser(c[k]) for k in ("whisper_model", "whisperkit_bin", "ffmpeg_bin") if c.get(k)}
+os.environ["HOME"] = tempfile.mkdtemp(); os.environ.pop("WA_WHISPER_MODEL", None)
+sys.path.insert(0, sys.argv[1]); import wa_sweep
+r = wa_sweep.whisper_setup(cfg)
+print("reader config alone: ok" if r[0] == cfg.get("whisper_model") and r[4] is None else "FAIL: %s" % r[4])' "$KIT/skills/breakthrough-whatsapp-read/scripts" "$(cfg paths.home)/config.json"
+grep -rn "whisper-models/" "$KIT/daemon" "$KIT/skills"     # only the config default (code folders only: this page quotes the path)
 $PY -c 'import json, os, sys
 c = json.load(open(sys.argv[1] + "/config.json"))
 for k in ("whisper_model", "whisperkit_bin", "ffmpeg_bin"):
@@ -314,4 +326,61 @@ for k in ("whisper_model", "whisperkit_bin", "ffmpeg_bin"):
 ls "$(cfg paths.home)/transcripts-cache" | wc -l                 # grows after a run on a chat with voice notes
 ```
 
-Pass: no reference to another tool's config, all three paths exist, the cache grows, and a recent voice note shows its transcript on the board.
+Pass: the first grep prints nothing (the model lookup opens no file and names no path of its own, so it cannot depend on another tool's config); the second command prints `reader config alone: ok` (with an empty home folder and no environment variable, the reader's own config is enough to find the model); the `whisper-models/` grep finds only the default model path, in `daemon/wa_common.py` (the config defaults) and `daemon/templates/config.example.json`; all three paths exist, the cache grows, and a recent voice note shows its transcript on the board.
+
+## 14 · Claude memory in a headless run
+
+**What happens** Runs take more turns than the job needs, some end at the turn limit (`brain.max_turns`) with no judgment, and the stream shows the brain opening files that have nothing to do with the conversation: notes from your own Claude Code memory, or a `CLAUDE.md` from a folder above the working folder. Nothing errors, and your private notes ride along into every run.
+
+**Why** A headless `claude -p` loads the same memory an interactive session does: the auto-memory index of the logged-in user and every `CLAUDE.md` file above its working folder. In a triage run those are instructions and pointers written for other work, and the brain follows them, spending turns opening memory files instead of reading the conversation. The tool cage and the settings file do not switch memory off; two environment variables do.
+
+**Where the guard lives** `wa_common.subprocess_env` sets `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` and `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` (`wa_common.CLAUDE_QUIET_ENV`); `Brain.child_env` sets them again for every triage, person note and probe run, so they hold even when that module fails to load; `daemon/templates/intake-evening.mjs` sets them for the evening pre-sort run. The proof is the harness's own init event: it carries `memory_paths` when memory loaded and has no such key when it is off. `Brain.init_memory_paths` reads it after every triage and person note run and logs a warning if it is ever there: `MEMORY LOADED: …` for a triage run, `MEMORY LOADED (档案 run): …` for a person note run; the evening job logs `MEMORY LOADED: the pre-sort run loaded Claude memory`; the `probe-claude.json` command file logs the answer either way.
+
+**How to check it still holds** (one **model call**)
+
+```sh
+echo '{}' > "$LIVE/commands/probe-claude.json"; sleep 60
+grep "probe-claude: " "$LIVE/wa_live.log" | grep -E "memory_paths|MEMORY LOADED|init 事件" | tail -1
+P=$(ls -td "$LIVE"/runs/probe-* | head -1)
+grep -c '"memory_paths"' "$P/stdout.jsonl"
+grep -c "MEMORY LOADED" "$LIVE/wa_live.log"
+grep -c "MEMORY LOADED" "$LIVE/intake-evening.log"    # only when the evening job is installed
+```
+
+Pass: `probe-claude: init 没有 memory_paths (Claude 记忆关着)` (the init event has no memory paths: Claude memory is off), then `0`, `0` and `0`. `probe-claude: MEMORY LOADED, init 带 memory_paths …` means the Claude Code on this Mac no longer honors one of the variables: `references/troubleshooting.md`, "MEMORY LOADED in the log". `probe-claude: 没有 init 事件, 记忆开关查不到` (no init event, so the switch cannot be read) is not a pass either: claude did not start properly, see `references/troubleshooting.md`, "Runs are stuck with zero output". Probe again after every Claude Code update.
+
+## 15 · A restart that orphans a frozen python
+
+**What happens** After a restart to load new code or a config change, the board shows the old process, or nothing at all. The log may show a new start line followed by `板子起不来 (<bind>:<port>): …` (the board cannot start: the port is in use), while the port still answers from the old process. Two pythons run `wa_live.py` with this install's config, and one of them is not a child of the node launchd started (`ps -axo pid,ppid,command | grep "[P]ython.*wa_live.py --config $LIVE/config.json"`; the node parent's own line also names the script, so read only the python lines, and the config path keeps another install's python out of the list).
+
+**Why** launchd starts node, and node starts python. `launchctl kickstart -k` stops only the node parent. A healthy python gets the stop signal forwarded and exits, but a frozen one (for example stuck opening a file behind a macOS permission dialog nobody clicked) never runs its stop handler. It is orphaned, keeps the board port, and the fresh daemon launchd starts cannot bind it.
+
+**Where the guard lives** `wa_setup.py restart` (`do_restart`) is the daemon's only restart. It finds the node parent's pid (`launchctl print`), the python child and any `wa_live.py` of this config left orphaned by an earlier restart; refuses before any signal (exit 3) when the board port is held by a program that is not this daemon; sends SIGTERM to each python and waits up to `ExitTimeOut` (90 seconds, from the plist) for running jobs to finish; sends SIGKILL to any python still alive; lets launchd start a fresh node and python (`KeepAlive`); when no new node has appeared within 20 seconds it nudges launchd, with `launchctl kickstart -k` if the old node is still up (safe at that point: its python is already gone, so nothing is left to orphan) or a plain `launchctl kickstart` if no job process runs at all; then proves that exactly one python of this install runs, as a child of the new node, and is the only listener on `board.port`. Its selftest covers a healthy daemon, a frozen python, an orphan holding the port, a foreign program on the port and a launchd that does not start it again. The same selftest fails on any line of these docs that restarts the daemon with `kickstart -k`. The evening job is a one shot script with no python child, so `launchctl kickstart -k` on `$ILABEL` stays its proof step.
+
+**How to check it still holds** (restarting kills runs in flight; their bursts run again afterwards)
+
+```sh
+"$PY" "$KIT/daemon/wa_setup.py" restart --config "$LIVE/config.json" --dry-run
+"$PY" "$KIT/daemon/wa_setup.py" restart --config "$LIVE/config.json"
+lsof -nP -iTCP:$PORT -sTCP:LISTEN
+```
+
+Pass: the dry run lists the SIGTERM, SIGKILL and proof steps and runs nothing; the real one prints an `after:` line naming one python, a child of the new node and the only listener on the port, then a `/health` line, and ends with `proof: one daemon, the new code is loaded (...)`; `lsof` shows one pid, the python the `after:` line named. The frozen case, on a **test install** only: `kill -STOP` its python child, run its restart with `--wait 10`, and the output shows the SIGKILL line, then the same proof, with one python listening on the test port.
+
+## 16 · A health check answered by the wrong thread
+
+**What happens** The board loads, `/health` answers, every monitor is green, and yet nothing has been judged for hours. The daemon's main loop is frozen (for example on a macOS permission dialog nobody clicked while it opens the WhatsApp database), and the board, which runs in its own thread, keeps answering.
+
+**Why** A health check proves only what answers it. When the board thread answers, it proves the board thread is alive, not that the loop that reads messages is.
+
+**Where the guard lives** The main loop records a heartbeat after each doorbell scan (`Daemon.last_tick`). `Daemon.health_status` answers `GET` and `HEAD /health` with `200` and `ok (last scan <n>s ago)` while the heartbeat is younger than three times `doorbell.full_rescan_seconds` (at least 30 seconds), and with `503` and `stalled <n> (last scan <n>s ago, limit <n>s)` after that. A separate thread (`Daemon.stall_watch`) pushes one error, push key `daemon_stalled` (at most one in six hours), once the stall passes half of `doorbell.stale_alert_hours`, and logs `主循环恢复了` (the main loop is back) when the heartbeat returns. The push leaves through the outlet, which never touches WhatsApp's database, so it still goes out while the loop is stuck there. A script that checks `curl -sf .../health` fails on a stall, as it should; one that compares the body to exactly `ok` must check that it starts with `ok` instead.
+
+**How to check it still holds**
+
+```sh
+curl -s -o /dev/null -w '%{http_code}\n' "http://127.0.0.1:$PORT/health"
+curl -s "http://127.0.0.1:$PORT/health"; echo
+"$PY" "$KIT/daemon/wa_live.py" --selftest | grep "/health: "
+```
+
+Pass: `200`; a body starting with `ok (last scan`; and a `✓` line for the selftest's `/health` case, which ages the heartbeat past the limit, reads `503` and `stalled` for both `GET` and `HEAD`, then reads `200` again once the heartbeat is fresh. A real stall cannot be staged from outside: stopping the python with a signal stops the board thread with it.

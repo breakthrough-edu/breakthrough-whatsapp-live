@@ -18,7 +18,7 @@ Every key the kit's code reads from `live/config.json`, grouped by section, plus
 
 | Value | Meaning |
 |---|---|
-| `restart` | The daemon reads it from the config it loaded at start: `launchctl kickstart -k gui/$(id -u)/<launchd.label>`. Command line tools see the change at once. |
+| `restart` | The daemon reads it from the config it loaded at start: `wa_setup.py restart --config <live>/config.json` (it stops the python child, kills it when frozen, and proves one daemon on the board port; never `launchctl kickstart -k`, `references/pitfalls.md`, pit 15). Command line tools see the change at once. |
 | `sync` | Also copied into the reader config: run `wa_setup.py sync-reader-config` (a daemon start does the same, and each run then picks it up). |
 | `reinstall` | Written into a launchd plist: `wa_setup.py render-launchd` then `install-launchd` (add `--intake` for the evening job), which also restarts that job. |
 | `no` | Read fresh wherever it is used (a command line tool, the evening job, `check-config`). |
@@ -59,8 +59,8 @@ Every key the kit's code reads from `live/config.json`, grouped by section, plus
 | `doorbell.enabled` | `true` | boolean | `false`: messages are still logged (as `skip:doorbell_off`) and your replies still mark conversations, but no run starts by itself; the board, its buttons, command files and scheduled jobs keep working. | C2 | restart |
 | `doorbell.wal_path` | `"<auto>"` | path | The file whose changes wake a scan; `<auto>` is `ChatStorage.sqlite-wal` in WhatsApp Desktop's group container (or under `WA_LIVE_WA_ROOT`). Its age drives the stale alert. | C1 | restart |
 | `doorbell.poll_seconds` | `2` | number | How often the main loop checks that file. | C2 | restart |
-| `doorbell.stale_alert_hours` | `6` | number | An error push, at most one every 6 hours, when the database has not changed for this long; also shown on the board. | O4 | restart |
-| `doorbell.full_rescan_seconds` | `60` | number | Query the database at least this often, even when the file looks unchanged. | C2 | restart |
+| `doorbell.stale_alert_hours` | `6` | number | An error push, at most one every 6 hours, when the database has not changed for this long; also shown on the board. Half of it is how long the main loop may stall before the `daemon_stalled` push (`references/pitfalls.md`, pit 16). | O4 | restart |
+| `doorbell.full_rescan_seconds` | `60` | number | Query the database at least this often, even when the file looks unchanged. Three times this value (at least 30 seconds) is how old the main loop's last scan may be before `/health` answers `503 stalled`. | C2 | restart |
 | `doorbell.lookback` | `300` | integer | Message ids behind the watermark each scan checks for messages written late. On a fresh state database they are logged `skip:before_install`, never judged. | C2 | restart |
 | `doorbell.max_message_age_hours` | `48` | number | Inbound older than this is logged `skip:too_old` instead of judged (a relinked WhatsApp Desktop can flood old messages under new ids). `0` turns the check off. | C2 | restart |
 

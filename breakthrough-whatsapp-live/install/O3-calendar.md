@@ -56,9 +56,8 @@ Builds one timed and one all day test event and creates nothing: `ics` previews 
 ```sh
 KIT=~/.claude/skills/breakthrough-whatsapp-live; PY=/usr/bin/python3
 HOME_DIR="<paths.home from the progress file header>"; LIVE="$HOME_DIR/live"
-LABEL="<launchd.label from the progress file header>"
 "$PY" "$KIT/daemon/wa_setup.py" check-config --config "$LIVE/config.json"
-launchctl kickstart -k gui/$(id -u)/$LABEL
+"$PY" "$KIT/daemon/wa_setup.py" restart --config "$LIVE/config.json"
 ```
 
 The daemon reads `calendar.destination` at start; after the restart the board shows the button on rows with an appointment hint.

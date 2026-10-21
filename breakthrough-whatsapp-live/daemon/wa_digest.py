@@ -253,7 +253,7 @@ def _stage_moves(conn, lo, hi):
 
 def _dossier(conn, lo, hi):
     """Opened = a successful job that created a note: the was_new column when the daemon records it, else a reason
-    starting with one of OPEN_REASON_PREFIXES (fix: jobs queued by the facts worker used to count as rewrites)."""
+    starting with one of OPEN_REASON_PREFIXES (jobs the facts worker queues count as opens, not rewrites)."""
     out = {"opened": 0, "rewritten": 0, "bounced": 0, "total": 0, "names": {"opened": [], "rewritten": [], "bounced": []}}
     if not _has_table(conn, "dossier_jobs"):
         return out

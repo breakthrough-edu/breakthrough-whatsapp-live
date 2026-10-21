@@ -33,8 +33,9 @@ One question at a time. Read default 6 before question 1 and default 14 before q
 With the config edit ritual (`install/00-start-here.md`), set `notify.mode` to the answer from question 1 and restart. The day to switch back goes into the default 6 decision note (a superseding note when it already landed at O4 or O6).
 
 ```sh
-LABEL="<launchd.label from the progress file header>"
-launchctl kickstart -k gui/$(id -u)/$LABEL
+KIT=~/.claude/skills/breakthrough-whatsapp-live; PY=/usr/bin/python3
+HOME_DIR="<paths.home from the progress file header>"; LIVE="$HOME_DIR/live"
+"$PY" "$KIT/daemon/wa_setup.py" restart --config "$LIVE/config.json"
 ```
 
 Each morning of the week, the owner reads the digest and the board; this session is not needed for it.

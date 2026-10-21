@@ -37,13 +37,17 @@ ls -L "$SKILLS/breakthrough-whatsapp-read/" "$SKILLS/breakthrough-person-dossier
 
 It reaches the network, so the owner runs it or says yes to it. `-g -y` updates the install the README's `npx skills add -g` made without stopping at a scope question (a session's shell cannot answer one); a kit installed into one project instead is updated from inside that project with `-p -y`. When it answers `No installed skills found matching`, the kit was installed from a local folder, which `update` does not follow: run the same `npx skills add` again with that folder, then carry on here. Writes: the payload folder, replaced. The two companion links point into the payload and follow it; a companion installed as a copy instead stays at its old version until the owner agrees to refresh it. Your own adapters in `<live>/adapters/` are outside the payload and stay; run each one's `--selftest` once (`"$PY" "$LIVE/adapters/<file>" --selftest`), since the kit code around it changed.
 
+When `ls -L` answers `No such file or directory` for a companion, it was never linked: station C1 step 1 links the reader and station C4 the person notes; on an install that skipped those stations there is nothing to update for them.
+
+⭐ The update may have changed this page. Before step 3, read `install/update.md` again from the updated payload and carry on from step 3 of that copy: an older copy can name a step this release replaced (for example a restart).
+
 ## 3 · What changed in the seeds
 
 ```sh
 "$PY" "$KIT/daemon/wa_setup.py" seed-status --config "$LIVE/config.json"
 ```
 
-Read only. One line per owner copy, with its status and `copy v<x>, payload v<y>`; the last line counts the copies that need a merge.
+Read only. One line per owner copy, with its status and `copy v<x>, payload v<y>`; the last line counts the copies that need a merge. An update that changed playbook seeds shows each of them as `seed newer`; the playbook seeds this release changed are listed in `playbooks/CHANGELOG.md`. Playbooks appear here only when they were copied into the vault (station C1, step 5); when none were, `0 need a merge` is expected, and the changelog is where to read what changed in case the owner wants a copy now (step 5).
 
 | Status | What to do |
 |---|---|
@@ -106,24 +110,25 @@ New keys fill themselves with their defaults when the config loads; `references/
 "$PY" "$KIT/daemon/wa_setup.py" render-launchd --config "$LIVE/config.json"
 ```
 
-When both files report `kept ... (unchanged)`, there is nothing to reinstall. When a line says `update`, reinstall, which also restarts the daemon (so first wait for a prewarm or backfill in flight, as step 9 says):
+Read the `next:` line. `next: nothing to reinstall, the installed LaunchAgent already matches this plist` means the plist is unchanged: a script reported as `update` is used from the next start on, so step 9's restart is enough. `next: wa_setup.py install-launchd ...` means the plist changed: reinstall, which also restarts the daemon (so first wait for a backfill in flight, as step 9 says). After launchd lets go of the old job, it stops any python of this install still running (SIGTERM, then SIGKILL after ExitTimeOut if it is frozen), so no python is left holding the board port:
 
 ```sh
 "$PY" "$KIT/daemon/wa_setup.py" install-launchd --config "$LIVE/config.json"
 ```
 
-When the evening intake job is installed, run both commands again with `--intake`.
+When the evening intake job is installed, run `render-launchd` again with `--intake`, and `install-launchd --intake` only when its `next:` line names it. This release changed the evening job's script (its pre-sort run now keeps Claude memory off, `references/pitfalls.md`, pit 14) but not its plist, so `render-launchd --intake` prints `update <home>/launchd/intake-evening.mjs` and `next: nothing to reinstall, the installed LaunchAgent already matches this plist`: the next evening run uses the rewritten script, and no `install-launchd --intake` is needed.
 
 ## 9 · Restart, and the fingerprint
 
-Skip the restart when step 8 reinstalled the daemon. A prewarm or backfill in flight is cut short and never run again: wait for its `prewarm 完成` or `backfill 完成` line in `$LIVE/wa_live.log` first.
+Skip the restart when step 8 reinstalled the daemon. A backfill in flight is cut short and never run again: wait for its `backfill 完成` line in `$LIVE/wa_live.log` first. A prewarm whose process the restart kills mid-run runs again from the start at the next start (`prewarm <n> 天上次没跑完 (多半被重启切断), 补跑`); one that already returned (finished, failed or timed out) is not run again. Waiting for its `prewarm 完成` or `prewarm 失败` line only saves repeating it.
 
 ```sh
-LABEL="<launchd.label from the progress file header>"
-launchctl kickstart -k "gui/$(id -u)/$LABEL"
+KIT=~/.claude/skills/breakthrough-whatsapp-live; PY=/usr/bin/python3
+HOME_DIR="<paths.home from the progress file header>"; LIVE="$HOME_DIR/live"
+"$PY" "$KIT/daemon/wa_setup.py" restart --config "$LIVE/config.json"
 ```
 
-The daemon loads the new code. Runs in flight are killed and their bursts run again; a person note run that was cut off is marked failed and can be queued again.
+The daemon loads the new code. Runs in flight are killed and their bursts run again; a person note run that was cut off is marked failed and can be queued again. Pass: the last line is `proof: one daemon, the new code is loaded (...)` (station C2, step 11, reads the rest of the output).
 
 Either way, refresh the fingerprint in the daemon's registry entry (C2 step 5): the new hash and version, with today's date and the Mac's name. A standby Mac compares against it on the day it takes over (the standby runbook's step 2), so a stale value sends it to the wrong version.
 
@@ -140,13 +145,13 @@ grep -m1 '^VERSION' "$KIT/daemon/wa_live.py"
    "$PY" "$KIT/daemon/wa_live.py" --selftest | tail -1
    "$PY" "$KIT/skills/breakthrough-person-dossier/scripts/dossier_core.py" --selftest | tail -1
    ```
-2. **The daemon runs the new version.** Pass: `state = running`; `ok`; the newest start line in the log names the new version.
+2. **The daemon runs the new version.** Pass: `state = running`; a `/health` body starting with `ok (last scan`; the newest start line in the log names the new version.
    ```sh
    launchctl print "gui/$(id -u)/$LABEL" | grep "state = "
    curl -sS "http://127.0.0.1:$PORT/health"; echo
    grep -E "wa_live [0-9]+[.][0-9]+[.][0-9]+ " "$LIVE/wa_live.log" | tail -1
    ```
-3. **Claude still answers from launchd.** Drop `probe-claude.json` exactly as station C2, step 8. Pass: `"is_error":false` and no `sample.txt`.
+3. **Claude still answers from launchd, with Claude memory off.** Drop `probe-claude.json` exactly as station C2, step 8, and read it as C2's check 9. Pass: `"is_error":false`, no `sample.txt`, and `probe-claude: init 没有 memory_paths (Claude 记忆关着)` as the newest memory line in `$LIVE/wa_live.log` (C2's grep also shows `MEMORY LOADED` and `没有 init 事件` lines; either one fails).
 4. **Person notes read the owner's copies** (when C4 ran). Pass: `check-live: ok`, and the `playbook:` line does not say `PAYLOAD SEED`.
    ```sh
    "$PY" "$KIT/skills/breakthrough-person-dossier/scripts/dossier_core.py" --check-live --config "$LIVE/config.json"

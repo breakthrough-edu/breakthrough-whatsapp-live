@@ -95,8 +95,9 @@ Under the daemon's entry in the registry (C2 step 5): the person note writer blo
 With the config edit ritual: `dossier.enabled` `true`, `dossier.auto_open_worlds` (the world keys from question 5, or `[]` for button only), `dossier.auto_open_min_stage`. Then restart:
 
 ```sh
-LABEL="<launchd.label from the progress file header>"
-launchctl kickstart -k "gui/$(id -u)/$LABEL"
+KIT=~/.claude/skills/breakthrough-whatsapp-live; PY=/usr/bin/python3
+HOME_DIR="<paths.home from the progress file header>"; LIVE="$HOME_DIR/live"
+"$PY" "$KIT/daemon/wa_setup.py" restart --config "$LIVE/config.json"
 ```
 
 Runs in flight are killed and their bursts run again. A start after `dossier.nightly_at` marks tonight's batch as done for today, so a daytime restart never rewrites notes in the afternoon (`references/pitfalls.md`, pit 3).

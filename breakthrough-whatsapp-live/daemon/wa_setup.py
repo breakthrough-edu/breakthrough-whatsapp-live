@@ -14,8 +14,13 @@ It renders files, checks them and reports. It never judges a message and never s
   check-config          unknown keys, bad values, vocabulary keys that do not exist, enabled stations without paths.
   render-launchd        write <home>/launchd/run.mjs and <home>/launchd/<label>.plist from the templates
                         (--intake: the evening intake job instead).
-  install-launchd       copy the rendered plist into ~/Library/LaunchAgents, enable it and bootstrap it.
-  uninstall-launchd     bootout, disable, and remove the plist from ~/Library/LaunchAgents.
+  install-launchd       copy the rendered plist into ~/Library/LaunchAgents, enable it and bootstrap it (a loaded daemon
+                        is booted out first, then any python of it left running is stopped, as restart does).
+  uninstall-launchd     bootout, stop any python left running as restart does, disable, and remove the plist.
+  restart               restart the daemon so it loads new code or settings: SIGTERM the python child, SIGKILL it
+                        when it has not exited after ExitTimeOut (a frozen one never does), let launchd start a fresh
+                        one, then prove exactly one python of this install runs and holds board.port.
+                        Never `launchctl kickstart -k`: that stops only the node parent and can orphan a frozen python.
   sync-reader-config    write <home>/config.json for the reader from live/config.json, refresh runs-work copies.
   seed-status           each owner copy against live/seeds.json and the payload seed.
   copy-seed             copy one payload seed (file or folder) to its owner location, never overwriting, and record it.
@@ -33,6 +38,7 @@ Python 3.9 standard library only (macOS /usr/bin/python3).
 
 import argparse
 import copy
+import inspect
 import datetime as dt
 import hashlib
 import json
@@ -65,9 +71,9 @@ CORE_EPOCH_UTC = dt.datetime(2001, 1, 1, tzinfo=dt.timezone.utc)
 FALLBACK_CONTENT_TYPES = {0: "text", 1: "image", 2: "video", 3: "voice", 5: "location", 7: "text", 8: "file",
                           11: "GIF", 14: "contact card", 15: "sticker", 20: "image", 33: "image", 41: "text",
                           42: "channel post"}
-# SHA-256 of launchd label prefixes (ending in a dot) that belong to the maintainer's own running install.
-# install-launchd and uninstall-launchd refuse every label that starts with one of them, so a test install on that
-# machine can never stop or replace the real daemon. Only hashes are kept, so no account name ships in the kit.
+# SHA-256 of launchd label prefixes (ending in a dot) reserved for an install this tool must never touch.
+# install-launchd, uninstall-launchd and restart refuse every label that starts with one of them, so a test install
+# on the build machine can never stop or replace another daemon there. Only hashes are kept, so no account name ships in the kit.
 RESERVED_LABEL_PREFIX_SHA256 = ["5f452dbef74d9f306ae8219d7c7e2a5e00680b3bf71bfc417cc2fdfe44476821"]
 GUARDED_TOOLS = ("launchctl", "tailscale", "claude", "lark-cli")
 
@@ -1007,7 +1013,7 @@ def label_for(cfg, intake):
 def refuse_reason(label, plist_label=None):
     for lab in (label, plist_label):
         if lab and reserved_label(lab):
-            return ("label %s belongs to the running install this kit was extracted from; "
+            return ("label %s is reserved for another install on this Mac; "
                     "wa_setup.py never loads, stops or removes it" % lab)
     return ""
 
@@ -1170,7 +1176,7 @@ def _launchd_targets(cfg, intake, launch_agents):
     return label, domain, domain + "/" + label, agents / (label + ".plist"), home_dir(cfg) / "launchd" / (label + ".plist")
 
 
-def do_install_launchd(cfg, rep, intake=False, runner=None, launch_agents=None, wait_seconds=15):
+def do_install_launchd(cfg, rep, intake=False, runner=None, launch_agents=None, wait_seconds=15, kill=None, sleep=None):
     label, domain, target, dest, staged = _launchd_targets(cfg, intake, launch_agents)
     rep.line("install-launchd: %s%s" % (label, "  (dry run, nothing runs)" if rep.dry_run else ""))
     staged_label = None
@@ -1230,7 +1236,13 @@ def do_install_launchd(cfg, rep, intake=False, runner=None, launch_agents=None, 
         run([LAUNCHCTL, "bootout", target], timeout=120)
         deadline = time.time() + wait_seconds
         while time.time() < deadline and run([LAUNCHCTL, "print", target])[0] == 0:
-            time.sleep(0.5)
+            (sleep or time.sleep)(0.5)
+        if not intake:
+            # bootout stops the node parent; a frozen python never runs its stop handler and stays, holding the port
+            _, _, ok = stop_daemon_pythons(cfg, cfg.get("config_path"), rep, run, kill or os.kill, sleep or time.sleep,
+                                           int(pl.get("ExitTimeOut") or 90), None)
+            if not ok:
+                return rep
     rc, out, err = run([LAUNCHCTL, "bootstrap", domain, str(dest)])
     if rc != 0:
         rep.error("launchctl bootstrap exit %d: %s" % (rc, (err or out).strip()[-300:]))
@@ -1249,7 +1261,7 @@ def do_install_launchd(cfg, rep, intake=False, runner=None, launch_agents=None, 
     return rep
 
 
-def do_uninstall_launchd(cfg, rep, intake=False, runner=None, launch_agents=None):
+def do_uninstall_launchd(cfg, rep, intake=False, runner=None, launch_agents=None, kill=None, sleep=None):
     label, domain, target, dest, staged = _launchd_targets(cfg, intake, launch_agents)
     rep.line("uninstall-launchd: %s%s" % (label, "  (dry run, nothing runs)" if rep.dry_run else ""))
     why = refuse_reason(label)
@@ -1275,6 +1287,12 @@ def do_uninstall_launchd(cfg, rep, intake=False, runner=None, launch_agents=None
         rep.data["refused"] = True
         return rep
     run = runner or default_runner
+    wait = 90
+    if dest.is_file():
+        try:
+            wait = int(plistlib.loads(dest.read_bytes()).get("ExitTimeOut") or 90)
+        except Exception:
+            pass
     rc, out, err = run([LAUNCHCTL, "bootout", target], timeout=120)
     if rc == 0:
         rep.did("bootout", target)
@@ -1282,6 +1300,11 @@ def do_uninstall_launchd(cfg, rep, intake=False, runner=None, launch_agents=None
         rep.line("  %s was not loaded" % label)
     else:
         rep.warn("launchctl bootout exit %d: %s" % (rc, (err or out).strip()[-200:]))
+    if not intake:
+        # bootout stops the node parent; a frozen python never runs its stop handler and stays, holding the port
+        _, _, ok = stop_daemon_pythons(cfg, cfg.get("config_path"), rep, run, kill or os.kill, sleep or time.sleep, wait, None)
+        if not ok:
+            return rep
     rc, out, err = run([LAUNCHCTL, "disable", target])
     if rc == 0:
         rep.did("disable", target)
@@ -1292,6 +1315,245 @@ def do_uninstall_launchd(cfg, rep, intake=False, runner=None, launch_agents=None
         rep.did("remove", dest)
     rep.line("kept: %s and %s (state, logs, config)" % (tilde(staged), tilde(live_dir(cfg))))
     return rep
+
+
+# ---------------------------------------------------------------- restart
+
+PS = "/bin/ps"
+LSOF = "/usr/sbin/lsof"
+DAEMON_ONE_SHOT_FLAGS = ("--selftest", "--status", "--scan-once")
+
+
+def launchd_pid(run, target):
+    """(pid of the job's top process or None, loaded?) from launchctl print."""
+    rc, out, err = run([LAUNCHCTL, "print", target])
+    if rc != 0:
+        return None, False
+    m = re.search(r"^\s*pid = (\d+)", out, re.M)
+    return (int(m.group(1)) if m else None), True
+
+
+def process_rows(run):
+    """[(pid, ppid, command)] for every process of this user (ps)."""
+    rc, out, err = run([PS, "-axo", "pid=,ppid=,command="])
+    rows = []
+    for ln in out.splitlines():
+        parts = ln.strip().split(None, 2)
+        if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
+            rows.append((int(parts[0]), int(parts[1]), parts[2] if len(parts) > 2 else ""))
+    return rows
+
+
+def port_listeners(run, port):
+    """pids listening on TCP port (lsof); [] when nothing listens or lsof is missing."""
+    rc, out, err = run([LSOF, "-nP", "-iTCP:%d" % int(port), "-sTCP:LISTEN", "-t"])
+    return sorted({int(x) for x in out.split() if x.isdigit()})
+
+
+def daemon_pythons(rows, config_path, listeners=()):
+    """[(pid, ppid)] of the long running wa_live.py processes of this install: the ones started with this config, plus
+    any wa_live.py holding this install's board port (a symlinked path may print differently)."""
+    cp = str(config_path)
+    out = []
+    for pid, ppid, cmd in rows:
+        if not is_daemon_python(cmd):
+            continue
+        if ("--config " + cp) in cmd or pid in listeners:
+            out.append((pid, ppid))
+    return out
+
+
+def is_daemon_python(cmd):
+    """True for the python running wa_live.py as the daemon. The node parent's command line names the same script and
+    config (node run.mjs <python> <wa_live.py> --config <path>), so the test is the process's own program: a python
+    (macOS shows /usr/bin/python3 as .../Python.app/Contents/MacOS/Python) whose script argument is wa_live.py."""
+    toks = cmd.split()
+    if len(toks) < 2 or not os.path.basename(toks[0]).lower().startswith("python"):
+        return False
+    if not toks[1].endswith("wa_live.py"):
+        return False
+    return not any(f in toks for f in DAEMON_ONE_SHOT_FLAGS)
+
+
+def _alive(kill, pid):
+    try:
+        kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def stop_daemon_pythons(cfg, config_path, rep, run, kill, sleep, wait, node_pid):
+    """Stop every long running wa_live.py of this install (the child of node_pid and any orphan): SIGTERM, wait up to
+    `wait` seconds, SIGKILL what is still alive (a frozen python never runs its stop handler). Used before every
+    restart, reinstall and uninstall, because launchd stopping the node parent alone can leave a frozen python
+    holding the board port. Returns (stopped pids, killed pids, ok)."""
+    import signal as _signal
+    port = int(dget(cfg, "board.port") or 0) if dget(cfg, "board.enabled", True) else 0
+    rows = process_rows(run)
+    listeners = port_listeners(run, port) if port else []
+    pys = daemon_pythons(rows, expand(config_path), listeners) if config_path else []
+    victims = [pid for pid, _ in pys]
+    for pid, ppid in pys:
+        try:
+            kill(pid, _signal.SIGTERM)
+            rep.line("  SIGTERM python %d%s" % (pid, "" if ppid == node_pid else
+                     (" (left running after launchd let go of it)" if node_pid is None else " (orphan from an earlier restart)")))
+        except ProcessLookupError:
+            pass
+    waited = 0
+    while waited < wait and any(_alive(kill, pid) for pid in victims):
+        sleep(1)
+        waited += 1
+    stuck = [pid for pid in victims if _alive(kill, pid)]
+    for pid in stuck:
+        rep.warn("python %d did not exit %ds after SIGTERM (frozen, its stop handler never ran): SIGKILL" % (pid, wait))
+        try:
+            kill(pid, _signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    if stuck:
+        for _ in range(10):
+            if not any(_alive(kill, pid) for pid in stuck):
+                break
+            sleep(1)
+        still = [pid for pid in stuck if _alive(kill, pid)]
+        if still:
+            rep.error("python %s survived SIGKILL; look at it with ps before anything else" % still)
+            return victims, stuck, False
+    return victims, stuck, True
+
+
+def do_restart(cfg, config_path, rep, runner=None, kill=None, sleep=None, wait_seconds=None, respawn_seconds=60,
+               launch_agents=None, http_get=None):
+    """Restart the daemon of this install and prove the result. See the module docstring, `restart`."""
+    label, domain, target, dest, staged = _launchd_targets(cfg, False, launch_agents)
+    rep.line("restart: %s%s" % (label, "  (dry run, nothing runs)" if rep.dry_run else ""))
+    installed_label = None
+    if dest.is_file():
+        try:
+            installed_label = plistlib.loads(dest.read_bytes()).get("Label")
+        except Exception:
+            pass
+    why = refuse_reason(label, installed_label)
+    if why:
+        rep.error("refused: " + why)
+        rep.data["refused"] = True
+        return rep
+    exit_timeout = 90
+    if dest.is_file():
+        try:
+            exit_timeout = int(plistlib.loads(dest.read_bytes()).get("ExitTimeOut") or 90)
+        except Exception:
+            pass
+    wait = int(wait_seconds if wait_seconds is not None else exit_timeout)
+    port = int(dget(cfg, "board.port") or 0) if dget(cfg, "board.enabled", True) else 0
+    plan = ["%s print %s (the node parent's pid)" % (LAUNCHCTL, target),
+            "ps and lsof: the python child of that node, any wa_live.py of this config left from an earlier restart%s"
+            % (", and who holds port %d" % port if port else ""),
+            "SIGTERM each of them; wait up to %ds (ExitTimeOut) for running jobs to finish" % wait,
+            "SIGKILL any that is still alive after that (a frozen python never runs its stop handler)",
+            "wait for launchd to start a fresh node and python (KeepAlive); after 20s, %s kickstart %s (-k only when the old node is still up)" % (LAUNCHCTL, target),
+            "prove: one python of this install, child of the new node%s" % (", and the only listener on port %d" % port if port else "")]
+    if rep.dry_run:
+        for step in plan:
+            rep.line("  would " + step)
+        return rep
+    if _SELFTEST["active"] and runner is None:
+        rep.error("refused: the selftest never runs launchctl")
+        rep.data["refused"] = True
+        return rep
+    run = runner or default_runner
+    kill = kill or os.kill
+    sleep = sleep or time.sleep
+
+    node_pid, loaded = launchd_pid(run, target)
+    if not loaded:
+        rep.error("%s is not loaded; install it with wa_setup.py install-launchd" % label)
+        return rep
+    rows = process_rows(run)
+    cmd_of = dict((pid, cmd) for pid, _, cmd in rows)
+    listeners = port_listeners(run, port) if port else []
+    pys = daemon_pythons(rows, expand(config_path), listeners)
+    py_pids = set(pid for pid, _ in pys)
+    foreign = [pid for pid in listeners if pid not in py_pids]
+    if foreign:
+        rep.error("port %d is held by pid %s (%s), which is not this daemon; free the port or change board.port, "
+                  "then restart" % (port, foreign[0], (cmd_of.get(foreign[0]) or "?")[:120]))
+        rep.data["refused"] = True
+        return rep
+    rep.line("  before: node pid %s, python %s%s" % (node_pid or "none",
+             ", ".join("%d (parent %d%s)" % (pid, ppid, "" if ppid == node_pid else ", ORPHAN") for pid, ppid in pys) or "none",
+             (", port %d held by %s" % (port, listeners or "nobody")) if port else ""))
+    if not pys and node_pid:
+        rep.line("  no python child found; the node parent %d is restarted instead" % node_pid)
+    victims, stuck, ok = stop_daemon_pythons(cfg, config_path, rep, run, kill, sleep, wait, node_pid)
+    if not ok:
+        return rep
+    rep.data["stopped"] = victims
+    rep.data["killed"] = stuck
+
+    # launchd restarts the job when node exits (KeepAlive); nudge it only when that has not happened
+    new_node = None
+    for i in range(respawn_seconds):
+        pid, loaded = launchd_pid(run, target)
+        if pid and pid != node_pid:
+            new_node = pid
+            break
+        if i == 20:
+            if pid == node_pid and pid:
+                rep.line("  the old node %d is still up 20s after its python stopped: %s kickstart -k (no python left to orphan)"
+                         % (pid, LAUNCHCTL))
+                run([LAUNCHCTL, "kickstart", "-k", target])
+            else:
+                rep.line("  launchd has not started it again within 20s: %s kickstart" % LAUNCHCTL)
+                run([LAUNCHCTL, "kickstart", target])
+        sleep(1)
+    if not new_node:
+        rep.error("no new daemon process within %ds; look at %s/stderr.log" % (respawn_seconds, tilde(live_dir(cfg))))
+        return rep
+
+    # proof: one python of this install, child of the new node, alone on the port
+    proof = None
+    for _ in range(respawn_seconds):
+        rows = process_rows(run)
+        listeners = port_listeners(run, port) if port else []
+        pys = daemon_pythons(rows, expand(config_path), listeners)
+        children = [pid for pid, ppid in pys if ppid == new_node]
+        if len(pys) == 1 and children and (not port or listeners == children):
+            proof = children[0]
+            break
+        sleep(1)
+    if proof is None:
+        extra = [pid for pid, ppid in pys if ppid != new_node]
+        rep.error("after the restart: python %s, port %d held by %s%s" % (
+            [pid for pid, _ in pys] or "none", port, listeners or "nobody",
+            ("; python %s is not a child of the new node %d (orphan): check it with ps -o pid,ppid,command -p %s, "
+             "stop it with kill, then restart again" % (extra, new_node, ",".join(str(x) for x in extra))) if extra else ""))
+        return rep
+    rep.data["new"] = {"node": new_node, "python": proof}
+    rep.line("  after: node pid %d, python %d%s" % (new_node, proof, (", the only listener on port %d" % port) if port else ""))
+    if port:
+        get = http_get or _http_get
+        code, body = get("http://127.0.0.1:%d/health" % port)
+        rep.data["health"] = (code, body)
+        rep.line("  /health: %s %s" % (code, (body or "").strip()[:80]))
+    rep.line("proof: one daemon, the new code is loaded (its first line in %s/wa_live.log names the version)" % tilde(live_dir(cfg)))
+    return rep
+
+
+def _http_get(url, timeout=5):
+    import urllib.request
+    import urllib.error
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            return r.status, r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8", "replace")
+    except Exception as e:
+        return 0, "%s" % e
 
 
 # ---------------------------------------------------------------- sync-reader-config
@@ -1735,6 +1997,28 @@ def default_literals_in_runnable_blocks(payload):
                 inside, runnable = (True, m.group(2).lower() in RUNNABLE_FENCES) if not inside else (False, False)
                 continue
             if inside and runnable and DEFAULT_LITERALS_RE.search(line) and "# default on purpose" not in line:
+                hits.append("%s:%d: %s" % (f.relative_to(payload), n, line.strip()[:120]))
+    return hits
+
+
+KICKSTART_K_RE = re.compile(r"kickstart\s+-k")
+KICKSTART_OK_RE = re.compile(r"ILABEL|intake|never|\bnot\b|instead|⛔|orphan", re.I)
+
+
+def daemon_kickstart_lines(payload):
+    """Lines in SKILL.md, install/, references/ and playbooks/ that still tell someone to restart the daemon with
+    `launchctl kickstart -k`, which stops only the node parent and can leave a frozen python holding the port.
+    `wa_setup.py restart` is the daemon's restart. Allowed: the evening job ($ILABEL, one shot, no child to orphan)
+    and lines that explain why not. Returns ["file:line: text"]."""
+    payload = Path(payload)
+    files = ([payload / "SKILL.md"] + sorted((payload / "install").glob("*.md")) + sorted((payload / "references").glob("*.md"))
+             + sorted((payload / "playbooks").rglob("*.md")))
+    hits = []
+    for f in files:
+        if not f.is_file() or f.name == "CHANGELOG.md":
+            continue
+        for n, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+            if KICKSTART_K_RE.search(line) and not KICKSTART_OK_RE.search(line):
                 hits.append("%s:%d: %s" % (f.relative_to(payload), n, line.strip()[:120]))
     return hits
 
@@ -2386,6 +2670,143 @@ def selftest():
             guarded = True
         check("the command runner itself refuses launchctl inside the selftest", guarded)
 
+        say("[restart]")
+
+        class FakeMac(object):
+            """launchd, ps, lsof and kill for one daemon: node parent, python child holding the port, KeepAlive."""
+
+            def __init__(self, cfg_path, port, frozen=False, orphan=False, foreign=False, keepalive=True):
+                self.cfg_path, self.port, self.keepalive = str(cfg_path), port, keepalive
+                self.procs = {}        # pid -> [ppid, command, frozen]
+                self.next = 500
+                self.listen = {}       # pid -> port
+                self.node = None
+                self.signals = []
+                self.kickstarts = []
+                self.respawn_in = None
+                self._spawn(frozen)
+                if orphan:
+                    o = self._pid(); self.procs[o] = [1, self._pycmd(), True]
+                    self.listen = {o: port}      # the orphan still holds the port, so the child never bound it
+                if foreign:
+                    f = self._pid(); self.procs[f] = [1, "/usr/bin/nc -l %d" % port, False]
+                    self.listen = {f: port}
+
+            def _pid(self):
+                self.next += 1
+                return self.next
+
+            def _pycmd(self):
+                # what ps really shows: /usr/bin/python3 runs as the framework's Python binary
+                return ("/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/"
+                        "Python.app/Contents/MacOS/Python /kit/daemon/wa_live.py --config " + self.cfg_path)
+
+            def _spawn(self, frozen=False):
+                # the node parent's argv names the same script and config (the rendered plist)
+                self.node = self._pid()
+                self.procs[self.node] = [1, "/usr/local/bin/node /home/launchd/run.mjs /usr/bin/python3 /kit/daemon/wa_live.py "
+                                            "--config " + self.cfg_path, False]
+                py = self._pid(); self.procs[py] = [self.node, self._pycmd(), frozen]
+                self.listen[py] = self.port
+
+            def tick(self):
+                if self.respawn_in is not None:
+                    self.respawn_in -= 1
+                    if self.respawn_in <= 0:
+                        self.respawn_in = None
+                        self._spawn()
+
+            def _gone(self, pid):
+                self.procs.pop(pid, None); self.listen.pop(pid, None)
+                if pid != self.node and self.node in self.procs and not any(v[0] == self.node for v in self.procs.values()):
+                    self.procs.pop(self.node, None)          # run.mjs exits after its python exits
+                    self.node = None
+                    if self.keepalive:
+                        self.respawn_in = 10                # ThrottleInterval
+
+            def kill(self, pid, sig):
+                if pid not in self.procs:
+                    raise ProcessLookupError(pid)
+                if sig == 0:
+                    return
+                self.signals.append((pid, int(sig)))
+                if int(sig) == 9 or not self.procs[pid][2]:
+                    self._gone(pid)
+
+            def run(self, argv, timeout=30):
+                argv = [str(a) for a in argv]
+                self.tick()
+                if argv[0] == LAUNCHCTL and argv[1] == "print":
+                    return (0, "state = running\n\tpid = %d\n" % self.node if self.node else "state = waiting\n", "")
+                if argv[0] == LAUNCHCTL and argv[1] == "kickstart":
+                    self.kickstarts.append(argv[2:])
+                    if self.node is None or "-k" in argv:
+                        if self.node in self.procs:
+                            self.procs.pop(self.node, None)
+                        self._spawn()
+                    return 0, "", ""
+                if argv[0] == PS:
+                    return 0, "\n".join("%d %d %s" % (k, v[0], v[1]) for k, v in sorted(self.procs.items())), ""
+                if argv[0] == LSOF:
+                    return 0, "\n".join(str(k) for k, v in self.listen.items() if v == self.port), ""
+                return 1, "", "unexpected %s" % argv
+
+        rcfg = copy.deepcopy(cfg)
+        rcfg.setdefault("board", {})["port"] = 8799
+        rcfg["board"]["enabled"] = True
+        rpath = live / "config.json"
+
+        def restart_on(mac, wait=5):
+            return do_restart(rcfg, rpath, Report(quiet=True), runner=mac.run, kill=mac.kill, sleep=lambda s: mac.tick(),
+                              wait_seconds=wait, launch_agents=agents, http_get=lambda url: (200, "ok (last scan 1s ago)"))
+
+        m1 = FakeMac(rpath, 8799)
+        old_node = m1.node
+        r1 = restart_on(m1)
+        check("restart: a healthy daemon gets one SIGTERM, launchd starts a fresh node, one python holds the port",
+              not r1.errors and m1.signals == [(old_node + 1, 15)] and r1.data["new"]["node"] != old_node
+              and list(m1.listen) == [r1.data["new"]["python"]] and not m1.kickstarts and r1.data["health"][0] == 200,
+              (r1.errors, m1.signals, r1.data))
+        m2 = FakeMac(rpath, 8799, frozen=True)
+        r2 = restart_on(m2)
+        check("restart: a frozen python that ignores SIGTERM is SIGKILLed after the wait, then the proof holds",
+              not r2.errors and [sg for _, sg in m2.signals] == [15, 9] and r2.data.get("killed") and r2.data.get("new"),
+              (r2.errors, m2.signals))
+        m3 = FakeMac(rpath, 8799, orphan=True)
+        r3 = restart_on(m3)
+        check("restart: an orphan python of this config holding the port is stopped too, and only the new one listens",
+              not r3.errors and len(r3.data.get("stopped") or []) == 2 and len(m3.listen) == 1
+              and list(m3.listen)[0] == r3.data["new"]["python"], (r3.errors, r3.data, m3.listen))
+        m4 = FakeMac(rpath, 8799, foreign=True)
+        r4 = restart_on(m4)
+        check("restart: a port held by something that is not this daemon is refused before any signal",
+              r4.errors and "not this daemon" in r4.errors[0] and r4.data.get("refused") and not m4.signals, r4.errors)
+        m5 = FakeMac(rpath, 8799, keepalive=False)
+        r5 = restart_on(m5)
+        check("restart: when launchd does not start it again by itself, one kickstart (without -k) does",
+              not r5.errors and m5.kickstarts == [["gui/%d/%s" % (os.getuid(), label_for(rcfg, False))]], (r5.errors, m5.kickstarts))
+        m9 = FakeMac(rpath, 8799, frozen=True, orphan=True)
+        st9, kl9, ok9 = stop_daemon_pythons(rcfg, rpath, Report(quiet=True), m9.run, m9.kill, lambda s: m9.tick(), 5, m9.node)
+        check("stop step shared by restart, install-launchd and uninstall-launchd: child and orphan stopped, the frozen one killed",
+              ok9 and len(st9) == 2 and kl9 and not any(k for k, v in m9.procs.items() if "wa_live.py" in v[1]), (st9, kl9, m9.procs))
+        isrc, usrc = inspect.getsource(do_install_launchd), inspect.getsource(do_uninstall_launchd)
+        check("install-launchd and uninstall-launchd boot out first, then stop any python left behind (daemon only)",
+              isrc.index('"bootout", target') < isrc.index("stop_daemon_pythons(")
+              and usrc.index('"bootout", target') < usrc.index("stop_daemon_pythons("))
+        check("only the python running wa_live.py counts as the daemon, never its node parent or a one shot command",
+              is_daemon_python(m1._pycmd()) and is_daemon_python("/usr/bin/python3 /k/wa_live.py --config /c")
+              and not is_daemon_python("/usr/local/bin/node /h/run.mjs /usr/bin/python3 /k/wa_live.py --config /c")
+              and not is_daemon_python("/usr/bin/python3 /k/wa_live.py --status --config /c")
+              and not is_daemon_python("grep wa_live.py"))
+        r6 = do_restart(rcfg, rpath, Report(dry_run=True, quiet=True), launch_agents=agents)
+        r7 = do_restart(rcfg, rpath, Report(quiet=True), launch_agents=agents)
+        rcfg_r = copy.deepcopy(rcfg); rcfg_r["launchd"]["label"] = prefix + "whatsapp-live"
+        m8 = FakeMac(rpath, 8799)
+        r8 = do_restart(rcfg_r, rpath, Report(quiet=True), runner=m8.run, kill=m8.kill, launch_agents=agents)
+        check("restart: --dry-run prints the SIGKILL step and runs nothing; the selftest never reaches launchctl; reserved label refused",
+              not r6.errors and any("SIGKILL" in ln for ln in r6.lines) and r7.data.get("refused")
+              and r8.data.get("refused") and not m8.signals, (r6.errors, r7.errors, r8.errors))
+
         say("[seed-status and copy-seed]")
         rows = dict((r["key"], r) for r in seed_rows(cfg, payload))
         check("fresh owner copies read unchanged",
@@ -2575,6 +2996,8 @@ def selftest():
         hits = default_literals_in_runnable_blocks(PAYLOAD)
         check("no runnable block in SKILL.md, install/ or references/ hard-codes the default home, label or port "
               "(a second install would copy it and touch the first one)", not hits, hits[:12])
+        kicks = daemon_kickstart_lines(PAYLOAD)
+        check("no doc or seed restarts the daemon with launchctl kickstart -k (wa_setup.py restart does it)", not kicks, kicks[:12])
     except Exception as e:
         import traceback
         tally["fail"] += 1
@@ -2629,6 +3052,12 @@ def cmd_uninstall_launchd(args):
     return 3 if rep.data.get("refused") else (1 if rep.errors else 0)
 
 
+def cmd_restart(args):
+    path = _config_arg(args)
+    rep = do_restart(load_cfg(path), path, Report(dry_run=args.dry_run), wait_seconds=args.wait)
+    return 3 if rep.data.get("refused") else (1 if rep.errors else 0)
+
+
 def cmd_sync_reader_config(args):
     path = _config_arg(args)
     rep = do_sync_reader_config(load_cfg(path), path, Report(dry_run=args.dry_run))
@@ -2656,7 +3085,7 @@ def cmd_measure(args):
 
 DISPATCH = {
     "init": cmd_init, "doctor": cmd_doctor, "check-config": cmd_check_config, "render-launchd": cmd_render_launchd,
-    "install-launchd": cmd_install_launchd, "uninstall-launchd": cmd_uninstall_launchd,
+    "install-launchd": cmd_install_launchd, "uninstall-launchd": cmd_uninstall_launchd, "restart": cmd_restart,
     "sync-reader-config": cmd_sync_reader_config, "seed-status": cmd_seed_status, "copy-seed": cmd_copy_seed,
     "measure": cmd_measure, "tailscale-hint": cmd_tailscale_hint,
 }
@@ -2692,6 +3121,10 @@ def build_parser():
                        ("uninstall-launchd", "bootout, disable, remove the plist from ~/Library/LaunchAgents")):
         sp = add(name, text, writes=True)
         sp.add_argument("--intake", action="store_true", help="the evening intake job instead of the daemon")
+    sp = add("restart", "restart the daemon: SIGTERM its python, SIGKILL it after ExitTimeOut if frozen, let launchd "
+                        "start it again, prove one python holds the board port (never kickstart -k)", writes=True)
+    sp.add_argument("--wait", type=int, default=None, metavar="S",
+                    help="seconds to wait after SIGTERM before SIGKILL (default: ExitTimeOut from the installed plist, 90)")
     add("sync-reader-config", "write <home>/config.json for the reader and refresh <home>/runs-work/*/config.json", writes=True)
     sp = add("seed-status", "owner copies against live/seeds.json and the payload seeds")
     sp.add_argument("--json", action="store_true", help="machine readable rows")

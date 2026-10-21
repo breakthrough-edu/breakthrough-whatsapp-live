@@ -31,7 +31,7 @@ curl -s -w ' %{http_code}\n' "http://127.0.0.1:$PORT/health"
 ```
 
 - `state = running` with a pid: launchd runs it. `KeepAlive` brings it back within about 10 seconds after a crash.
-- `ok 200`: the board answers.
+- A body starting with `ok (last scan <n>s ago)`, then `200`: the board answers and the main loop scanned within its limit (three times `doorbell.full_rescan_seconds`, at least 30 seconds). `stalled <n> (last scan <n>s ago, limit <n>s)` and `503`: the board thread answers but the main loop is frozen (`references/pitfalls.md`, pit 16); see `references/troubleshooting.md`, "Nothing on the board".
 - `--status` prints JSON: `version`, `last_pk` (the watermark, the newest WhatsApp message id seen), `pending` (bursts waiting for their quiet gap), `recent_runs` (the last ten) and `needs_me` (up to twenty conversations waiting on you). It reads the state database and starts nothing.
 - `doctor` checks the Mac, the payload, the config, WhatsApp Desktop (`last database write: <age> ago`), the tools, Tailscale, the working folder and launchd, and ends with `VERDICT: READY`, `VERDICT: READY, with <n> note(s) above` or `VERDICT: NOT READY, first blocker: <what>`. It is read only and prints counts, paths and names, never message text.
 
@@ -111,6 +111,10 @@ In the vault, the daemon writes only person notes and their recent lines (`paths
 | `板子: 已处理`, `板子: 改草稿`, `板子: 改 <field>=<value>`, `板子: 手动跑`, `板子: 加进日历`, `板子: 交棒包` | A board button was pressed |
 | `模组: 全部载入` or `模组: 缺 <modules>` | Which optional modules loaded; a missing one stops only its own block |
 | `收到停止讯号, 等 <n> 个 run 收尾` | A stop or restart; runs get up to 90 seconds |
+| `prewarm <n> 天上次没跑完 (多半被重启切断), 补跑` | A prewarm whose process a restart killed mid-run is run again, from the start, in the background |
+| `主循环恢复了 (<the /health body>)` | The main loop is moving again after a stall (`/health` is back to `200`) |
+| `probe-claude: init 没有 memory_paths (Claude 记忆关着)`, `probe-claude: MEMORY LOADED, init 带 memory_paths <paths>: Claude 记忆没关掉`, `probe-claude: 没有 init 事件, 记忆开关查不到` | The probe's memory check: off (good), loaded (`references/troubleshooting.md`, "MEMORY LOADED in the log"), or not readable because claude did not start properly |
+| `MEMORY LOADED: 这个 run 载入了 Claude 记忆 (<paths>), 环境变数没生效; …`, `MEMORY LOADED (档案 run): …` | A triage or person note run loaded Claude memory; never expected (`references/pitfalls.md`, pit 14) |
 | `CAGE BREACH: 载入了不该有的工具: <tools>` | A run loaded a tool outside Read, Glob and Grep; see `references/troubleshooting.md` |
 
 Useful filters:
@@ -156,10 +160,10 @@ Drop a JSON file into `live/commands/`. Within a few seconds the running daemon 
 
 | File | Parameters | What it does | Look for |
 |---|---|---|---|
-| `probe-claude.json` | `{}`; `"label"`, `"drop": ["--flag"]`, `"add": ["--flag", "value"]` to bisect | One minimal `claude -p` with the cage flags, under launchd; samples and kills it after 90 seconds (one tiny model call) | `probe-claude 结束 rc=<rc>, <s>s, stdout <n> 字 -> <folder>` |
+| `probe-claude.json` | `{}`; `"label"`, `"drop": ["--flag"]`, `"add": ["--flag", "value"]` to bisect | One minimal `claude -p` with the cage flags and the daemon's environment, under launchd; samples and kills it after 90 seconds (one tiny model call) | `probe-claude 结束 rc=<rc>, <s>s, stdout <n> 字 -> <folder>`, then `probe-claude: init 没有 memory_paths (Claude 记忆关着)` |
 | `notify-test.json` | none | One test push through the outlet, as kind `error` | `notify-test: 已发` |
 | `test-run.<jid>.json` | none (the jid is in the name) | Judges that chat's last three inbound messages now, gate or no gate (one model call) | `test-run 指令: <name>` |
-| `prewarm-<days>.json` | none (the days are in the name) | Transcribes every voice note in that window into the cache, in the background; no model call | `prewarm 完成 <s>s: <summary>` |
+| `prewarm-<days>.json` | none (the days are in the name) | Transcribes every voice note in that window into the cache, in the background; no model call. One whose process a restart killed mid-run runs again at the next start; one that returned (finished, failed or timed out) does not | `prewarm 完成 <s>s: <summary>` |
 | `facts-now.json` | `{"dry_run": true}` | The facts job now; without `dry_run`, while `dossier.enabled` is true, it also queues person notes for paying customers without one, up to `dossier.nightly_cap`, and those runs start at once on `dossier.model` | `facts: people <n> · paid <n> · ...` |
 | `second-source-now.json` | `{"dry_run": true}`, `{"day": "YYYY-MM-DD"}` | The second source pull now, for yesterday or that day | `second source <source>: pulled <n> chats ...` |
 | `backup-now.json` | `{"dry_run": true}`, `{"dest": "<folder>"}` | The backup now, or into another folder once | `backup: <dest> · <n> 档 · <MB> MB` |
@@ -181,14 +185,13 @@ A daemon started with `--dry-run` calls no model, pushes nothing and writes no r
 
 | To | Run | What happens |
 |---|---|---|
-| Restart (after a config change) | `launchctl kickstart -k gui/$(id -u)/$LABEL` | Runs in flight get up to 90 seconds, then stop; their bursts stay pending and run again after the start. A person note job cut off is marked failed (`中断: daemon 重启时这个 job 没跑完`) and can be queued again. A start after a nightly job's time marks it done for today |
-| Stop until the next login | `launchctl bootout gui/$(id -u)/$LABEL` | Stopped now; the plist is still in `~/Library/LaunchAgents/`, so the next login or reboot starts it again |
-| Stop across reboots (pause) | `"$PY" "$KIT/daemon/wa_setup.py" uninstall-launchd --config "$LIVE/config.json"` | Boots it out, disables the label, removes the plist from `~/Library/LaunchAgents/`; it prints `kept:` for the rendered copy and `live/`: state, logs and config stay |
+| Restart (after a config change) | `"$PY" "$KIT/daemon/wa_setup.py" restart --config "$LIVE/config.json"` (never `launchctl kickstart -k`, which stops only the node parent and can orphan a frozen python: `references/pitfalls.md`, pit 15) | Runs in flight get up to 90 seconds (`ExitTimeOut`), then a python still alive is killed; their bursts stay pending and run again after the start. A person note job cut off is marked failed (`中断: daemon 重启时这个 job 没跑完`) and can be queued again; a prewarm the restart kills mid-run runs again; a backfill cut off does not. A start after a nightly job's time marks it done for today. It ends with `proof: one daemon, the new code is loaded (...)`; exit 3 is a refusal (the board port held by another program) with nothing signalled |
+| Stop (pause, also across reboots) | `"$PY" "$KIT/daemon/wa_setup.py" uninstall-launchd --config "$LIVE/config.json"` | Boots the job out, then stops any python of this install still running (SIGTERM, then SIGKILL after `ExitTimeOut` if it is frozen), disables the label, removes the plist from `~/Library/LaunchAgents/`; it prints `kept:` for the rendered copy and `live/`: state, logs and config stay |
 | Resume | `"$PY" "$KIT/daemon/wa_setup.py" install-launchd --config "$LIVE/config.json"` | Installs the rendered plist again and starts it; it continues from the watermark it had |
 | Restart after a code or template update | `render-launchd`, then `install-launchd` | `install/update.md` walks through it |
 | The evening intake job | the same `uninstall-launchd` and `install-launchd` with `--intake`; `launchctl kickstart -k gui/$(id -u)/$ILABEL` runs it once now | It never fires at load; it reads config at every run |
 
-Every `--dry-run` form prints the plan without doing it. A pause that must hold while the Mac is away is `uninstall-launchd`, never `bootout` alone.
+Every `--dry-run` form prints the plan without doing it. Stop the daemon with `uninstall-launchd`, never a raw `launchctl bootout`: that stops only the node parent, so a frozen python can be orphaned and keep the board port (`references/pitfalls.md`, pit 15), and the plist it leaves in `~/Library/LaunchAgents/` starts the daemon again at the next login.
 
 ## Pausing one block
 
@@ -238,7 +241,7 @@ On this Mac `http://127.0.0.1:<port>/`; on the phone, the tailnet address `tails
 | The green WhatsApp button, Copy draft | nothing: it opens WhatsApp prefilled, or copies | none; nothing is ever sent by the kit |
 
 - **The footer.** Today's runs and tokens (read, cached, written), the watermark, and how long ago WhatsApp's database changed. Dollars show only with `board.show_usd` `true`.
-- **Other endpoints.** `/health`, `/api/board`, `/api/thread?jid=<jid>&n=<n>`, `/api/runs` (the last 30 runs), `/api/digest`, `/media?pk=<pk>`, `/calendar/<key>.ics`, and `/v/` listing the variants in `live/variants/`.
+- **Other endpoints.** `/health` (`GET` and `HEAD`: `200` with `ok (last scan <n>s ago)` while the main loop's heartbeat is younger than three times `doorbell.full_rescan_seconds`, at least 30 seconds; `503` with `stalled <n> (last scan <n>s ago, limit <n>s)` after that; a monitor checks that the body starts with `ok`, or uses `curl -sf`), `/api/board`, `/api/thread?jid=<jid>&n=<n>`, `/api/runs` (the last 30 runs), `/api/digest`, `/media?pk=<pk>`, `/calendar/<key>.ics`, and `/v/` listing the variants in `live/variants/`.
 
 ## The morning digest
 
@@ -257,6 +260,7 @@ To send it now: `digest-now.json`. A restart after `digest.at` marks today's as 
 | `⚠️ [WA live] 档案 run #<id> 失败 (<name>): <reason>` | A person note run failed | Troubleshooting, "A person note is refused" |
 | `⚠️ [WA live] 排班 <job> 失败: <reason>` | A nightly job failed; at most once per job per hour | The reason names it; Troubleshooting per job |
 | `⚠️ [WA live] WhatsApp 的数据库已经 <h> 小时没动, <Mac> 上的 WhatsApp Desktop 可能掉线了。` | WhatsApp Desktop wrote nothing for `doorbell.stale_alert_hours`; repeated at most every 6 hours | Troubleshooting, "Nothing on the board" |
+| `⚠️ [WA live] 主循环已经 <h> 小时没动 (/health 回 503)。先看这台 Mac 的萤幕有没有没按的权限弹窗, 再用 wa_setup.py restart 重启。` | The main loop has not scanned for half of `doorbell.stale_alert_hours` while the board still answers (push key `daemon_stalled`, at most one in six hours): look at the Mac's screen for an unanswered permission dialog, then `wa_setup.py restart` | Troubleshooting, "Nothing on the board" |
 | `⚠️ [WA live] 水位 <old> 比 WhatsApp 库最大编号 <max> 还大 ...` | WhatsApp's database was rebuilt or linked again; the watermark was reset and older messages are not judged | Troubleshooting, "A message is missing" |
 | `⚠️ [WA live] 摘要回填失败, 看 wa_live.log` | A summary backfill stopped on an error | The log's `backfill 失败` traceback |
 | `🚨 [WA live] run #<id> (<name>) cage breach: 载入了不该有的工具 <tools>`, `🚨 [WA live] 档案 run cage breach: ...`, `🚨 [WA live] <kind> run #<id> cage breach: ...` | A run loaded a tool outside the cage | Troubleshooting, "Cage breach" |

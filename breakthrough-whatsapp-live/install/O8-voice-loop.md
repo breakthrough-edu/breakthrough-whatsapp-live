@@ -38,8 +38,9 @@ Read only. It prints how many legal lines `voice-pairs.jsonl` holds (or `not yet
 Only when the owner said so: with the config edit ritual (`install/00-start-here.md`), set `voice.enabled` to `false` (or `voice.examples`), then restart:
 
 ```sh
-LABEL="<launchd.label from the progress file header>"
-launchctl kickstart -k gui/$(id -u)/$LABEL
+KIT=~/.claude/skills/breakthrough-whatsapp-live; PY=/usr/bin/python3
+HOME_DIR="<paths.home from the progress file header>"; LIVE="$HOME_DIR/live"
+"$PY" "$KIT/daemon/wa_setup.py" restart --config "$LIVE/config.json"
 ```
 
 Switched off, no pair opens, no line is written, section 8 of every prompt reads `(还没有范本)`, and the board's `ui.features.voice` is `false`. The file already written stays; delete it with the owner if they want the kept pairs gone.

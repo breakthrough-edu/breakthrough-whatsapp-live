@@ -69,36 +69,36 @@ WhatsApp Live writes into your second-brain vault in a few places, and your vaul
 - A line that continues a meaning has more spaces after `#` than the role line plus the role word.
 - `<source_id_keys>` is empty when the owner has no second message source. If the shipped doctrine gives `renew_by` to entities and a person note may carry a deadline, add `renew_by` to `optional` too.
 
-**An example of the idea**, from a business that sells courses and services (twelve relationships; the owner's own list will differ):
+**An invented example**, from a small baking school that also takes catering orders (twelve relationships; your own list will differ):
 
 ```yaml
   person:     {required: [type, roles],
                optional: [roles_remark, stage, stage_since, last_contact, since,
                           wa_jid, wa_phone, lark_id, dossier_updated],
                multi: [roles],
-               roles: [lead, member, client, partner, collaborator, vendor, referrer,
-                       co-teacher, guest, network, team, mentor],
+               roles: [lead, student, client, partner, collaborator, supplier, referrer,
+                       instructor, venue, network, team, mentor],
                stage: [new, talking, offered, won, active, done, parked]}
-                                          #   lead         came to an event or joined a list, has not bought
-                                          #   member       took one of the owner's courses or joined the community
-                                          #   client       buys the owner's services (not a course)
+                                          #   lead         asked about a class or an order, has not bought
+                                          #   student      took one of the school's classes
+                                          #   client       orders catering (not a class)
                                           #   partner      shares money or invests together with the owner
                                           #   collaborator works together with the owner, no money shared
-                                          #   vendor       the owner pays them to do work
-                                          #   referrer     brings people to the owner
-                                          #   co-teacher   teaches or assists on the owner's courses
-                                          #   guest        appears on the owner's shows or events
+                                          #   supplier     the owner pays them for ingredients, equipment or work
+                                          #   referrer     brings students or orders to the owner
+                                          #   instructor   teaches or assists in the school's classes
+                                          #   venue        hosts a class, or an event the school caters
                                           #   network      pure network: information, introductions, a friend
-                                          #   team         works inside one of the owner's own companies
+                                          #   team         works inside the owner's own business
                                           #   mentor       the owner learned from them
 ```
 
-(In the real family the explanatory comment lines of the block above sit around these role lines, in any order; they are left out here to keep the example short. Explanatory lines use one space after `#`, so the reader never mistakes them for a role. Both this example and the placeholder block were checked against `dossier_core.parse_person_family` and my-second-brain's `doctrine_schema.py`.)
+(In the real family the explanatory comment lines of the block above sit around these role lines, in any order; they are left out here to keep the example short. Explanatory lines use one space after `#`, so the reader never mistakes them for a role. The example parses with `dossier_core.parse_person_family`.)
 
 **Config that must agree with the block**, in the same breath:
 
 - `vocab.stages` keys equal the `stage` list. Renaming a stage later changes both, through one re-ruling (`references/defaults-and-why.md`, default 8).
-- `person.roles_with_stage` (default `lead`, `member`, `client`) names the roles that carry a stage. It must share at least one value with the `roles` list; when it shares none, every note run refuses with a message naming both lists, rather than silently dropping every stage.
+- `person.roles_with_stage` (default `lead`, `member`, `client`) names the roles that carry a stage (for the example above, `lead`, `student` and `client`). It must share at least one value with the `roles` list; when it shares none, every note run refuses with a message naming both lists, rather than silently dropping every stage.
 - `second_source.id_key` equals the id key declared here (the Lark implementation's default is `lark_id`).
 - `paths.doctrine` points at this doctrine (left empty, the loader uses `<vault>/99_Meta/structure-doctrine.md`).
 
@@ -360,8 +360,8 @@ code: wa_live.py sha256 <shasum -a 256 of it> · VERSION <x> · recorded <date> 
 read: WhatsApp Desktop's database and media, read only, checked every doorbell.poll_seconds · <live>/config.json · the vault notes topic-map.json points at, and person notes of people named in a chat · <live>/facts.json · the reader's working copies under <home>/runs-work/
 write: <home>/ (runs-work, transcripts-cache, prewarm) · <live>/ (state.sqlite, summaries.md, runs/, digest/, logs, calendar/) · the vault: recent lines in existing person notes, intake buffer entries when intake.enabled is true, filing-log lines (the person note writer below adds whole notes) · pushes through notify.outlet · never WhatsApp, never a message sent
 limits: debounce 45 s quiet, 180 s at most · 2 runs at once, 1 per conversation · 600 s per run, 1 retry, 12 turns · tools Read, Glob, Grep with the cage check · Read denied on secrets · board on 127.0.0.1:<port> only
-stop: launchctl bootout gui/$(id -u)/<label> stops it now; to keep it stopped after a reboot, also move the plist out of ~/Library/LaunchAgents/ · remove the board's tailscale serve rule · leaves no half state: bursts in progress run again at the next start, and a person note job cut off is marked failed at start
-proof: curl -s http://127.0.0.1:<port>/health answers ok · launchctl print gui/$(id -u)/<label> shows state = running · a test message produces a new row in the runs table and a row on the board · the morning digest arrives (silence is not proof)
+stop: wa_setup.py uninstall-launchd --config <live>/config.json boots the job out, then stops any python of this install left running, disables it and removes its plist, so it stays stopped after a reboot (install-launchd brings it back); a raw launchctl bootout is not a stop, it can leave a frozen python holding the board port · remove the board's tailscale serve rule · leaves no half state: bursts in progress run again at the next start, and a person note job cut off is marked failed at start
+proof: curl -s http://127.0.0.1:<port>/health answers 200 with a body starting ok (503 stalled means the main loop is frozen) · after a restart, wa_setup.py restart ends with proof: one daemon · launchctl print gui/$(id -u)/<label> shows state = running · a test message produces a new row in the runs table and a row on the board · the morning digest arrives (silence is not proof)
 rollback: wa_setup.py uninstall-launchd, then remove <home> (install/uninstall.md) · a person note restored from <live>/dossier-backups/<note>/ · an intake entry removed by hand
 ```
 
@@ -384,7 +384,7 @@ runs: nightly at dossier.nightly_at, on the board's open and rewrite buttons, an
 read: this person's messages over dossier.pack_days · their facts lines · the current note · the person-dossier playbook skeleton (paths.person_playbook) · the doctrine's person family (paths.doctrine)
 write: one whole person note in <people_dir>, only after dossier_core.finalize passes · a backup of what was on disk to <live>/dossier-backups/<note>/ first (dossier.backups_keep, 3) · one line in paths.filing_log · its run folder under <live>/runs/ · never a note it did not read: a new note run refuses to replace an existing file
 limits: dossier.nightly_cap notes per night (8) · one run at a time · the same person at most once per dossier.min_gap_hours (6), failures included · dossier.run_timeout_seconds (1200) and dossier.max_turns (24) · model dossier.model
-stop: dossier.enabled false, then launchctl kickstart -k gui/$(id -u)/<label>; prove that recent lines stopped too (references/privacy.md), and stop the daemon to stop every vault write
+stop: dossier.enabled false, then wa_setup.py restart --config <live>/config.json; prove that recent lines stopped too (references/privacy.md), and stop the daemon to stop every vault write
 proof: the filing-log line · the backup file · dossier_updated is today in the note · sqlite3 -readonly <live>/state.sqlite "select id, ok, error, note_path from dossier_jobs order by id desc limit 3" shows ok = 1
 rollback: copy the newest file from <live>/dossier-backups/<note>/ over the note and add one filing-log line; recent lines appended since then are lost
 approval: this writer puts AI-written text into the vault without a per-note approval card; the checks, three backups and the filing-log line stand in for one. The owner ruled on that trade at station C4.

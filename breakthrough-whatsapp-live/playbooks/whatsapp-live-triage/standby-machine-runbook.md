@@ -5,7 +5,7 @@ status: active
 confirmed_by_owner: false
 tags: []
 ---
-<!-- seed: breakthrough-whatsapp-live playbooks/whatsapp-live-triage/standby-machine-runbook.md v1.0.0 -->
+<!-- seed: breakthrough-whatsapp-live playbooks/whatsapp-live-triage/standby-machine-runbook.md v1.0.1 -->
 
 # 常驻机躺了怎么办 (WhatsApp Live 冷启动程序)
 
@@ -13,7 +13,7 @@ tags: []
 >
 > 一句话版: 先确认真死 → 备援机装同一套 → 拉昨晚备份放回去 → ⛔ 绝不两台同跑。
 
-⛔ **同一时间只准一个 session 动 daemon**, 两台机加起来也是 (改码、kickstart、重排都算): kickstart 会杀掉正在跑的 run, 两个 session 各自重启会互相踩。
+⛔ **同一时间只准一个 session 动 daemon**, 两台机加起来也是 (改码、重启、重排都算): 重启会切断等不完的 run (`wa_setup.py restart` 最多等 plist 的 ExitTimeOut, 默认 90 秒), 两个 session 各自重启会互相踩。
 
 ## 先填好这几个值
 
@@ -39,7 +39,8 @@ B="<夜备去处的根>"                    # config backup.dest
 
 1. **早上的日报没来 = 最可信的讯号。** 日报 (`digest.at`, 默认 08:00, 走你的推播出口) 连安静日也会发一句说 daemon 活着。早上没收到, 就是 daemon、推播出口、或整台常驻机三者之一躺了, 不用再猜「是不是刚好没事」。前提是 `digest.enabled` 与 `digest.push` 开着、`notify.mode` 不是 `off`。
 2. **「WhatsApp 库太久没动」的告警** (`doorbell.stale_alert_hours`, 默认 6; `notify.mode` 是 `errors` 以上就会推)。这条只证明 daemon 还活着, 但 WhatsApp Desktop 没在写库: 多半是 WhatsApp Desktop 掉线或没开, 不是常驻机死了。
-3. **板子打不开。** ⚠️ 这条最弱: 手机没开 Tailscale、tailnet 掉了、`tailscale serve` 没挂, 都会一样打不开。
+3. **「主循环已经 X 小时没动」的告警** (卡住超过 `doorbell.stale_alert_hours` 的一半就推, `notify.mode` 是 `errors` 以上)。daemon 进程还在, 只是主循环卡住了, 常驻机没死: 走第 1 步的 1g。
+4. **板子打不开。** ⚠️ 这条最弱: 手机没开 Tailscale、tailnet 掉了、`tailscale serve` 没挂, 都会一样打不开。
 
 ## 第 1 步: 先确认真死 (不是 WhatsApp Desktop 掉线, 也不是 Tailscale 断)
 
@@ -63,15 +64,18 @@ ssh "$PRIMARY" 'pgrep -x WhatsApp; stat -f "%Sm  %N" "$HOME/Library/Group Contai
 ssh "$PRIMARY" "tail -20 $RL/wa_live.log"
 # 1f. 停电后会不会自己开机 (回 autorestart 1 = 会)
 ssh "$PRIMARY" 'pmset -g' | grep -i autorestart
+# 1g. daemon 的主循环还在转吗 (回 ok 开头 = 在转; 回 stalled 开头 = HTTP 503, 进程在但主循环卡住了)
+ssh "$PRIMARY" "curl -s -m 5 http://127.0.0.1:$PORT/health"
 ```
 
 判读:
 
 | 看到什么 | 意思 | 做什么 |
 |---|---|---|
-| 1a 有、1b 进得去、1c 有 pid、1d 库几分钟内有动 | 全活, 只是板子或日报那条出口坏了 | 修出口: 在常驻机上看 `tailscale serve status`; 日报看 `wa_live.log` 里 digest 那几行, 再丢一个 `notify-test.json` 指令档验推播出口 |
+| 1a 有、1b 进得去、1c 有 pid、1d 库几分钟内有动、1g 回 ok | 全活, 只是板子或日报那条出口坏了 | 修出口: 在常驻机上看 `tailscale serve status`; 日报看 `wa_live.log` 里 digest 那几行, 再丢一个 `notify-test.json` 指令档验推播出口 |
+| 1c 有 pid, 但 1g 回 stalled | 进程还在, 主循环卡住了, 多半有子进程在等一个没人按的权限弹窗 | 到常驻机屏幕前 (或用屏幕共享) 看有没有没按的弹窗, 按掉; 再照下面「1c 说没在跑」那一行的命令重启 |
 | 1c 有 pid, 但 1d 库几小时没动 | WhatsApp Desktop 掉线或没开 | 到常驻机屏幕前 (或用屏幕共享) 开 WhatsApp Desktop 重新连; 这不是本页的案子 |
-| 1c 说没在跑, 或 pid 一直换 (不断重生) | daemon 自己挂了, 机器没死 | `ssh "$PRIMARY" "launchctl kickstart -k gui/\$(id -u)/$LABEL"`, 再看 1e; 起不来就读 [[whatsapp-live-triage-playbook]] 第 8、9 条与 `references/troubleshooting.md`, 还是不用本页 |
+| 1c 说没在跑, 或 pid 一直换 (不断重生) | daemon 自己挂了, 机器没死 | `ssh "$PRIMARY" "/usr/bin/python3 \$HOME/.claude/skills/breakthrough-whatsapp-live/daemon/wa_setup.py restart --config \$HOME/$RL/config.json"`, 最后一行要是 `proof: one daemon, …`; 不是 0 就照它印的那句先处理 (例如板子的端口被别的程式占着, 它一个讯号都不送就退出)。再看 1e; 起不来就读 [[whatsapp-live-triage-playbook]] 第 8、9 条与 `references/troubleshooting.md`, 还是不用本页 |
 | 1a 看不到常驻机或它显示离线, 或 1b 连不上, 而备援机自己的 Tailscale 是通的 (看得到别的节点) | **常驻机真躺了** (停电、死机、硬体) | **往下走第 2 步** |
 | 1a 连备援机自己都不在 tailnet | 是备援机这边的 Tailscale 断了 | 先修备援机的 Tailscale, 再从 1a 重来 |
 
@@ -169,7 +173,7 @@ launchctl print "gui/$(id -u)/$LABEL"              # 要回找不到这个 servi
 ls "$HOME/Library/LaunchAgents/$LABEL.plist"       # 要回 No such file
 ```
 
-⭐ **停 = bootout 加上 plist 离开 `~/Library/LaunchAgents/`。** 只 bootout 的话, 备援机下一次登入或重开机, launchd 会把 LaunchAgents 里的 plist 全部载回, 你就在不知情下两台同跑。`uninstall-launchd` 若没把 plist 搬走, 就手动 `launchctl bootout "gui/$(id -u)/$LABEL"`, 再把 plist 搬进一个带日期的暂停夹 (例如 `~/Backups/launchd-paused-<日期>/`)。晚间进料口那支 (`$ILABEL`) 若也装了, 一样停法。
+⭐ **停 = bootout 加上 plist 离开 `~/Library/LaunchAgents/`。** 只 bootout 的话, 备援机下一次登入或重开机, launchd 会把 LaunchAgents 里的 plist 全部载回, 你就在不知情下两台同跑。`uninstall-launchd` 先停 python (TERM, 过了 ExitTimeOut 还活着就 KILL), 再 bootout、disable、删掉 LaunchAgents 里那份 plist; render 出来的那份留在 `$WL/launchd/`, 之后 `install-launchd` 就从那里装回。上面 `ls` 若还看得到 plist, 就重跑 `uninstall-launchd` 看它印的 `ERROR` 行, ⛔ 不改用手动 `launchctl bootout`: 它只停 node 家长, 卡住的 python 会变成孤儿继续占着端口。晚间进料口那支 (`$ILABEL`) 若也装了, 用同一行加 `--intake` 停。
 
 ⚠️ 常驻机停电前 daemon 是常驻的 (KeepAlive), 1f 那格若是 `autorestart 1`, 它会**自己开机、自己起来**。也就是说常驻机一有电, daemon 可能已经在跑了, 备援机那份多活一分钟就多一分钟双跑。所以备援机上要盯的是 `tailscale status` 里常驻机一出现就停, 而不是等常驻机上什么都对了才停。
 
@@ -177,7 +181,7 @@ ls "$HOME/Library/LaunchAgents/$LABEL.plist"       # 要回 No such file
 
 ```bash
 # 在备援机上, 确认备援机的 daemon 已经停了之后
-ssh "$PRIMARY" "launchctl bootout gui/\$(id -u)/$LABEL"                   # 常驻机那份也先停, 盖档时不准有人在写
+ssh "$PRIMARY" "/usr/bin/python3 \$HOME/.claude/skills/breakthrough-whatsapp-live/daemon/wa_setup.py uninstall-launchd --config \$HOME/$RL/config.json"   # 常驻机那份也先停 (先停 python 再 bootout), 盖档时不准有人在写
 ssh "$PRIMARY" "cp -R $RL $RL.bak-before-merge-\$(date +%Y%m%d)"
 for f in state.sqlite summaries.md facts.json voice-pairs.jsonl second-source-whitelist.json; do
   [ -f "$L/$f" ] && scp "$L/$f" "$PRIMARY:$RL/"
@@ -185,11 +189,11 @@ done
 scp -r "$L/digest" "$L/dossier-backups" "$PRIMARY:$RL/"
 # ⛔ config.json、telegram.json、claude-settings.json、prompts/、topic-map.json、seeds.json、adapters/ 不盖: 常驻机自己那几份本来就对
 ssh "$PRIMARY" "sqlite3 $RL/state.sqlite \"DELETE FROM meta WHERE key='last_pk'; DELETE FROM inbound_log; DELETE FROM pending;\""   # 编号是备援机的, 到常驻机一样要重定
-ssh "$PRIMARY" "launchctl bootstrap gui/\$(id -u) ~/Library/LaunchAgents/$LABEL.plist"
+ssh "$PRIMARY" "/usr/bin/python3 \$HOME/.claude/skills/breakthrough-whatsapp-live/daemon/wa_setup.py install-launchd --config \$HOME/$RL/config.json"   # 从常驻机自己 render 好的那份装回、enable、起跑
 ssh "$PRIMARY" "tail -5 $RL/wa_live.log"
 ```
 
-接手期间在备援机上改过的设定 (例如白名单、词表、`live/prompts/` 里的提示) 不会跟着盖回去, 要手动带回常驻机那份, 再 kickstart 一次。
+接手期间在备援机上改过的设定 (例如白名单、词表、`live/prompts/` 里的提示) 不会跟着盖回去, 要手动带回常驻机那份, 再用第 1 步判读表「1c 说没在跑」那一行的 `wa_setup.py restart` 命令重启一次。
 
 人物档走你 vault 的同步, 两台本来就是同一份, 不用搬; 备援机接手期间开的档已经在 vault 里。
 

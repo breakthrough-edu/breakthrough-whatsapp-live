@@ -74,9 +74,8 @@ With the config edit ritual, set `second_source.enabled` to `true`, run `check-c
 ```sh
 KIT=~/.claude/skills/breakthrough-whatsapp-live; PY=/usr/bin/python3
 HOME_DIR="<paths.home from the progress file header>"; LIVE="$HOME_DIR/live"
-LABEL="<launchd.label from the progress file header>"
 "$PY" "$KIT/daemon/wa_setup.py" check-config --config "$LIVE/config.json"
-launchctl kickstart -k gui/$(id -u)/$LABEL
+"$PY" "$KIT/daemon/wa_setup.py" restart --config "$LIVE/config.json"
 ```
 
 Then pull inside the daemon, first without the model, then for real (one model call when others spoke yesterday):

@@ -35,7 +35,7 @@ facts.json:
   aliases {every jid spelling and "phone:<digits>": key}
   mismatch {paid_no_chat, unparsable_phone, paid_chat_no_note_queued, paid_chat_stale_no_note}, always all four
 
-Matching (fix): every phone with at least 8 digits is looked up in WhatsApp (both jid spellings) and in person notes;
+Matching: every phone with at least 8 digits is looked up in WhatsApp (both jid spellings) and in person notes;
 facts.phone_valid only decides whether a number that matched nothing is listed as unparsable. When the person notes
 folder cannot be read, nobody is queued for a note (people_index_error says why) instead of queueing every payer.
 

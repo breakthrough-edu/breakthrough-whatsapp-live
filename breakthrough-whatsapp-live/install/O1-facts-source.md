@@ -74,9 +74,8 @@ With the config edit ritual, set `facts.enabled` to `true`, then run `check-conf
 ```sh
 KIT=~/.claude/skills/breakthrough-whatsapp-live; PY=/usr/bin/python3
 HOME_DIR="<paths.home from the progress file header>"; LIVE="$HOME_DIR/live"
-LABEL="<launchd.label from the progress file header>"
 "$PY" "$KIT/daemon/wa_setup.py" check-config --config "$LIVE/config.json"
-launchctl kickstart -k gui/$(id -u)/$LABEL
+"$PY" "$KIT/daemon/wa_setup.py" restart --config "$LIVE/config.json"
 ```
 
 `check-config` refuses a missing CSV file (`file not found`), a mapping without the phone column, and a Lark block with no tables. A restart after `facts.at` marks tonight's job as run for today; step 6 runs it now instead.

@@ -25,7 +25,7 @@ One question at a time. Read `references/defaults-and-why.md`, default 1, before
 5. **Which Mac stays on all day, signed in to WhatsApp Desktop and to Claude Code?** It runs the daemon. It must not sleep, and it should start again by itself after a power cut. An owner on Windows: say rule 7 of `SKILL.md` once and stop.
 6. **Where should the working folder live?** Default `~/WhatsApp-Live`. Not inside Documents, Desktop, Downloads, iCloud Drive or a cloud storage folder: background jobs stall on privacy prompts there, and the folder holds whole conversations, so it should not sync anywhere. Step 2 checks the folder is not another install's before anything is created.
 7. **Do you keep a second-brain vault, and where is it?** Person notes, the playbooks and the intake buffer live there. No vault is fine; those blocks are then skipped.
-8. **The playbooks** (only with a vault). Three folders of method text that say why the system works the way it does and what already went wrong. Offer one folder at a time, one sentence each, one yes each (`references/vault-proposals.md`, proposal e, move 1):
+8. **The playbooks** (only with a vault). Three folders of method text that say why the system works the way it does and the pits to avoid. Offer one folder at a time, one sentence each, one yes each (`references/vault-proposals.md`, proposal e, move 1):
    * `whatsapp-live-triage`: the judgment and the pits behind the daemon, plus the cold start runbook for a dead Mac.
    * `resident-workers`: how to bound anything that runs while nobody watches (six cells, the approval card). Not limited to WhatsApp.
    * `person-dossier`: how a person note is written and checked. The note run reads it every time, so it is required if person notes are turned on at C4.

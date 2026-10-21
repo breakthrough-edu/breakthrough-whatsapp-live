@@ -125,7 +125,9 @@ if (!status.open) { log('open entries: 0, nothing sent'); process.exit(0); }
 log(`open entries: ${status.open}${status.why ? ` (${status.why})` : ''}`);
 
 // ---- 2. the brain: one suggestion per entry, read only ---------------------------------
-const runEnv = { ...baseEnv, PATH: status.path_env || process.env.PATH };
+// Claude memory and CLAUDE.md files stay out of this run, as in every run the daemon starts (wa_common.CLAUDE_QUIET_ENV)
+const runEnv = { ...baseEnv, PATH: status.path_env || process.env.PATH,
+  CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1' };
 const cwd = status.cwd && existsSync(status.cwd) ? status.cwd : HOME;
 if (cwd !== status.cwd) log('brain cwd missing, using HOME instead:', status.cwd);
 let raw = '';
@@ -144,6 +146,7 @@ if (!status.claude) {
     let ev;
     try { ev = JSON.parse(line); } catch { continue; }
     if (ev.type === 'system' && ev.subtype === 'init' && Array.isArray(ev.tools)) breach = ev.tools.filter((t) => !EXPECTED_TOOLS.has(t));
+    if (ev.type === 'system' && ev.subtype === 'init' && ev.memory_paths) log('MEMORY LOADED: the pre-sort run loaded Claude memory', JSON.stringify(ev.memory_paths));
     if (ev.type === 'result') raw = String(ev.result || '').trim();
   }
   if (breach.length) log('CAGE BREACH: the pre-sort run loaded', breach.join(', '));

@@ -57,7 +57,7 @@ import uuid
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 HOME = Path.home()
 DAEMON_DIR = Path(__file__).resolve().parent
 PAYLOAD = DAEMON_DIR.parent                     # 安装包根 (daemon/ 的上一层)
@@ -970,7 +970,7 @@ class State(object):
         changed = 0
         now = now_iso()
         with self.lock:
-            # parked_after_days 0 或负数 = 关掉这条规则 (设定说明与 check-config 都这样讲; 以前 0 会把那一格全部立刻搁置)
+            # parked_after_days 0 或负数 = 关掉这条规则 (设定说明与 check-config 都这样讲; 0 不当作「零天」, 否则那一格会全部立刻搁置)
             if V.parked and V.parkable_timeout and int(parked_after_days or 0) > 0:
                 cut = (dt.datetime.now() - dt.timedelta(days=parked_after_days)).isoformat(timespec="seconds")
                 cur = self.conn.execute("""UPDATE conversations SET stage_prev=stage, stage=?, stage_auto=1, stage_changed_at=?
@@ -1319,7 +1319,7 @@ def _row_get(r, key):
 
 
 def speaker_jid_of(jid, member_jid, from_jid):
-    """群讯息是谁说的。群里 ZWAGROUPMEMBER.ZMEMBERJID 是正解 (实测都是 @lid 形); 没有才退 ZWAMESSAGE.ZFROMJID,
+    """群讯息是谁说的。群里 ZWAGROUPMEMBER.ZMEMBERJID 是正解 (通常是 @lid 形); 没有才退 ZWAMESSAGE.ZFROMJID,
     但群讯息的 ZFROMJID 常常就是群号本身, 那种不算。一对一回 None。"""
     if not (jid or "").endswith("@g.us"):
         return None
@@ -1889,6 +1889,8 @@ class Brain(object):
                 log.warning("subprocess_env: %s", e)
         env = env or dict(os.environ)
         env.setdefault("HOME", str(HOME)); env.setdefault("LANG", "en_US.UTF-8")
+        # 主人的 Claude 记忆与 CLAUDE.md 不准进任何一个后台 run (wa_common.CLAUDE_QUIET_ENV; 这里再设一次, 模组没载入也照关)
+        env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"; env["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] = "1"
         return env
 
     def claude_base_args(self, model, max_turns):
@@ -1899,6 +1901,22 @@ class Brain(object):
                 "--allowedTools", " ".join(ALLOW_TOOLS), "--disallowedTools", " ".join(self.deny_tools),
                 # 不给 add-dir, cwd 也不放 Documents: launchd 底下开 TCC 路径会卡死。脑用 Read 开对话包里列的图片路径是通的 (node 当家长时实证)。
                 "--max-turns", str(int(max_turns))]
+
+    @staticmethod
+    def init_memory_paths(stdout):
+        """stream-json 的 init 事件带 memory_paths 就是这个 run 载入了 Claude 记忆 (环境变数没生效); 回那个值, 没有回 None。
+        证据只认 harness 自己的 init 事件, 不问模型。"""
+        for line in (stdout or "").splitlines():
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                j = json.loads(line)
+            except Exception:
+                continue
+            if j.get("type") == "system" and j.get("subtype") == "init":
+                return j.get("memory_paths") or None
+        return None
 
     @staticmethod
     def parse_stream(stdout):
@@ -1971,7 +1989,7 @@ class Brain(object):
             return 0
 
     def refresh_reader_configs(self):
-        """daemon 起跑时刷新读取器 config (以前只在建夹时复制一次, 改了根设定旧夹不跟)。
+        """daemon 起跑时刷新读取器 config (每次起跑都刷新, 否则改了根设定旧夹不会跟)。
         规矩只住 wa_setup.do_sync_reader_config (重生 <home>/config.json, 刷每个 runs-work/<key>/ 与 prewarm/ 的副本);
         wa_setup 载入不了或回错才退回这里: 根 config 不在就照 live config 写一份并喊一声, 再把副本对齐。"""
         try:
@@ -2053,16 +2071,30 @@ class Brain(object):
                 cache_link.symlink_to(base / "transcripts-cache")
             self._sync_config(work)
             out = self.runs_dir / ("prewarm-%s-%dd.json" % (dt.datetime.now().strftime("%Y%m%d-%H%M%S"), days))
+            # 开跑前在 meta 记 prewarm_pending, 跑完才清: 被重启切断的 (进程被杀, 走不到下面) 由主循环下次起跑时补跑 (resume_prewarm)。
+            self.state.set_meta("prewarm_pending", str(int(days)))
             log.info("prewarm 开始: %d 天全窗 (语音全转), 独立 work_dir %s, 不挡 live run", days, work)
             t0 = time.time()
             try:
                 r = self.run_script([str(self.reader_dir / "wa_sweep.py"), "--work-dir", str(work), "--days", str(days), "--out", str(out)],
                                     7200, "prewarm")
                 log.info("prewarm 完成 %.0fs: %s", time.time() - t0, (r.stdout or "").strip()[-300:])
+                self.state.set_meta("prewarm_pending", "")
             except Exception as e:
                 log.warning("prewarm 失败 %.0fs: %s", time.time() - t0, e)
+                # 走得到这里就是跑完了 (失败或超时), 不补跑, 免得每次起跑都重来; 只有进程被杀 (走不到这里) 才留着 pending
+                self.state.set_meta("prewarm_pending", "")
         finally:
             self.prewarm_busy = False
+
+    def resume_prewarm(self):
+        """daemon 起跑时: 上次的 prewarm 没跑完 (meta 还有 prewarm_pending) 就在背景补跑一次。回补跑的天数, 没补回 None。"""
+        pw = str(self.state.get_meta("prewarm_pending") or "")
+        if not pw.isdigit() or self.dry_run:
+            return None
+        log.warning("prewarm %s 天上次没跑完 (多半被重启切断), 补跑", pw)
+        threading.Thread(target=self.prewarm, args=(int(pw),), daemon=True).start()
+        return int(pw)
 
     def pack_window(self, kind, prev, ground=False):
         """对话包要拉几天: 有记忆 (上次判断带 summary) 就只拉「上次判断之后 + 最近 warm_days 天」;
@@ -2291,6 +2323,9 @@ class Brain(object):
         done, breach = self.parse_stream(r.stdout)
         if breach:
             log.warning("CAGE BREACH: 载入了不该有的工具: %s", ", ".join(breach))
+        mem = self.init_memory_paths(r.stdout)
+        if mem:
+            log.warning("MEMORY LOADED: 这个 run 载入了 Claude 记忆 (%s), 环境变数没生效; 丢 commands/probe-claude.json 查", mem)
         if done is None:
             tail = (r.stderr or r.stdout or "")[-400:].strip()
             raise RunError("claude -p 没有回 result (rc=%s): %s" % (r.returncode, tail))
@@ -3185,6 +3220,9 @@ class Dossier(object):
         if breach:
             log.warning("CAGE BREACH (档案 run): 载入了不该有的工具: %s", ", ".join(breach))
             self.notifier.send("🚨 [WA live] 档案 run cage breach: 载入了不该有的工具 %s" % ", ".join(breach), key="breach", min_gap=1800, kind="error")
+        mem = self.brain.init_memory_paths(r.stdout)
+        if mem:
+            log.warning("MEMORY LOADED (档案 run): 载入了 Claude 记忆 (%s), 环境变数没生效", mem)
         if done is None:
             raise RunError("claude -p 没有回 result (rc=%s): %s" % (r.returncode, (r.stderr or r.stdout or "")[-300:]))
         if done.get("is_error"):
@@ -3367,7 +3405,8 @@ def make_board_handler(daemon):
         def do_HEAD(self):
             path = self.path.split("?")[0]
             if path == "/health":
-                self._send(200, "ok", "text/plain; charset=utf-8", head_only=True)
+                code, body = daemon.health_status()
+                self._send(code, body, "text/plain; charset=utf-8", head_only=True)
             elif path == "/media":
                 self._media(head_only=True)
             elif path.startswith("/calendar/"):
@@ -3441,7 +3480,8 @@ def make_board_handler(daemon):
                 else:
                     self._send(404, "no digest yet", "text/plain; charset=utf-8")
             elif path == "/health":
-                self._send(200, "ok", "text/plain; charset=utf-8")
+                code, body = daemon.health_status()
+                self._send(code, body, "text/plain; charset=utf-8")
             else:
                 # ⛔ 没有 GET /draft: 会改状态的 GET 不留 (存草稿一律走 POST /api/draft)
                 self._send(404, "not found", "text/plain; charset=utf-8")
@@ -3598,6 +3638,10 @@ class Daemon(object):
             self.brain.gate = self.bell.gate_for
         self.running = set(); self.threads = []
         self.stop = threading.Event()
+        # 主循环的心跳: 门铃每扫完一次记一次 (monotonic)。板子的执行绪跟主循环是两条, 主循环卡死 (例: 没人按的 macOS 权限弹窗让开库卡住)
+        # 板子照样回得了话, 所以 /health 只看这个心跳, 不看板子自己活不活 (health_status)。
+        self.last_tick = time.monotonic()
+        self.stall_notified = False
         self.board = None
         self.board_port = None
         self.commands_dir = live_dir(cfg) / "commands"
@@ -3931,6 +3975,16 @@ class Daemon(object):
         out_f.close(); err_f.close()
         log.info("probe-claude 结束 rc=%s, %.0fs, stdout %d 字 -> %s", rc, time.time() - t0,
                  (run_dir / "stdout.jsonl").stat().st_size, run_dir)
+        try:
+            pout = (run_dir / "stdout.jsonl").read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            pout = ""
+        if '"subtype": "init"' not in pout and '"subtype":"init"' not in pout:
+            log.warning("probe-claude: 没有 init 事件, 记忆开关查不到")
+        elif self.brain.init_memory_paths(pout):
+            log.warning("probe-claude: MEMORY LOADED, init 带 memory_paths %s: Claude 记忆没关掉", self.brain.init_memory_paths(pout))
+        else:
+            log.info("probe-claude: init 没有 memory_paths (Claude 记忆关着)")
 
     def _take(self, pattern):
         """认得的命令档: 读参数 (坏 JSON 当 {}), 马上删掉, 回 [(档名, spec)]。"""
@@ -3986,6 +4040,34 @@ class Daemon(object):
             msg = "⚠️ [WA live] WhatsApp 的数据库已经 %.1f 小时没动, %s 上的 WhatsApp Desktop 可能掉线了。" % (age / 3600, host)
             log.warning(msg); self.notifier.send(msg, key="stale", kind="error")
 
+    def health_status(self):
+        """/health 的答案: (http 状态码, 内文)。主循环上次扫完不到 3 × full_rescan_seconds (至少 30 秒) → 200「ok」;
+        超过 → 503「stalled <秒>」。内文第一个字是 ok 或 stalled, 后面带上次扫描距今几秒。"""
+        age = time.monotonic() - self.last_tick
+        limit = max(30.0, 3 * float((self.cfg.get("doorbell") or {}).get("full_rescan_seconds", 60) or 60))
+        if age <= limit:
+            return 200, "ok (last scan %ds ago)" % int(age)
+        return 503, "stalled %d (last scan %ds ago, limit %ds)" % (int(age), int(age), int(limit))
+
+    def stall_watch(self):
+        """独立执行绪: 主循环卡住超过 stale_alert_hours / 2 就推一则错误 (key daemon_stalled, 六小时最多一则); 恢复了记一行 log。
+        推播出口不碰 WhatsApp 的库, 主循环卡在开库时它还推得出去。"""
+        while not self.stop.wait(30):
+            try:
+                code, body = self.health_status()
+                hours = float((self.cfg.get("doorbell") or {}).get("stale_alert_hours", 6) or 6)
+                age = time.monotonic() - self.last_tick
+                if code == 503 and age > hours * 3600 / 2 and not self.stall_notified:
+                    self.stall_notified = True
+                    msg = ("⚠️ [WA live] 主循环已经 %.1f 小时没动 (/health 回 503)。先看这台 Mac 的萤幕有没有没按的权限弹窗, "
+                           "再用 wa_setup.py restart 重启。" % (age / 3600))
+                    log.error(msg); self.notifier.send(msg, key="daemon_stalled", min_gap=6 * 3600, kind="error")
+                elif code == 200 and self.stall_notified:
+                    self.stall_notified = False
+                    log.info("主循环恢复了 (%s)", body)
+            except Exception as e:
+                log.warning("stall_watch: %s", e)
+
     def minute_tick(self):
         self.dossier.nightly()
         self.daily_tick()
@@ -4012,13 +4094,20 @@ class Daemon(object):
                  d.get("quiet_seconds", 45), d.get("max_wait_seconds", 180), d.get("global_concurrency", 2), self.dry_run,
                  "开" if self.bell.enabled else "关 (不自动叫脑, 命令档与板子照常)")
         self.bell.ensure_watermark()
+        try:
+            self.brain.resume_prewarm()
+        except Exception as e:
+            log.warning("prewarm 补跑失败 (继续): %s", e)
+        self.last_tick = time.monotonic()
         self.board = start_board(self)
+        threading.Thread(target=self.stall_watch, daemon=True).start()
         poll = float((self.cfg.get("doorbell") or {}).get("poll_seconds", 2) or 2)
         last_minute = None
         last_rules = None
         while not self.stop.is_set():
             try:
                 n, passed = self.bell.scan()
+                self.last_tick = time.monotonic()
                 if n:
                     log.info("门铃: 新行 %d, 过闸 %d, 水位 %s", n, passed, self.state.get_meta("last_pk"))
                 self.schedule()
@@ -4761,6 +4850,15 @@ def selftest():
         sh = req("HEAD", "/health")[0]
         check("/media 超出范围回 416; HEAD /media 与 /health 回 200 不带内容", s416 == 416 and s == 200 and h.get("content-length") == "1000"
               and raw == b"" and sh == 200, (s416, s, h, sh))
+        # /health 跟着主循环的心跳走, 不是板子执行绪活着就回 ok: 心跳太旧回 503 stalled, 恢复后回 200 ok
+        g1, _, b1 = req("GET", "/health")
+        hb_saved = d.last_tick; d.last_tick = time.monotonic() - 10000
+        g2, _, b2 = req("GET", "/health"); h2 = req("HEAD", "/health")[0]
+        d.last_tick = hb_saved
+        g3, _, b3 = req("GET", "/health")
+        check("/health: 主循环新鲜回 200 ok, 心跳太旧回 503 stalled (GET 与 HEAD 一样), 恢复后又 200",
+              g1 == 200 and b1.startswith(b"ok") and g2 == 503 and b2.startswith(b"stalled") and h2 == 503 and g3 == 200,
+              (g1, b1, g2, b2, h2, g3))
         draft_before = (d.state.get_conversation(D1) or {}).get("draft")
         sd = req("GET", "/draft?jid=%s&text=hack" % urllib.parse.quote(D1))[0]
         check("GET /draft 已拿掉 (404, 状态没被改)", sd == 404 and (d.state.get_conversation(D1) or {}).get("draft") == draft_before, sd)
@@ -4787,7 +4885,7 @@ def selftest():
               bool(msgs) and all("media" not in m for m in msgs) and voice and voice[0].get("media_local") is True
               and not any(str(media) in json.dumps(m, ensure_ascii=False) for m in msgs), [sorted(m) for m in msgs[:2]])
 
-        # 设定档挡下的读取: 真 claude 2.x stream 的样子 (2026-09-15 金丝雀实跑抄的键), result 的 permission_denials 是空的
+        # 设定档挡下的读取: 真 claude 2.x stream 的样子 (真 claude 2.x 的键), result 的 permission_denials 是空的
         stream = "\n".join(json.dumps(x) for x in [
             {"type": "system", "subtype": "init", "tools": ["Read", "Glob", "Grep"]},
             {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "toolu_1", "name": "Read", "caller": "x",
@@ -4799,6 +4897,52 @@ def selftest():
         check("设定档挡下的读取记进 permission_denials (工具名 + 路径), 没多载工具不算破笼",
               pdone and pdone.get("permission_denials") == ["Read /tmp/secret-probe/credentials-probe.txt"] and pbreach == [],
               (pdone or {}).get("permission_denials"))
+        # Claude 记忆: init 带 memory_paths 就是载入了 (真 claude 2.x 的键); 没带就是关着
+        mem_on = json.dumps({"type": "system", "subtype": "init", "tools": ["Read"], "memory_paths": {"auto": "/x/memory/"}})
+        mem_off = json.dumps({"type": "system", "subtype": "init", "tools": ["Read"]})
+        check("init 带 memory_paths 抓得到, 没带回 None", Brain.init_memory_paths(mem_on) == {"auto": "/x/memory/"}
+              and Brain.init_memory_paths(mem_off) is None and Brain.init_memory_paths("") is None)
+        # prewarm 开跑前记 pending (进程死在半路就留着), 下次起跑补跑; 跑完、失败、超时都清掉
+        class _R(object):
+            stdout = "done"
+        seen_pending = []
+
+        def _killed(*a, **k):
+            seen_pending.append(d.state.get_meta("prewarm_pending"))
+            raise RunError("prewarm exit 1: boom")
+
+        def _timeout(*a, **k):
+            raise RunError("prewarm 超时 7200s")
+        pw_saved = (d.brain.run_script, d.brain.reader_dir, d.brain.prewarm)
+        d.brain.reader_dir = Path("/nonexistent-reader")
+        d.brain.run_script = _killed; d.brain.prewarm(5)
+        pend_failed = d.state.get_meta("prewarm_pending")
+        d.state.set_meta("prewarm_pending", "5")      # 进程在 run_script 里被杀: except 走不到, pending 留着
+        pend_killed = d.state.get_meta("prewarm_pending")
+        started = []
+        d.brain.prewarm = lambda days: started.append(days)
+        resumed = d.brain.resume_prewarm()
+        for _ in range(20):
+            if started:
+                break
+            time.sleep(0.05)
+        d.brain.prewarm = pw_saved[2]
+        d.brain.run_script = lambda *a, **k: _R(); d.brain.prewarm(5)
+        pend_ok = d.state.get_meta("prewarm_pending")
+        d.brain.run_script = _timeout; d.brain.prewarm(5)
+        pend_to = d.state.get_meta("prewarm_pending")
+        d.brain.run_script, d.brain.reader_dir = pw_saved[0], pw_saved[1]
+        check("prewarm: 开跑前记 pending, 被切断的起跑补跑同样天数; 跑完、失败、超时都清掉 pending",
+              seen_pending == ["5"] and pend_failed == "" and pend_killed == "5" and resumed == 5 and started == [5]
+              and pend_ok == "" and pend_to == "" and d.brain.resume_prewarm() is None,
+              (seen_pending, pend_failed, resumed, started, pend_ok, pend_to))
+        dsrc = inspect.getsource(Dossier)
+        check("档案 run: 越界推播跟着越界那一行走, 不跟记忆检查",
+              dsrc.index("档案 run cage breach") < dsrc.index("MEMORY LOADED (档案 run)")
+              and dsrc.index("CAGE BREACH (档案 run)") < dsrc.index("档案 run cage breach"))
+        cenv = d.brain.child_env()
+        check("每个后台 claude 的 env 都关掉 Claude 记忆与 CLAUDE.md",
+              cenv.get("CLAUDE_CODE_DISABLE_AUTO_MEMORY") == "1" and cenv.get("CLAUDE_CODE_DISABLE_CLAUDE_MDS") == "1")
 
         # 日历钮按两次 (对话上没有提示): 第二次回 already 且不再叫日历去处; 假日历模组, 不写档不连外
         cal_calls = []

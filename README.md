@@ -28,7 +28,7 @@ The board speaks English or Chinese. Drafts follow each conversation's language.
 
 ## Usage, honestly
 
-Every burst of messages that passes the gate becomes one Claude Code run, and a run is heavier than it looks: most of it is Claude Code's own system prompt and tool definitions, twenty to thirty thousand tokens before your conversation is counted. On the account this kit was built on, a day of about forty runs read around two million tokens. Person notes run on a heavier model, and the optional one-off summary backfill reads a month of history at once.
+Every burst of messages that passes the gate becomes one Claude Code run, and a run is heavier than it looks: most of it is Claude Code's own system prompt and tool definitions, tens of thousands of tokens before your conversation is counted, so a few dozen runs a day reach millions of tokens. The board's footer shows your own figure. Person notes run on a heavier model, and the optional one-off summary backfill reads a month of history at once.
 
 - **A Claude subscription is the practical way to run it.** On a subscription, the dollar figure each run reports is not billed; the limit you will meet is the usage window, so the board shows tokens, not dollars. On API billing, every run is real money.
 - **That is why the gate exists.** One-to-one messages pass, because they are nearly always for you. Groups pass only when you tick them, for every message or only when you are mentioned, and a group you never ticked is skipped. Quick messages from one person become one run. Before you tick anything, the wizard measures three days of your own traffic, so you see what the gate will let through.
@@ -113,4 +113,4 @@ MIT, see [LICENSE](LICENSE).
 
 This kit directs an AI agent running on your machine to read your own messages and to modify your own files. Review what it proposes before approving it, keep backups of anything you care about, and note that everything here is provided as is, without warranty of any kind.
 
-Built and battle-tested on Breakthrough EDU's own WhatsApp.
+Made by Breakthrough EDU.

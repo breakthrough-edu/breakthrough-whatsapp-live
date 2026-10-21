@@ -35,9 +35,8 @@ With the config edit ritual (`install/00-start-here.md`), set `digest.at` and `d
 ```sh
 KIT=~/.claude/skills/breakthrough-whatsapp-live; PY=/usr/bin/python3
 HOME_DIR="<paths.home from the progress file header>"; LIVE="$HOME_DIR/live"
-LABEL="<launchd.label from the progress file header>"
 "$PY" "$KIT/daemon/wa_setup.py" check-config --config "$LIVE/config.json"
-launchctl kickstart -k gui/$(id -u)/$LABEL
+"$PY" "$KIT/daemon/wa_setup.py" restart --config "$LIVE/config.json"
 ```
 
 A restart after `digest.at` marks today's digest as sent without sending it (the log says `排班 digest: 启动时已过 <time>, 今天记成跑过`); step 3 sends it now instead. When switched off, the log says `排班 digest 没开 (config enabled=false 或模组没载入)`, and the station ends at Verify check 1.

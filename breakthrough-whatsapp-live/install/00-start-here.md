@@ -83,7 +83,7 @@ The config holds the owner's number, names and group list, so it stays 0600, and
 2. Edit it with the Edit tool: valid JSON, keys exactly as `references/config-reference.md` names them.
 3. `chmod 600 "$LIVE/config.json"`, then `"$PY" "$KIT/daemon/wa_setup.py" check-config --config "$LIVE/config.json"`. No new errors.
 4. After a change to `my_phone`, `my_names`, `owner_label`, `ignored_jids`, a `brain.whisper_*` key or a `paths.*` key: `"$PY" "$KIT/daemon/wa_setup.py" sync-reader-config --config "$LIVE/config.json"`.
-5. Once the daemon is installed: `launchctl kickstart -k "gui/$(id -u)/$LABEL"`. The daemon reads its config at start; runs in flight are killed and their bursts run again. A prewarm or a backfill in flight is cut short and never run again: when one was started, wait for its `prewarm 完成` or `backfill 完成` (done) line in `$LIVE/wa_live.log` before restarting.
+5. Once the daemon is installed: `"$PY" "$KIT/daemon/wa_setup.py" restart --config "$LIVE/config.json"` (never `launchctl kickstart -k`, which can leave a frozen python holding the board port: `references/pitfalls.md`, pit 15). The daemon reads its config at start; runs in flight are killed and their bursts run again. A prewarm the restart cuts short runs again from the start at the next start. A backfill in flight is cut short and never run again: when one was started, wait for its `backfill 完成` (done) line in `$LIVE/wa_live.log` before restarting.
 
 ## The progress file
 

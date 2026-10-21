@@ -116,7 +116,7 @@ The brain's tools are Read, Glob and Grep, and those tools can look anywhere the
 | `~/Library/Group Containers/group.net.whatsapp.WhatsApp.shared/*.sqlite*` | WhatsApp Desktop's own databases: every message on the Mac. The brain reads its chat through the pack instead. |
 | `~/.ssh/**`, `~/Library/Keychains/**`, `~/.config/**/credentials*`, `~/.aws/**`, `~/.netrc`, `~/.npmrc`, `~/.gnupg/**`, `~/.docker/config.json`, `~/.claude/.credentials.json` | Keys and credentials that open other machines and accounts. Nothing the brain does needs them. |
 
-Each rule is written as `Read(//<absolute path without its leading slash>)`, 24 in all (`daemon/templates/claude-settings.json` is the list). That form was verified to block the Read tool under `claude -p --settings`, while a control run without the rule read the file. Prove it on your own Mac with the canary probe in `references/pitfalls.md`, pit 10.
+Each rule is written as `Read(//<absolute path without its leading slash>)`, 24 in all (`daemon/templates/claude-settings.json` is the list). This form blocks the Read tool under `claude -p --settings`; the canary probe in `references/pitfalls.md`, pit 10, confirms it on your own Mac.
 
 What the rules leave readable, on purpose: your vault (the brain opens the notes the topic map and its lookup point at), WhatsApp's media under `Message/Media/` (the images and files a pack lists), the transcript cache in `<home>/transcripts-cache/`, and the rest of `live/` (`summaries.md`, the prompts, the topic map, `seeds.json`, `commands/`, `calendar/`). A rule you add to `live/claude-settings.json` counts as an owner edit (`seed-status` reports it, `install/update.md` carries it over); afterwards run one test judgment to confirm it still completes.
 
@@ -131,15 +131,15 @@ What the rules leave readable, on purpose: your vault (the brain opens the notes
 | Recent line from the second source | One line about what the person has been saying | The recent block of a note carrying that source's id key (`second_source.id_key`) | `second_source.enabled: false` |
 | Person note body | The model's account of the person, with their own words quoted where the playbook asks; quotes are checked against the pack | The note | `dossier.enabled: false` |
 
-**Recent lines.** Every recent line goes through one writer, `Dossier.append_recent`, which only adds to notes that already exist and already carry the recent block (between `<!-- wa-live:begin` and `<!-- wa-live:end -->`); it never creates a note, and it writes nothing while `dossier.enabled` is false or the daemon runs with `--dry-run`. In the system this kit came from, recent lines once kept landing with that switch off, so prove it on your own install before relying on it: take `md5 -q <that person's note>`, let one of that person's chats run, and compare. Stopping the daemon always stops them.
+**Recent lines.** Every recent line goes through one writer, `Dossier.append_recent`, which only adds to notes that already exist and already carry the recent block (between `<!-- wa-live:begin` and `<!-- wa-live:end -->`); it never creates a note, and it writes nothing while `dossier.enabled` is false or the daemon runs with `--dry-run`. A switch is only as good as every writer honoring it, so prove it on your own install before relying on it: take `md5 -q <that person's note>`, let one of that person's chats run, and compare. Stopping the daemon always stops them.
 
 **Removing a quote that already landed.** Edit the note or the buffer entry by hand. Earlier versions still sit in `<live>/dossier-backups/<note>/` (three) and in every nightly backup folder (seven days), and in your vault's own sync history; clean those too if the words must be gone everywhere.
 
 ## The old session transcript hazard
 
-`claude -p` normally saves every session as a transcript under `~/.claude/projects/<a folder named after the working directory>/`. Every headless call this kit makes (triage, person notes, backfill, second source, evening sort, probe) passes `--no-session-persistence`, so no transcript is written, and `brain.cwd` sits outside the vault so no vault instructions or indexes are involved.
+`claude -p` normally saves every session as a transcript under `~/.claude/projects/<a folder named after the working directory>/`. Every headless call this kit makes (triage, person notes, backfill, second source, evening sort, probe) passes `--no-session-persistence`, so no transcript is written, and `brain.cwd` sits outside the vault so no vault instructions or indexes are involved. Each one also runs with `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` and `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1`, so your own Claude Code memory and any `CLAUDE.md` above the working folder do not travel to Anthropic inside every run; the `probe-claude.json` probe proves it (`references/pitfalls.md`, pit 14).
 
-If anything ever ran `claude -p` from that folder, or from an older working folder, without the flag (a hand-built earlier version, an early test, an adapter you wrote), its transcripts are still on disk, and each one holds a full prompt: a conversation pack with other people's messages. The system this kit came from found exactly that: headless runs from before the flag was added had left their transcripts behind.
+If anything ever ran `claude -p` from that folder, or from an older working folder, without the flag (a hand-built earlier version, an early test, an adapter you wrote), its transcripts are still on disk, and each one holds a full prompt: a conversation pack with other people's messages.
 
 Look for them:
 
@@ -176,7 +176,7 @@ What to do about it:
 
 ## Switching each flow off
 
-Restart after any change: `launchctl kickstart -k gui/$(id -u)/<launchd.label>`.
+Restart after any change: `wa_setup.py restart --config <live>/config.json`.
 
 | Flow | Key | What it does |
 |---|---|---|
@@ -192,4 +192,4 @@ Restart after any change: `launchctl kickstart -k gui/$(id -u)/<launchd.label>`.
 | Backup | `backup.enabled: false` | No nightly copy |
 | Voice examples | `voice.enabled: false` | No new pairs, none shown to the brain |
 | The board | `board.enabled: false`, and remove its `tailscale serve` rule | No board |
-| Everything | `launchctl bootout gui/$(id -u)/<launchd.label>`, then move `~/Library/LaunchAgents/<launchd.label>.plist` out of that folder | The daemon stops, and a reboot does not bring it back |
+| Everything | `wa_setup.py uninstall-launchd --config <live>/config.json` (the same with `--intake` when the evening job is installed) | The daemon's python is stopped first, then the job is booted out and its plist removed from `~/Library/LaunchAgents/`, so a reboot does not bring it back; `install-launchd` brings it back |

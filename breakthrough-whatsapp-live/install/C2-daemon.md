@@ -19,7 +19,7 @@ Claude Code keeps no shell variables between commands: start each command with t
 One question at a time. Before each question that names a default, read that default in `references/defaults-and-why.md` and give the owner its reason in a sentence or two.
 
 1. **The gate** (default 2). Show the groups from `<home>/measure-3d.json` with their three day inbound counts, busiest first, and ask for each: `all` (every message can wake the brain), `mention` (only when the owner is named or @ mentioned) or `skip`. Groups left off the list follow `unlisted_group_policy`, `skip` by default. One-to-one chats follow `direct_policy`: `all` (the default) or `skip`. Any chat to leave out entirely goes in `ignored_jids`. Say what the ticks cost: roughly, every burst that passes is one run, and quick messages from one chat within the quiet gap become one burst.
-2. **Faster drafts or fewer runs?** (default 4) The defaults: a run starts after 45 quiet seconds, or 180 seconds after the first message at the latest, two runs at a time. `measure` prints no gaps between messages, so read the default's own measurement to the owner and ask.
+2. **Faster drafts or fewer runs?** (default 4) The defaults: a run starts after 45 quiet seconds, or 180 seconds after the first message at the latest, two runs at a time. `measure` prints no gaps between messages, so explain the trade in default 4 (a longer wait delays every draft and saves only the bursts whose gaps fall between the old and the new limit), then ask.
 3. **How is Claude paid for on this Mac?** (default 3) Run `claude auth status` together. On a subscription, the dollar figure a run reports is not billed and the board shows tokens only; with API billing every run is real money and `board.show_usd` can show it. Then: may person notes use opus (`dossier.model`), or should a lighter model write them?
 4. **The board's language**: English or Chinese (`board.lang`, `en` or `zh`). The vocabulary labels below go into the field that language shows: `label_en` for `en`, `label` for `zh`.
 5. **Worlds** (default 8): which parts of your life and which businesses should conversations be sorted into? Each world gets a key (lowercase letters), a label in the owner's words, and `business` true or false. Only business worlds carry a stage.
@@ -71,7 +71,7 @@ Edit `live/topic-map.json`, the owner copy, with the Edit tool. Its example rule
 
 ### 3 · The brain prompt
 
-`live/prompts/brain-prompt.md` is the owner copy of the prompt every judgment runs on. Its placeholders (`{OWNER_LABEL}`, `{WORLDS_BLOCK}`, `{BUSINESS_CONTEXT}` and the rest) are filled from config on every run, so the vocabulary and the business paragraph live in config only. The prompt is written in Chinese on purpose, because that is the tuned version; drafts follow the language of each conversation. Editing it is legal, and every later update turns the edit into a merge (`install/update.md`), so leave it unless the owner has a reason.
+`live/prompts/brain-prompt.md` is the owner copy of the prompt every judgment runs on. Its placeholders (`{OWNER_LABEL}`, `{WORLDS_BLOCK}`, `{BUSINESS_CONTEXT}` and the rest) are filled from config on every run, so the vocabulary and the business paragraph live in config only. The prompt is written in Chinese; drafts still follow the language of each conversation, so it needs no translation. Editing it is legal, and every later update turns the edit into a merge (`install/update.md`), so leave it unless the owner has a reason.
 
 ### 4 · The cage
 
@@ -115,7 +115,7 @@ echo '{}' > "$LIVE/commands/probe-claude.json"
 
 Within seconds the daemon takes the file, deletes it, and calls one minimal `claude -p` with the same cage flags as a real run (one tiny model call). Wait about a minute. Writes: `live/runs/probe-<time>/` with `cmd.txt`, `stdout.jsonl` and `stderr.txt`, plus `sample.txt` only when the probe hung for 90 seconds.
 
-- `sample.txt` exists and its stack sits in `__open`: node lacks Full Disk Access (C0 step 6, `references/pitfalls.md`, pit 1). Grant it to the node `bin.node` names, `launchctl kickstart -k "gui/$(id -u)/$LABEL"`, probe again.
+- `sample.txt` exists and its stack sits in `__open`: node lacks Full Disk Access (C0 step 6, `references/pitfalls.md`, pit 1). Grant it to the node `bin.node` names, restart with `wa_setup.py restart` (step 11 shows the command), probe again.
 - The output names a login problem: open Claude Code in the terminal on this Mac itself (not over ssh), log in, probe again.
 
 ### 9 · Warm the voice cache (voice-heavy accounts)
@@ -127,7 +127,7 @@ echo '{}' > "$LIVE/commands/prewarm-7.json"
 
 Transcribes every voice note in the brain's seven day window into the shared cache in the background, so the first runs on voice-heavy chats do not hit the reader's time limit. It covers every chat in the window, whatever the gate says, so the Mac transcribes voice notes from chats that will never get a run. No model call, and it does not block runs, but on a busy account it takes minutes. Writes `live/runs/prewarm-<time>-7d.json` and transcript files in `<home>/transcripts-cache/`.
 
-⛔ Wait for `prewarm 完成` (done), or `prewarm 失败` (failed), in `$LIVE/wa_live.log` before any restart, step 11's included: a restart takes a running prewarm down with the daemon, and nothing runs it again. Log the line and its seconds.
+Wait for `prewarm 完成` (done), or `prewarm 失败` (failed), in `$LIVE/wa_live.log` before any restart, step 11's included: a restart takes a running prewarm down with the daemon, and the next start runs it again from the beginning (`prewarm 7 天上次没跑完 (多半被重启切断), 补跑`: cut short by a restart, run again), so the minutes already spent are spent twice. Only a prewarm killed mid-run like this is run again: one that returned, finished, failed or timed out, clears its mark and is not. Log the line and its seconds.
 
 ```sh
 HOME_DIR="<paths.home from the progress file header>"; LIVE="$HOME_DIR/live"
@@ -150,9 +150,12 @@ Open `http://127.0.0.1:$PORT/` with the owner. The conversation shows its three 
 With the config edit ritual, set `doorbell.enabled` to `true` and leave `notify.mode` at `errors`. Until an outlet is connected at O4, errors are written to `live/wa_live.log` only. When step 9 started a prewarm, restart only after it has logged `prewarm 完成` (or `prewarm 失败`):
 
 ```sh
-LABEL="<launchd.label from the progress file header>"
-launchctl kickstart -k "gui/$(id -u)/$LABEL"
+KIT=~/.claude/skills/breakthrough-whatsapp-live; PY=/usr/bin/python3
+HOME_DIR="<paths.home from the progress file header>"; LIVE="$HOME_DIR/live"
+"$PY" "$KIT/daemon/wa_setup.py" restart --config "$LIVE/config.json"
 ```
+
+This is the restart every later station uses. It stops the python child with SIGTERM, gives running jobs up to `ExitTimeOut` (90 seconds) to finish, SIGKILLs a python that is still alive after that (a frozen one never runs its stop handler), lets launchd start a fresh node and python, and proves the result: its `after:` line names one python, a child of the new node and the only listener on the board port, then the `/health` answer, and the last line is `proof: one daemon, the new code is loaded (...)`. Exit 1 is an error: each one prints as an `  ERROR …` line and no `proof:` line follows; exit 3 is a refusal (for example the board port held by a program that is not this daemon), and nothing was signalled. `--dry-run` prints the plan and runs nothing. Never restart the daemon with `launchctl kickstart -k`: it stops only the node parent and can leave a frozen python holding the port (`references/pitfalls.md`, pit 15).
 
 Then wait for a real message in a chat the gate passes, or ask a friend to send one. A run follows within a minute of the last message of the burst. When the owner's gate passes nothing on purpose (`direct_policy` `skip`, and no group at `all` or `mention`), no message can start a run: wait for any real inbound message instead, and check 12 reads its branch for that gate.
 
@@ -185,7 +188,7 @@ Run each probe with the station's opening block in front of it, at the point its
    nodepid() { launchctl print "gui/$(id -u)/$LABEL" | awk '$1 == "pid" && $2 == "=" {print $3; exit}'; }
    ps -o comm= -p "$(nodepid)"; ps -o command= -p "$(pgrep -P "$(nodepid)")"
    ```
-7. **The board answers** (after step 7). Pass: `ok 200`.
+7. **The board answers, and the main loop is alive** (after step 7). Pass: a body starting with `ok (last scan`, then `200`. A body starting with `stalled` and `503` means the main loop has stopped while the board thread still answers (`references/pitfalls.md`, pit 16; `references/troubleshooting.md`, "Nothing on the board").
    ```sh
    curl -sS -w ' %{http_code}\n' "http://127.0.0.1:$PORT/health"
    ```
@@ -194,12 +197,13 @@ Run each probe with the station's opening block in front of it, at the point its
    sqlite3 -readonly "$LIVE/state.sqlite" "select decision, count(*) from inbound_log group by decision"
    sqlite3 -readonly "$LIVE/state.sqlite" "select count(*) from runs"
    ```
-9. **Claude answers from launchd, inside the cage** (after step 8). Pass: `cmd.txt stderr.txt stdout.jsonl` and no `sample.txt`; `"is_error":false`; a tools list holding only `Read`, `Glob` and `Grep` (`TodoWrite` may appear); `0` cage breaches.
+9. **Claude answers from launchd, inside the cage, without Claude memory** (after step 8). Pass: `cmd.txt stderr.txt stdout.jsonl` and no `sample.txt`; `"is_error":false`; a tools list holding only `Read`, `Glob` and `Grep` (`TodoWrite` may appear); `0` cage breaches; the memory line `probe-claude: init 没有 memory_paths (Claude 记忆关着)` (no memory paths in the init event: Claude memory is off). `probe-claude: MEMORY LOADED` fails this check (`references/pitfalls.md`, pit 14), and so does `probe-claude: 没有 init 事件, 记忆开关查不到` (no init event: claude did not start properly, so memory cannot be judged).
    ```sh
    P=$(ls -td "$LIVE"/runs/probe-* | head -1); ls "$P"
    tail -1 "$P/stdout.jsonl" | grep -o '"is_error":[a-z]*'
    grep -ho '"tools":\[[^]]*\]' "$P/stdout.jsonl" | head -1
    grep -c "CAGE BREACH" "$LIVE/wa_live.log"
+   grep "probe-claude: " "$LIVE/wa_live.log" | grep -E "memory_paths|MEMORY LOADED|init 事件" | tail -1
    ```
 10. **The first judgment landed** (after step 10). Pass: the newest run has `ok` `1`, a token count and no error; `judgment.json` holds a world, stage and priority from the owner's vocabulary (stage is `None` when the world is not a business world, and that passes), the board shows the same chips, and the owner agrees the draft keeps the draft rules.
     ```sh
@@ -226,7 +230,7 @@ Under `### C2 daemon` in `<home>/INSTALL-PROGRESS.md`:
 - the topic map: how many rules;
 - the registry entry's location, and the fingerprint and version it records;
 - `install-launchd` state and pid lines;
-- the probe: its folder, `"is_error"`, the tools list, how many seconds it took;
+- the probe: its folder, `"is_error"`, the tools list, the memory line, how many seconds it took;
 - the prewarm, when step 9 ran: its `prewarm 完成` (or `prewarm 失败`) line with the seconds, logged before the restart in step 11;
 - the first judgment: run id, the chips, and whether the owner agreed with the draft;
 - the time observation started (`doorbell.enabled` true) and the first real run's id, or, for a gate that passes nothing on purpose, the `skip:` decision the first real message got;

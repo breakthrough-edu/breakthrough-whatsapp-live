@@ -45,7 +45,7 @@ Append the chosen stations under `## Stations`, after C5, in this order, O11 las
 - [ ] O11 observation and acceptance
 ```
 
-The example shows one owner's picks; write the owner's own. The station files are `install/O1-facts-source.md`, `O2-second-message-source.md`, `O3-calendar.md`, `O4-push-outlet.md`, `O5-nightly-backup.md`, `O6-morning-digest.md`, `O7-intake.md`, `O8-voice-loop.md`, `O9-summary-backfill.md`, `O10-standby-machine.md` and `O11-observation-and-acceptance.md`. Keep the numeric order; O11 is always last. Writes: the progress file only.
+The example is illustrative; write the owner's own picks. The station files are `install/O1-facts-source.md`, `O2-second-message-source.md`, `O3-calendar.md`, `O4-push-outlet.md`, `O5-nightly-backup.md`, `O6-morning-digest.md`, `O7-intake.md`, `O8-voice-loop.md`, `O9-summary-backfill.md`, `O10-standby-machine.md` and `O11-observation-and-acceptance.md`. Keep the numeric order; O11 is always last. Writes: the progress file only.
 
 A block the owner declines gets one log line, `skipped: O<n> <name> because <reason>`, and no station line. O6 and O8 are the exception: they are on by default, so declining one still gets its station line, marked `(switch off)`, because switching it off is that station's work.
 

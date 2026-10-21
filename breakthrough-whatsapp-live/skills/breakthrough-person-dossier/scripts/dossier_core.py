@@ -45,7 +45,7 @@ import time
 import unicodedata
 from pathlib import Path
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 _HERE = Path(__file__).resolve()
 PAYLOAD = _HERE.parents[3] if len(_HERE.parents) > 3 else _HERE.parent
 SEED_PLAYBOOK = PAYLOAD / "playbooks" / "person-dossier" / "person-dossier-playbook.md"
@@ -938,22 +938,39 @@ def facts_inner(text):
     return text.split(FACTS_BEGIN, 1)[1].split(FACTS_END, 1)[0].strip()
 
 
+# The source line of the facts section carries the day the facts worker pulled (wa_facts, both languages). A note verified
+# on a later day differs from the machine's block only in that date: that is not an edit, so it is compared without it.
+FACTS_PULLED_RE = re.compile(r"(事实 worker |facts worker pulled )\d{4}-\d{2}-\d{2}")
+
+
+def facts_for_compare(inner):
+    return FACTS_PULLED_RE.sub(r"\1<date>", inner or "")
+
+
 def check_facts_block(body, facts_block, log=None):
     """The facts section belongs to the machine: when facts_block is not None, the note's delimited text must equal the
-    machine's word for word, a machine block must not be left out, and a note may not invent one."""
+    machine's word for word, a machine block must not be left out, and a note may not invent one.
+    Returns body: when the only difference is the pull date on the source line, the machine's current block replaces the
+    note's (otherwise verifying a note the day after its run refuses it, and an update of that person breaks)."""
     got = facts_inner(body)
     if facts_block is None:
-        return
+        return body
     want = facts_inner(facts_block or "")
     if got is None:
         if want:
             raise DossierError("the machine supplied a facts section (%d lines) but the note does not carry it verbatim" % len(want.splitlines()))
-        return
+        return body
     if want is None:
         raise DossierError("the note has a facts section but the machine supplied none (that section is never written by hand)")
     if got != want:
-        raise DossierError("the facts section differs from what the machine supplied (%d lines in the note, %d supplied)"
-                           % (len(got.splitlines()), len(want.splitlines())))
+        if facts_for_compare(got) != facts_for_compare(want):
+            raise DossierError("the facts section differs from what the machine supplied (%d lines in the note, %d supplied)"
+                               % (len(got.splitlines()), len(want.splitlines())))
+        if log:
+            log("facts section differs only in the pull date: replaced with the machine's current block")
+        head, rest = body.split(FACTS_BEGIN, 1)
+        body = head + FACTS_BEGIN + "\n" + want + "\n" + FACTS_END + rest.split(FACTS_END, 1)[1]
+    return body
 
 
 # ---------------------------------------------------------------- stage ruling
@@ -1105,7 +1122,7 @@ def finalize(body, jid, existing="", board_stage=None, has_payment=False, log=No
             raise DossierError("missing section %r (section names are read from the playbook skeleton)" % s)
     if roles_map["recent"] and (RECENT_BEGIN not in body or RECENT_END not in body):
         raise DossierError("the machine recent block markers are missing (%s ... %s)" % (RECENT_BEGIN, RECENT_END))
-    check_facts_block(body, facts_block, log)
+    body = check_facts_block(body, facts_block, log)
     if _person_cfg(cfg).get("house_punctuation"):
         body = body.replace("—", ", ")
         body = re.sub(r"\s(?:--|–)\s", ", ", body)
@@ -1577,7 +1594,7 @@ def selftest():
         def fin(new, old, c=None, **kw):
             return finalize(new, "111@lid", old, cfg=c or cfg, today=T, **kw)
 
-        # 1 to 13: owner words and marks (ported from the original cases, marker QX)
+        # 1 to 13: owner words and marks (marker QX)
         base = _fake_doc()
         line1 = "| **怎么认识** | 🗣 QX 2026-03-14: 他其实是朋友 Ken 介绍的 (⚠️ 对话里没提过) |\n"
         note1 = "<!-- qx -->\n- 🗣 QX 2026-03-14「他其实是朋友 Ken 介绍的」→ 融进第 1 节"
@@ -1727,6 +1744,17 @@ def selftest():
         case("23b a facts section nobody supplied is refused", lambda: fin(with_facts, base, facts_block=""), "supplied none")
         case("23c an edited facts section is refused", lambda: fin(with_facts.replace("课程", "别的"), base, facts_block=facts), "differs")
         case("23d the supplied facts section verbatim passes", lambda: fin(with_facts, base, facts_block=facts))
+        for pulled in ("事实 worker %s 拉", "facts worker pulled %s"):
+            f_old = facts.replace("付款: 课程\n", "付款: 课程\n- 👁 来源: sheet, " + pulled % "2026-03-01" + "\n")
+            f_new = f_old.replace(pulled % "2026-03-01", pulled % "2026-03-02")
+            note_old = base.replace("## WhatsApp 近况", f_old + "\n## WhatsApp 近况")
+            out23 = check_facts_block(note_old, f_new)
+            check("23e a facts section that differs only in the pull date (%s) passes and takes the machine's date" % pulled.split()[0],
+                  f_new != f_old and facts_inner(out23) == facts_inner(f_new)
+                  and out23.split(FACTS_BEGIN, 1)[0] == note_old.split(FACTS_BEGIN, 1)[0]
+                  and out23.split(FACTS_END, 1)[1] == note_old.split(FACTS_END, 1)[1])
+            case("23f a pull date plus a changed fact is still refused (%s)" % pulled.split()[0],
+                 lambda f_new=f_new, note_old=note_old: check_facts_block(note_old, f_new.replace("课程", "别的")), "differs")
         dash = _fake_doc(intro="> 假人—朋友。")
         kept, _ = fin(dash, base)
         cfg_p = copy.deepcopy(cfg)

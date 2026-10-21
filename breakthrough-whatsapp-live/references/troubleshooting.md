@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Start from what you see. Each section lists checks in the order that finds the cause fastest; each check says what its answer means and what fixes it. When the fix is not here, `references/pitfalls.md` has the thirteen traps this kit was built around, and `references/operating.md` has every file, log line and push.
+Start from what you see. Each section lists checks in the order that finds the cause fastest; each check says what its answer means and what fixes it. When the fix is not here, `references/pitfalls.md` has the sixteen traps this kit guards against, and `references/operating.md` has every file, log line and push.
 
 The code is the source of truth. Log lines are quoted exactly as the daemon writes them, in Chinese, with `<...>` where a value goes.
 
@@ -35,13 +35,14 @@ Claude Code keeps no shell variables between commands: start each command with t
    ```
    - No service: it was uninstalled or never installed. `"$PY" "$KIT/daemon/wa_setup.py" install-launchd --config "$LIVE/config.json"`.
    - `state` not running, or a pid that keeps changing: read `stderr.log`. `python not found at <path>` or `daemon script not found at <path>` (node or python moved, the kit updated to a new place): `render-launchd`, then `install-launchd`. `python exited code=1` right after the start: the lines just above it in `stderr.log` name it (a missing config prints `config 不在: <path> (先照安装向导跑 wa_setup.py init, 再按 C2 站落 config)` there, before the log opens), otherwise the last lines of `wa_live.log`.
+   - `/health` answers `503` with a body starting `stalled` (`stalled <n> (last scan <n>s ago, limit <n>s)`), or the push `⚠️ [WA live] 主循环已经 <h> 小时没动 (/health 回 503)。…` arrived (the main loop has not moved for hours): the board thread still answers, but the loop that reads messages is frozen (`references/pitfalls.md`, pit 16). Look at the Mac's own screen first: a macOS permission dialog nobody clicked is the usual cause, and clicking it can free the loop by itself (`主循环恢复了` in the log). Then restart with `"$PY" "$KIT/daemon/wa_setup.py" restart --config "$LIVE/config.json"`, which stops a frozen python too, and read its `proof:` line. A body starting `ok` and `200` mean the loop scanned within its limit.
 2. **Is the board serving?**
    ```sh
    grep -e "板子" -e "起跑" "$LIVE/wa_live.log" | tail -4
    lsof -nP -iTCP:$PORT -sTCP:LISTEN
    ```
    - `板子关闭 (config board.enabled=false)`: set `board.enabled` to `true`, restart.
-   - `板子起不来 (127.0.0.1:<port>): <error>`: another program holds the port (`lsof` names it). Stop that program, or change `board.port` and the `tailscale serve` rule with it.
+   - `板子起不来 (127.0.0.1:<port>): <error>`: another program holds the port (`lsof` names it). When it is a python running `daemon/wa_live.py` with this install's config, it is an orphan left by a restart that did not stop it (`references/pitfalls.md`, pit 15): `"$PY" "$KIT/daemon/wa_setup.py" restart --config "$LIVE/config.json"` stops it and proves one daemon on the port. Any other program: stop it, or change `board.port` and the `tailscale serve` rule with it.
 3. **The page loads but the list is empty.** The list shows judged conversations; "Other chats" shows recently active ones that were never judged. Both empty means the daemon cannot read WhatsApp's database:
    ```sh
    "$PY" "$KIT/daemon/wa_setup.py" doctor --config "$LIVE/config.json"
@@ -98,7 +99,7 @@ A `run #<id> 开始` with no `完成` for many minutes, or failures that say not
    echo '{}' > "$LIVE/commands/probe-claude.json"
    ```
    A minute later: `grep "probe-claude 结束" "$LIVE/wa_live.log" | tail -1`, and `ls` of the newest `runs/probe-*` folder.
-   - `rc=killed after 90s` and a `sample.txt` whose stack sits in `__open`: the node binary launchd starts lacks Full Disk Access, so every child hangs on a privacy prompt nobody can answer (`references/pitfalls.md`, pit 1). `plutil -extract ProgramArguments.0 raw ~/Library/LaunchAgents/$LABEL.plist` names the binary; the owner grants it in System Settings, Privacy & Security, Full Disk Access; `launchctl kickstart -k gui/$(id -u)/$LABEL`; probe again. A node upgrade changes the path, so the grant must be given again.
+   - `rc=killed after 90s` and a `sample.txt` whose stack sits in `__open`: the node binary launchd starts lacks Full Disk Access, so every child hangs on a privacy prompt nobody can answer (`references/pitfalls.md`, pit 1). `plutil -extract ProgramArguments.0 raw ~/Library/LaunchAgents/$LABEL.plist` names the binary; the owner grants it in System Settings, Privacy & Security, Full Disk Access; `"$PY" "$KIT/daemon/wa_setup.py" restart --config "$LIVE/config.json"`; probe again. A node upgrade changes the path, so the grant must be given again.
    - `stderr.txt` names a login problem: log in to Claude Code in the terminal on the Mac itself, then probe again.
    - `rc=0` in a few seconds: claude is fine; the stall is in the reader (check 3) or the run's size.
 3. **Are children hanging?**
@@ -125,7 +126,7 @@ A `run #<id> 开始` with no `完成` for many minutes, or failures that say not
    "$PY" "$KIT/skills/breakthrough-whatsapp-read/scripts/wa_sweep.py" --work-dir "$HOME_DIR" --days 1 --only-jid '<jid>'
    ```
    The last line's `voice` shows `fresh`, `cache_hits` and `failed`. `failed` above 0 with processes hanging is the privacy stall (`references/pitfalls.md`, pit 1). A voice note WhatsApp Desktop never downloaded counts as a media gap and cannot be transcribed.
-4. **Another tool's config?** `grep -rn "meeting-transcripts" "$KIT/daemon" "$KIT/skills"` prints nothing on a sound payload (`references/pitfalls.md`, pit 13).
+4. **Another tool's config, or a hardcoded model path?** On a sound payload, `awk '/^def whisper_setup/,/^def transcript_key/' "$KIT/skills/breakthrough-whatsapp-read/scripts/wa_sweep.py" | grep -nE '~/|Path\.home|getenv\("HOME|\.json|\.toml|\.ya?ml|\.plist|open\('` prints nothing (the model lookup opens no file of its own, so it cannot depend on another tool's config), and `grep -rn "whisper-models/" "$KIT/daemon" "$KIT/skills"` prints only the config default (`daemon/wa_common.py` and `daemon/templates/config.example.json`). The check in `references/pitfalls.md`, pit 13, also proves the reader config alone finds the model.
 
 Messages from the second source carry no transcript at all (known limit).
 
@@ -147,7 +148,7 @@ Messages from the second source carry no transcript at all (known limit).
 
 ## The board is unreachable from the phone
 
-1. **Does it answer on the Mac?** `curl -s -w ' %{http_code}\n' "http://127.0.0.1:$PORT/health"`. Not `ok 200`: see "Nothing on the board".
+1. **Does it answer on the Mac?** `curl -s -w ' %{http_code}\n' "http://127.0.0.1:$PORT/health"`. Anything but a body starting with `ok` and `200`: see "Nothing on the board".
 2. **Is the tailnet rule there, for this port?**
    ```sh
    tailscale serve status
@@ -330,6 +331,21 @@ grep -e "CAGE BREACH" -e "claude-settings.json" "$LIVE/wa_live.log" | tail -5
 - `claude-settings.json 的 deny 少了 <tools> (命令列照挡; 下次 wa_setup.py init 补齐)`: the rendered settings are older than the code. Move `live/claude-settings.json` aside, run `init` to render it again, merge any edit the owner made, restart.
 - `claude-settings.json 没有任何 Read(...) 路径 deny: 脑读得到推播钥匙与设定档, 重跑 wa_setup.py init`: the Read deny rules are gone; the same fix, then the canary in `references/pitfalls.md`, pit 10.
 - A new tool name after a Claude Code update: the kit's deny list does not know it yet. Report it upstream with the tool name; until a fixed kit ships, pause the doorbell (`doorbell.enabled` false) if the tool can write or reach the network.
+
+## MEMORY LOADED in the log
+
+A warning `MEMORY LOADED: 这个 run 载入了 Claude 记忆 (<paths>), 环境变数没生效; 丢 commands/probe-claude.json 查` (a triage run loaded Claude memory: the environment variables did not take), `MEMORY LOADED (档案 run): …` (the same for a person note run), or `MEMORY LOADED: the pre-sort run loaded Claude memory` in `intake-evening.log` means the Claude Code on this Mac ignored `CLAUDE_CODE_DISABLE_AUTO_MEMORY` or `CLAUDE_CODE_DISABLE_CLAUDE_MDS`, most likely after a Claude Code update renamed or dropped one of them (`references/pitfalls.md`, pit 14). Runs still happen, but your memory index and `CLAUDE.md` files ride along in each one and can push it to the turn limit.
+
+```sh
+grep "MEMORY LOADED" "$LIVE/wa_live.log" | tail -3
+echo '{}' > "$LIVE/commands/probe-claude.json"
+```
+
+A minute later: `grep "probe-claude: " "$LIVE/wa_live.log" | tail -1`, and `claude --version`.
+
+- `probe-claude: MEMORY LOADED, init 带 memory_paths <paths>: Claude 记忆没关掉` (memory was not switched off): confirmed. Report it upstream with the Claude Code version and that one line (never the contents of the memory files). Until a fixed kit ships, watch for runs failing with `error_max_turns`.
+- `probe-claude: init 没有 memory_paths (Claude 记忆关着)` (memory is off): the probe is clean, so the warning came from a process still running older code. Restart with `wa_setup.py restart` and check that the newest start line names the current version.
+- `probe-claude: 没有 init 事件, 记忆开关查不到` (no init event, so the switch cannot be read): claude did not start properly; see "Runs are stuck with zero output", check 2.
 
 ## Known limits
 

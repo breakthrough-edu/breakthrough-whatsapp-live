@@ -21,7 +21,7 @@ Claude Code keeps no shell variables between commands: start each command with t
 One question at a time. Read default 6 before question 2.
 
 1. **Where should alerts reach you?** (from C5) `telegram`: a bot of its own, used for nothing else, so it is always clear which system is talking. `command`: any command that reads the text on stdin and exits 0 when delivered (an ntfy or Pushover call with curl, a webhook, a macOS notification). `none`: the log and the board only.
-2. **Which kinds?** (default 6) `errors` (the default: failures, a broken tool cage, a WhatsApp database that stopped changing, plus the digest), `needs_me` (adds every judgment that needs you), `all` (every judgment), `off`. Some owners take `all` for the observation week at O11 and switch back; that choice is made there.
+2. **Which kinds?** (default 6) `errors` (the default: failures, a broken tool cage, a WhatsApp database that stopped changing, plus the digest), `needs_me` (adds every judgment that needs you), `all` (every judgment), `off`. You can take `all` for the observation week at O11 and switch back; that choice is made there.
 3. **For `telegram`: is there a bot for this alone, and have you pressed Start in it?** A new bot cannot message you until you press Start once; before that every send fails.
 4. **For `command`: which command, and does it carry a secret?** A token typed into `notify.command` travels into the nightly backup; keep it in a 0600 file the command reads instead (`references/interfaces.md`, "Choosing for the owner").
 
@@ -72,8 +72,9 @@ The same outlet function the daemon uses, with the terminal's environment. It pr
 Restart, then let the daemon push with launchd's environment, which is the only proof that counts for real alerts:
 
 ```sh
-LABEL="<launchd.label from the progress file header>"
-launchctl kickstart -k gui/$(id -u)/$LABEL
+KIT=~/.claude/skills/breakthrough-whatsapp-live; PY=/usr/bin/python3
+HOME_DIR="<paths.home from the progress file header>"; LIVE="$HOME_DIR/live"
+"$PY" "$KIT/daemon/wa_setup.py" restart --config "$LIVE/config.json"
 ```
 
 Once the newest `起跑` line in `live/wa_live.log` is from after the restart:

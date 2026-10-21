@@ -24,7 +24,7 @@ Buffer file (created by the install wizard with the owner's yes; this module nev
 English buffers (board.lang en) write "- status: open", "## Placed" and "- status: placed → <where>"; reading accepts
 both languages in the same file.
 
-Safety (fix: two writers used to overwrite each other and the lost entry was already marked seen):
+Safety (without it, two writers could overwrite each other and lose an entry already marked seen):
 - append and mark-placed hold an exclusive fcntl.flock on the sidecar `.<buffer name>.lock` next to the buffer, read
   the file inside the lock, and replace it atomically only if its modification time did not change in between (an
   edit saved from Obsidian during the write makes it read again and redo the insert);

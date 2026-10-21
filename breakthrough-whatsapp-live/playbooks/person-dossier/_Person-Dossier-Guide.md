@@ -3,7 +3,7 @@ type: guide
 guide_family: playbook
 updated: 2026-09-14
 ---
-<!-- seed: breakthrough-whatsapp-live playbooks/person-dossier/_Person-Dossier-Guide.md v1.0.0 -->
+<!-- seed: breakthrough-whatsapp-live playbooks/person-dossier/_Person-Dossier-Guide.md v1.0.1 -->
 
 # Person dossier
 
@@ -69,8 +69,8 @@ The two halves age differently. "How we do this work" goes stale and gets revise
   expectation about it. This is that playbook's own index plus its track record, and it is
   one of the two content-mapping exceptions doctrine §4 names (Home stays the only
   vault-wide directory; this indexes one folder's own outputs and nothing else).
-⛔ ONE carve-out, from iron law 1: a line that ships at high frequency (daily content is
-  the case that exists) does not get a row per output. Put ONE pointer line here naming
+⛔ ONE carve-out, from iron law 1: a line that ships at high frequency (daily content, for
+  example) does not get a row per output. Put ONE pointer line here naming
   where those rows really live, and keep individual rows only for the outputs that carried
   a bet. High-frequency rows never enter the vault, and a door is still the vault.
   For this folder that is the nightly batch: the notes the daemon places on its own are

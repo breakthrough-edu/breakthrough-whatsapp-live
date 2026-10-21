@@ -1,9 +1,9 @@
 ---
 type: guide
 guide_family: playbook
-updated: 2026-09-14
+updated: 2026-10-21
 ---
-<!-- seed: breakthrough-whatsapp-live playbooks/resident-workers/_Resident-Workers-Guide.md v1.0.0 -->
+<!-- seed: breakthrough-whatsapp-live playbooks/resident-workers/_Resident-Workers-Guide.md v1.0.1 -->
 
 # Resident Workers
 
@@ -29,7 +29,7 @@ updated: 2026-09-14
 
 - **六格** (读 · 写 · 上限 · 停 · 证明 · 回滚), 动手前写在你的常驻物登记簿那一行底下。写不出来的那一格就是洞。最常见的三种: 停了其实没停 (重开机自己复活) · 证明只有 exit 0 · 从机器外面看不出它还活着。
 - **审批卡**, 任一条成立就上卡: 别人看得到 · 碰真钱 · 收不回来 · 写进去的值是 AI 生成的。卡上钉完整内容加版本, 按下后由程序照卡执行, 不回 AI 重新生成; 失败把草稿放回去。三十天里每张卡都原样按过, 就是判准太宽。
-- **排程与 launchd 底下的坑**: 第一次启动先判今天该不该补跑 (默认不补); launchd 直起的 python, 子进程没有 Full Disk Access, 用 node 当家长; 一个没实测过的闸是信念, 不是闸。
+- **排程与 launchd 底下的坑**: 第一次启动先判今天该不该补跑 (默认不补); launchd 直起的 python, 子进程没有 Full Disk Access, 用 node 当家长; 重启有子进程的常驻物不用 `kickstart -k` (⛔ 卡住的子进程会变孤儿, 继续占着端口), 先停子进程, 再证明只有一个进程占着端口; 一个没实测过的闸是信念, 不是闸。
 
 平台自己的水管 (某个聊天平台的命令行工具、使用者 id、卡片回调) 不在这里, 住各支自己的登记簿那一行或项目夹。
 
@@ -68,8 +68,8 @@ The two halves age differently. "How we do this work" goes stale and gets revise
   expectation about it. This is that playbook's own index plus its track record, and it is
   one of the two content-mapping exceptions doctrine §4 names (Home stays the only
   vault-wide directory; this indexes one folder's own outputs and nothing else).
-⛔ ONE carve-out, from iron law 1: a line that ships at high frequency (daily content is
-  the case that exists) does not get a row per output. Put ONE pointer line here naming
+⛔ ONE carve-out, from iron law 1: a line that ships at high frequency (daily content, for
+  example) does not get a row per output. Put ONE pointer line here naming
   where those rows really live, and keep individual rows only for the outputs that carried
   a bet. High-frequency rows never enter the vault, and a door is still the vault.
 -->

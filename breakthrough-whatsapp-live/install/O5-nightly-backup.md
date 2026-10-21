@@ -2,7 +2,7 @@
 
 **Should the daemon's state be copied into a folder of your choice every night?** What it costs: no model call. At `backup.at` the daemon copies into `<backup.dest>/<YYYY-MM-DD>/` (folder 0700, files 0600): the state database (every judgment, draft, summary and the log of inbound messages with names), the config with secret-looking values redacted, the summary table, `facts.json`, the voice pairs, the second source whitelist, the topic map, `seeds.json`, the observation week's `acceptance.json`, the owner copies of the prompts, the digests, the three backups of every person note, and your own adapters in `live/adapters/` (copied as they are). The copy is not encrypted; a cloud folder puts all of it with that provider. The newest `backup.keep` (7) dated folders stay. It reaches only that folder, and writes `live/backup-last.json` for the digest. Push secrets, run folders, logs, command files, the rendered `claude-settings.json`, the two result files (`backup-last.json`, `second-source-last.json`) and the person note write lock (`people-write.lock`) are never copied.
 
-The tool was chosen at `install/C5-your-tools.md`, question 5. What is copied, the never list, the destination table and the proof: `references/interfaces.md`, "5 · Nightly backup destination". Why one machine and a nightly copy: `references/defaults-and-why.md`, "11 · One machine, backed up nightly". A missed file once made a green backup useless: `references/pitfalls.md`, pit 12.
+The tool was chosen at `install/C5-your-tools.md`, question 5. What is copied, the never list, the destination table and the proof: `references/interfaces.md`, "5 · Nightly backup destination". Why one machine and a nightly copy: `references/defaults-and-why.md`, "11 · One machine, backed up nightly". A backup that copies a fixed list silently misses files added later: `references/pitfalls.md`, pit 12.
 
 ```sh
 KIT=~/.claude/skills/breakthrough-whatsapp-live      # the folder holding SKILL.md, install/ and daemon/
@@ -58,9 +58,8 @@ Restart, then a planned run, then a real one:
 ```sh
 KIT=~/.claude/skills/breakthrough-whatsapp-live; PY=/usr/bin/python3
 HOME_DIR="<paths.home from the progress file header>"; LIVE="$HOME_DIR/live"
-LABEL="<launchd.label from the progress file header>"
 "$PY" "$KIT/daemon/wa_setup.py" check-config --config "$LIVE/config.json"
-launchctl kickstart -k gui/$(id -u)/$LABEL
+"$PY" "$KIT/daemon/wa_setup.py" restart --config "$LIVE/config.json"
 ```
 
 ```sh

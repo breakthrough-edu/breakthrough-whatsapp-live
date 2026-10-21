@@ -39,9 +39,8 @@ With the config edit ritual (`install/00-start-here.md`), set `intake.enabled` t
 ```sh
 KIT=~/.claude/skills/breakthrough-whatsapp-live; PY=/usr/bin/python3
 HOME_DIR="<paths.home from the progress file header>"; LIVE="$HOME_DIR/live"
-LABEL="<launchd.label from the progress file header>"
 "$PY" "$KIT/daemon/wa_setup.py" check-config --config "$LIVE/config.json"
-launchctl kickstart -k gui/$(id -u)/$LABEL
+"$PY" "$KIT/daemon/wa_setup.py" restart --config "$LIVE/config.json"
 "$PY" "$KIT/daemon/wa_intake.py" --config "$LIVE/config.json" --count-open
 ```
 

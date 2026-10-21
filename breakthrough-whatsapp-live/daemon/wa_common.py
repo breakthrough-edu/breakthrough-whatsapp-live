@@ -249,7 +249,7 @@ def apply_defaults(cfg, config_path=None):
     user_home = bool(str(raw_paths.get("home") or "").strip())
     user_live = bool(str(raw_paths.get("live_dir") or "").strip())
 
-    # legacy shapes from the original daemon: top level notify command string and notify_mode
+    # legacy shapes: top level notify command string and notify_mode
     if isinstance(cfg.get("notify"), str):
         cmd = cfg.pop("notify")
         cfg["notify"] = {"outlet": "command" if cmd.strip() else "none", "command": cmd}
@@ -517,10 +517,19 @@ def _auto_path_env(cfg):
     return os.pathsep.join(out)
 
 
+# Every headless `claude -p` the kit starts runs without Claude Code's auto-memory and without CLAUDE.md files:
+# otherwise an owner's memory index and the CLAUDE.md files above the working folder load into every run,
+# and the brain spends its turns opening memory files instead of reading the conversation.
+# Proof is the harness's own word: the run's init event carries no `memory_paths` (probe-claude checks it).
+CLAUDE_QUIET_ENV = {"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1", "CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1"}
+
+
 def subprocess_env(cfg):
     """Environment for child processes started by the daemon under launchd (whose PATH is minimal):
-    PATH from bin.path_env, HOME, LANG, WA_LIVE_CONFIG (so child scripts read the same config) and WA_WHISPER_MODEL."""
+    PATH from bin.path_env, HOME, LANG, WA_LIVE_CONFIG (so child scripts read the same config), WA_WHISPER_MODEL,
+    and CLAUDE_QUIET_ENV (Claude memory and CLAUDE.md files off for every headless run)."""
     env = dict(os.environ)
+    env.update(CLAUDE_QUIET_ENV)
     pe = ((cfg or {}).get("bin") or {}).get("path_env")
     if not isinstance(pe, str) or not pe or pe.startswith("<auto"):
         pe = _auto_path_env(cfg or {})
@@ -564,8 +573,7 @@ def invalidate_wa_cache():
 
 def _wa_load(force=False, max_age=WA_CACHE_SECONDS):
     """A snapshot of the phone to LID map, the LID to phone map and the set of chat jids, read in one go and kept for
-    max_age seconds (fix: the original never reloaded the chat list, so a chat opened after the daemon started was
-    invisible). Thread safe: every caller gets its own shallow copy of the cache entry."""
+    max_age seconds (reloaded after that, so a chat opened after the daemon started is seen). Thread safe: every caller gets its own shallow copy of the cache entry."""
     root = wa_root()
     with _WA_LOCK:
         fresh = (_WA["phone_to_lid"] is not None and _WA["root"] == str(root)
@@ -758,7 +766,7 @@ def jid_forms(jid):
 
 def chat_message_count(jid, days=30, content_only=True):
     """Messages in this chat in the last `days` days, both directions; with content_only only CONTENT_TYPES count
-    (fix: system notices no longer make a silent chat look active). 0 when unreadable."""
+    (system notices never make a silent chat look active). 0 when unreadable."""
     if not jid:
         return 0
     since = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days) - CORE_EPOCH_UTC).total_seconds()
@@ -898,7 +906,7 @@ def people_index(cfg):
     """Index of the person notes in paths.people_dir, frontmatter only:
     {"by_jid": {wa_jid: Path}, "by_phone": {digits: Path}, "by_lid": {lid digits: Path}, "error": str or None,
      "dir", "files", "unreadable", "conflicts"}. `error` is set when the folder is not configured, missing or
-    unreadable (fix: the original returned an empty index silently and every payer looked noteless).
+    unreadable (an empty index returned silently would make every payer look noteless).
     Files starting with "_" are skipped; wa_jid may hold one jid or a list of them; wa_phone any spelling."""
     idx = {"by_jid": {}, "by_phone": {}, "by_lid": {}, "error": None, "dir": None, "files": 0, "unreadable": 0,
            "conflicts": []}
@@ -1251,7 +1259,7 @@ def notify_send(cfg, text, parse_mode=None, key=None, min_gap=0, kind=None):
     """The one push outlet for the daemon, the CLIs and the evening job. Returns True when delivered.
     notify.mode=off blocks everything; with kind given, notify_wanted(cfg, kind) must pass too.
     key plus min_gap: the same key is pushed at most once per min_gap seconds, and only a successful send starts the
-    gap (fix: a failed push no longer silences the next one)."""
+    gap (a failed push never silences the next one)."""
     return _notify(cfg, text, parse_mode, key, min_gap, kind)[0]
 
 
@@ -1512,6 +1520,8 @@ def _selftest():
         env = subprocess_env(dict(bcfg, config_path="/tmp/c.json", brain={"whisper_model": "~/m"}))
         check(env["PATH"] == "/opt/x:/usr/bin" and env[CONFIG_ENV] == "/tmp/c.json"
               and env["WA_WHISPER_MODEL"] == os.path.expanduser("~/m"), "subprocess_env: PATH, config and whisper model")
+        check(all(env.get(k) == v for k, v in CLAUDE_QUIET_ENV.items()),
+              "subprocess_env: Claude memory and CLAUDE.md files switched off for every child")
 
         # push outlet
         check([notify_wanted({"notify": {"mode": m}}, k) for m in ("off", "errors", "needs_me", "all")

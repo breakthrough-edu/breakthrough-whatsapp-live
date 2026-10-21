@@ -17,7 +17,7 @@ Copied (a missing item is skipped, not an error):
   config.json            secret looking values redacted: keys whose names contain token, secret, passw, pwd, credential,
                          api key, access key, private key, client key, app key, auth, cookie, bearer, webhook or signing;
                          and inside any string, bot tokens, bearer tokens, sk-/ghp_/xox tokens and passwords in URLs
-  summaries.md · facts.json · voice-pairs.jsonl (fix: it used to be missing) · second-source-whitelist.json ·
+  summaries.md · facts.json · voice-pairs.jsonl · second-source-whitelist.json ·
   topic-map.json · seeds.json · acceptance.json · prompts/ · digest/ · dossier-backups/ · adapters/ (the owner's own)
 Never copied: telegram.json · runs/ · commands/ · variants/ · dossier-cli/ · calendar/ · *.log · claude-settings.json
   (rendered again by wa_setup.py init) · backup-last.json · second-source-last.json
