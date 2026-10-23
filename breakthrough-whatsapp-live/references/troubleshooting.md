@@ -235,6 +235,7 @@ The candidate is `note.md` in the job's run folder, and `dossier.py verify --nam
 | `<file> was read when this run started but is gone now (moved or renamed?); not writing` | The note moved; point the person at the new file (its `wa_jid`) and rewrite |
 | `people folder not found: <path>`, `People 房不在 (paths.people_dir=<path>), 不写档` | Fix `paths.people_dir`, restart |
 | `cannot back up <file> before writing (<error>); not writing` | `live/dossier-backups/` is not writable: disk space or permissions |
+| `输出第一行不是 <!-- file: X.md -->: ...`, `档不是从 --- 档头开始` | The answer does not open as a note. Before 1.4.1, a note longer than Claude's single-turn output limit came back as its last part only and was refused this way every night (`references/pitfalls.md`, pit 18): update the kit. On 1.4.1 or later, read the run folder's `claude.stdout.jsonl` for what the model wrote |
 | `档案 run 超时 <n>s` | A long history; raise `dossier.run_timeout_seconds` or lower `dossier.pack_days` |
 | `中断: daemon 重启时这个 job 没跑完` | A restart cut the run; queue it again from the board |
 | `人物档没开 (dossier.enabled=false)` (on the board) | Notes are switched off |

@@ -45,6 +45,7 @@ Probes marked **model call** spend a little usage. Probes marked **test install*
 | 15 | A restart that orphans a frozen python | the board shows the old process, or nothing, after a restart |
 | 16 | A health check answered by the wrong thread | `/health` says ok while nothing has been judged for hours |
 | 17 | A write you cannot take back | an undo that restores the wrong text, or a note changed by something you never saw |
+| 18 | An answer cut to its last part | a long person note refused night after night as not starting with its header |
 
 ## 1 · Children of a launchd job cannot open protected folders
 
@@ -404,3 +405,19 @@ Pass: `200`; a body starting with `ok (last scan`; and a `✓` line for the self
 ```
 
 Pass: `wa_vault_write selftest PASS (<n> checks)` (it covers the pin refusal, the backup before the write, the read back that restores, and the undo that refuses after a change), then the availability line with `exit 0` when the button is on and available, or the reason and `exit 2`. With the button on, the real thing: press Write to vault on one card, edit the task file by hand, then press Undo. Pass: the undo is refused as changed since, and your edit is still there.
+
+## 18 · An answer cut to its last part
+
+**What happens** A run that writes a long answer, in practice a person note, is refused with `输出第一行不是 <!-- file: X.md -->` (the first line is not the file header) or `档不是从 --- 档头开始` (the note does not open with its frontmatter), although the run's `claude.stdout.jsonl` shows the model wrote the whole note. The same person fails again the next night. Short answers, such as triage judgments, are never affected, so nothing else looks wrong.
+
+**Why** A headless `claude -p` writes at most so much in one turn. When an answer runs past that limit, the harness tells the model to resume and the model carries on in a new turn: the stream then holds the answer as two or more text parts, with a synthetic user message (`Output token limit hit. ...`) between them. The final `result` event's `result` field holds only the last part. A program that takes `result` as the answer gets the tail of the note, which starts in the middle of a section.
+
+**Where the guard lives** `Brain.parse_stream` in `daemon/wa_live.py` joins the assistant text written after the run's last tool result into `done["_text"]`. A tool result starts the text over, because what the model writes before it is talk about its reading, not the answer; the synthetic resume message does not. `answer_text(done)` returns that joined text when it ends with `result`, and `result` otherwise, so a run that never hit the limit reads exactly as before. The triage call, the probe and the person note call all take their answer through `answer_text`.
+
+**How to check it still holds** (no model call)
+
+```sh
+"$PY" "$KIT/daemon/wa_live.py" --selftest | grep -E "answer_text|selftest:"
+```
+
+Pass: five `✓` lines naming `answer_text` (a resumed answer is read whole, a run without the limit reads exactly as `result`, a run with no text reads `result`, a joined text that does not end with `result` is not trusted, and the triage, probe and person note calls all get the whole answer), then `selftest: <n>/<n> 过` (all passed). On a live install, the real thing: a person note run whose `claude.stdout.jsonl` contains `Output token limit hit` and whose job row reads done.

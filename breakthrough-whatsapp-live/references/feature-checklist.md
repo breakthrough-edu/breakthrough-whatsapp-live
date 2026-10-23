@@ -317,6 +317,7 @@ How to read a row:
 | K204 | The note writer has its six cells under the daemon's registry entry | Read it; **(test install)** `dossier.enabled` false, restart, `curl -s -X POST "http://127.0.0.1:<test port>/api/dossier" -d '{"jid":"<jid>"}'` | All six cells; the board shows no note buttons, the curl answers `人物档没开 (dossier.enabled=false)`, and no `dossier run #` starts |
 | K205 | Ruling: machine written notes land without a per note approval, guarded by the checks, three backups and the filing log | Read the decision note; `ls "$LIVE/dossier-backups/<note>/"` | The note is active; never more than three files |
 | K323 | A note verified on a later day than the facts pull still passes: a facts section that differs only in the pull date on its source line takes the machine's current block; any other difference is refused | selftest: `dossier_core.py --selftest`, checks 23e and 23f; on a day after the last facts job, `"$PY" "$DOSSIER/dossier.py" verify --config "$LIVE/config.json" --name <paying note> --candidate "$(cfg paths.people_dir)/<paying note>.md"` | All four `ok` (both checks, in Chinese and English); `✓ checks passed` |
+| K397 | A note longer than one turn's output is read whole, not as its last part (`references/pitfalls.md`, pit 18) | selftest: `wa_live.py --selftest`, the five `answer_text` checks; on a live install, a person note run whose `claude.stdout.jsonl` contains `Output token limit hit` | Five `✓` lines; that run's job row reads done and the note opens with its frontmatter |
 
 ## C5 · Your tools
 

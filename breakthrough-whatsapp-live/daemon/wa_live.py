@@ -74,7 +74,7 @@ import uuid
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-VERSION = "1.4.0"
+VERSION = "1.4.1"
 HOME = Path.home()
 DAEMON_DIR = Path(__file__).resolve().parent
 PAYLOAD = DAEMON_DIR.parent                     # 安装包根 (daemon/ 的上一层)
@@ -1921,6 +1921,13 @@ class RunError(Exception):
     pass
 
 
+def answer_text(done):
+    """result 事件 → 答案全文: parse_stream 接起来的文字段 (done["_text"]) 以 result 收尾就用它 (撞到单轮输出上限、自动续写过), 否则照旧用 result。"""
+    res = str(done.get("result") or "")
+    full = str(done.get("_text") or "")
+    return full if full.strip() and full.rstrip().endswith(res.strip()) else res
+
+
 def extract_json(text):
     """扫第一个成对大括号 (跳过字串里的假括号); ⛔ 别信它会吐裸 JSON。全部解不开时修一次字串里没转义的双引号再扫。"""
     if not text:
@@ -2182,8 +2189,10 @@ class Brain(object):
         """stream-json → (result 事件或 None, 载入了不该有的工具清单)。
         设定档的 deny 规则挡下的读取不会进 result 的 permission_denials (那个清单永远是空的), 只看得到工具回的错:
         这里把「denied by your permission settings」那几次 (工具名 + 路径) 补进 done["permission_denials"], runs.denials 才记得到,
-        call_claude 也会记一行 WARNING (对话里有人想叫脑去读秘密档, 就是这样被挡下来的)。"""
-        done = None; breach = []; uses = {}; denied = []
+        call_claude 也会记一行 WARNING (对话里有人想叫脑去读秘密档, 就是这样被挡下来的)。
+        最后一个工具结果之后的 assistant 文字段接起来放进 done["_text"]: 撞到单轮输出上限时 claude 自动续写, result 只装最后那一段,
+        长的答案 (档案 run 的人物档最常见) 只拿到后半截就被当成失败; 没撞上限时两者逐字一样。答案一律用 answer_text(done) 取。"""
+        done = None; breach = []; uses = {}; denied = []; segs = []
         for line in (stdout or "").splitlines():
             line = line.strip()
             if not line.startswith("{"):
@@ -2195,6 +2204,8 @@ class Brain(object):
             if j.get("type") == "system" and j.get("subtype") == "init" and isinstance(j.get("tools"), list):
                 breach = [t for t in j["tools"] if t not in EXPECTED_TOOLS]
             content = (j.get("message") or {}).get("content") if isinstance(j.get("message"), dict) else None
+            if j.get("type") == "user" and isinstance(content, list) and any(isinstance(c, dict) and c.get("type") == "tool_result" for c in content):
+                segs = []   # 工具结果之前的文字是过程话, 不是答案; 续写提示 (isSynthetic 的 user 文字) 不清
             for c in content if isinstance(content, list) else []:
                 if not isinstance(c, dict):
                     continue
@@ -2203,8 +2214,12 @@ class Brain(object):
                     uses[c.get("id")] = "%s %s" % (c.get("name"), inp.get("file_path") or inp.get("path") or inp.get("pattern") or "")
                 elif c.get("type") == "tool_result" and c.get("is_error") and "denied by your permission settings" in str(c.get("content")):
                     denied.append(uses.get(c.get("tool_use_id"), "denied read").strip())
+                elif c.get("type") == "text" and j.get("type") == "assistant":
+                    segs.append(c.get("text") or "")
             if j.get("type") == "result":
                 done = j
+        if done is not None:
+            done["_text"] = "".join(segs)
         if done is not None and denied:
             done["permission_denials"] = list(done.get("permission_denials") or []) + denied
         return done, breach
@@ -2600,7 +2615,7 @@ class Brain(object):
             log.warning("设定档挡下了脑的读取 (%s): %s", Path(run_dir).name,
                         "; ".join((scrub(str(x)) if scrub is not None else str(x)) for x in denials)[:400])
         u = done.get("usage") or {}
-        text, is_err = done.get("result") or "", bool(done.get("is_error"))
+        text, is_err = answer_text(done), bool(done.get("is_error"))
         reason = ""
         if is_err:
             # error_max_turns 这类失败 result 是空的, 原因只在 subtype 与 errors: 一定要带出来, 不然 log 与 runs.error 都是空白
@@ -2655,7 +2670,7 @@ class Brain(object):
         done, _ = self.parse_stream(r.stdout)
         if done is None:
             return False, (r.stderr or r.stdout or "").strip()[-300:] or ("没有 result (rc=%s)" % r.returncode)
-        text = str(done.get("result") or "").strip()
+        text = answer_text(done).strip()
         if done.get("is_error"):
             errs = "; ".join(str(x) for x in (done.get("errors") or []) if str(x).strip())
             return False, (text or ": ".join(x for x in (str(done.get("subtype") or ""), errs) if x) or "is_error")[:300]
@@ -3756,7 +3771,7 @@ class Dossier(object):
         if denied:
             log.warning("设定档挡下了档案 run 的读取 (%s): %s", Path(run_dir).name, "; ".join(str(x) for x in denied)[:400])
         u = done.get("usage") or {}
-        return {"text": done.get("result") or "", "duration_ms": done.get("duration_ms") or int((time.time() - t0) * 1000),
+        return {"text": answer_text(done), "duration_ms": done.get("duration_ms") or int((time.time() - t0) * 1000),
                 "num_turns": done.get("num_turns"), "cost_usd": done.get("total_cost_usd"), "breach": breach,
                 "denials": [d.get("tool_name", d) if isinstance(d, dict) else d for d in (done.get("permission_denials") or [])],
                 "input_tokens": u.get("input_tokens"), "output_tokens": u.get("output_tokens"),
@@ -6308,6 +6323,31 @@ def selftest():
         check("设定档挡下的读取记进 permission_denials (工具名 + 路径), 没多载工具不算破笼",
               pdone and pdone.get("permission_denials") == ["Read /tmp/secret-probe/credentials-probe.txt"] and pbreach == [],
               (pdone or {}).get("permission_denials"))
+        check("没有 assistant 文字段时 answer_text 照旧回 result", pdone and answer_text(pdone) == "can't", (pdone or {}).get("_text"))
+        # 撞到单轮输出上限: claude 自动续写, result 只装最后一段 (真 claude 2.x 的形状: 续写提示是 isSynthetic 的 user 文字)
+        part1 = "# 人物档\n\n" + "前半段的正文。" * 400
+        part2 = "后半段的正文。" * 60 + "\n\n(完)"
+        cont = "\n".join(json.dumps(x, ensure_ascii=False) for x in [
+            {"type": "system", "subtype": "init", "tools": ["Read", "Glob", "Grep"]},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "我先读一下现有的档。"}]}},
+            {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "toolu_2", "name": "Read", "input": {"file_path": "/tmp/x.md"}}]}},
+            {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_2", "content": "旧档内容"}]}},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": part1}]}},
+            {"type": "user", "isSynthetic": True, "message": {"content": [{"type": "text", "text": "Output token limit hit. Resume directly, no apology, no recap."}]}},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": part2}]}},
+            {"type": "result", "subtype": "success", "is_error": False, "result": part2, "permission_denials": []}])
+        cdone, _ = Brain.parse_stream(cont)
+        check("撞上限续写过: answer_text 拿到工具结果之后的全文 (前后两段), 不是只有 result 那一段",
+              cdone and answer_text(cdone) == part1 + part2 and cdone.get("result") == part2, len(answer_text(cdone or {})))
+        one = "\n".join(json.dumps(x, ensure_ascii=False) for x in [
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "过程话"}]}},
+            {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t", "content": "x"}]}},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "{\"ok\": true}"}]}},
+            {"type": "result", "subtype": "success", "is_error": False, "result": "{\"ok\": true}"}])
+        odone, _ = Brain.parse_stream(one)
+        check("没撞上限: answer_text 跟 result 逐字一样 (工具结果之前的过程话不算答案)", odone and answer_text(odone) == "{\"ok\": true}")
+        check("接起来的文字不是以 result 收尾, answer_text 就不信它, 照旧回 result",
+              answer_text({"result": "最终答案", "_text": "别的字"}) == "最终答案" and answer_text({"result": "R", "_text": ""}) == "R")
         # Claude 记忆: init 带 memory_paths 就是载入了 (真 claude 2.x 的键); 没带就是关着
         mem_on = json.dumps({"type": "system", "subtype": "init", "tools": ["Read"], "memory_paths": {"auto": "/x/memory/"}})
         mem_off = json.dumps({"type": "system", "subtype": "init", "tools": ["Read"]})
@@ -6666,6 +6706,23 @@ def selftest():
         check("拒读探测: 脑光回 DENIED 而 runs.denials 没有那笔 (它没去读) 不算挡下, 也不推, log 说挡没挡住不知道",
               pr_lazy and pr_lazy.get("blocked") is False and pr_lazy.get("targets") == {"secrets": False, "transcripts": False, "backups": False}
               and not lazy_sent and "没有读 deny-canary 的那笔" in (live / "wa_live.log").read_text(encoding="utf-8"), (pr_lazy, lazy_sent))
+        # 三个呼叫点 (分诊脑 · 探测 · 档案 run) 都经 answer_text 取答案: 假 claude 回上面那份撞过上限的 stream
+        def fake_claude_cont(args, **kw):
+            r_ = _Done()
+            r_.stdout = cont
+            return r_
+        cont_dir = home / "runs-cont-selftest"
+        cont_dir.mkdir(parents=True, exist_ok=True)
+        subprocess.run = fake_claude_cont
+        try:
+            b_res = d.brain.call_claude("x", cont_dir)
+            p_ok, p_txt = d.brain.ping()
+            z_res = type(dz).call_claude(dz, "x", cont_dir)
+        finally:
+            subprocess.run = saved_run
+        check("分诊脑、探测、档案 run 三个呼叫点都拿到续写过的全文 (经 answer_text), 不是只有 result 那一段",
+              b_res.get("text") == part1 + part2 and p_ok and p_txt == (part1 + part2)[:60] and z_res.get("text") == part1 + part2,
+              (len(b_res.get("text") or ""), p_txt, len(z_res.get("text") or "")))
 
         # ---- 18 · 断路器开着时 run 自己的失败不另推: 走真的 Brain.run (retries 1), 假 claude 两次都回登入失效
         claude_reply = {"result": AUTH_MSG, "is_error": True}
